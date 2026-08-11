@@ -28,50 +28,64 @@ from limits.limit_tracker import LimitTracker
 from report.report_generator import generate_report
 from ui.settings_dialog import AppSettings, SettingsDialog
 
-# Paleta Avibras Aeroco (azul marinho + laranja). O logo (PNG com fundo
-# transparente) é opcional: se `assets/logo.png` existir, é exibido no
-# cabeçalho; caso contrário, o título em texto já usa as mesmas cores.
+# Paleta Avibras Aeroco (fundo azul marinho + detalhes laranja). O logo (PNG
+# com fundo transparente) é opcional: se `assets/logo.png` existir, é exibido
+# no canto superior direito; caso contrário, o título em texto já usa a
+# mesma identidade visual.
 NAVY = "#0B2145"
+NAVY_PANEL = "#15305F"  # tom mais claro que o fundo, para destacar painéis/caixas
 ORANGE = "#F5821F"
-LIGHT_BG = "#F4F6F9"
+TEXT_LIGHT = "#F4F6F9"
+GREEN = "#2e7d32"
+RED = "#c62828"
 LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "logo.png")
 
-_VALUE_STYLE = f"font-size: 20px; font-weight: bold; color: {NAVY};"
-_FLASH_STYLE = f"font-size: 20px; font-weight: bold; background-color: {ORANGE}; color: white; border-radius: 4px;"
+_VALUE_STYLE = f"font-size: 20px; font-weight: bold; color: {TEXT_LIGHT};"
+_FLASH_STYLE = f"font-size: 20px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 4px;"
+
+_BADGE_STYLE = "font-size: 13px; font-weight: bold; border-radius: 10px; padding: 4px 12px;"
 
 _CONN_STYLES = {
-    "parado": ("○ Parado", "color: #888;"),
-    "conectando": ("◐ Conectando...", f"color: {ORANGE}; font-weight: bold;"),
-    "conectado": ("● Conectado", "color: #2e7d32; font-weight: bold;"),
-    "erro": ("● Falha de conexão", "color: #c62828; font-weight: bold;"),
-    "simulacao": ("● Simulação (interna)", f"color: {NAVY}; font-weight: bold;"),
+    "parado": ("○ Parado", f"color: #9aa5b1; background: transparent;"),
+    "conectando": ("◐ Conectando...", f"color: {ORANGE}; background: transparent; font-weight: bold;"),
+    "conectado": ("● Conectado", f"{_BADGE_STYLE} color: white; background-color: {GREEN};"),
+    "erro": ("● Falha de conexão", f"{_BADGE_STYLE} color: white; background-color: {RED};"),
+    "simulacao": ("● Simulação (interna)", f"color: {ORANGE}; background: transparent; font-weight: bold;"),
 }
 
 _APP_STYLESHEET = f"""
 QMainWindow, QWidget {{
-    background-color: {LIGHT_BG};
+    background-color: {NAVY};
+    color: {TEXT_LIGHT};
+}}
+QLabel {{
+    color: {TEXT_LIGHT};
 }}
 QPushButton {{
-    background-color: {NAVY};
-    color: white;
+    background-color: {ORANGE};
+    color: {NAVY};
     border: none;
     border-radius: 4px;
     padding: 8px 14px;
     font-weight: bold;
 }}
 QPushButton:hover {{
-    background-color: {ORANGE};
+    background-color: #ff9d40;
 }}
 QPushButton:pressed {{
     background-color: #cf6a12;
 }}
 QPushButton:disabled {{
-    background-color: #a9b2bd;
+    background-color: #5a6472;
+    color: #cfd4da;
 }}
 QFrame {{
-    background-color: white;
+    background-color: {NAVY_PANEL};
     border: 2px solid {ORANGE};
     border-radius: 6px;
+}}
+QStatusBar {{
+    color: {TEXT_LIGHT};
 }}
 """
 
@@ -158,18 +172,24 @@ class MainWindow(QMainWindow):
 
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
-        header.setAlignment(Qt.AlignCenter)
+
+        title_label = QLabel("Inclinômetro")
+        title_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {TEXT_LIGHT};")
+        header.addWidget(title_label)
+
+        header.addStretch(1)
 
         if os.path.isfile(LOGO_PATH):
             logo_label = QLabel()
             pixmap = QPixmap(LOGO_PATH)
             if not pixmap.isNull():
                 logo_label.setPixmap(pixmap.scaledToHeight(48, Qt.SmoothTransformation))
-                header.addWidget(logo_label)
+                header.addWidget(logo_label, 0, Qt.AlignRight)
+        else:
+            logo_label = QLabel("AVIBRAS aeroco")
+            logo_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {ORANGE};")
+            header.addWidget(logo_label, 0, Qt.AlignRight)
 
-        title_label = QLabel("Inclinômetro — Avibras Aeroco")
-        title_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {NAVY};")
-        header.addWidget(title_label)
         return header
 
     def _build_limit_box(self, title: str) -> tuple[QFrame, QLabel, QLabel]:

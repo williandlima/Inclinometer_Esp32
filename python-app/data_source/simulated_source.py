@@ -18,9 +18,9 @@ class SimulatedAngleSource(IAngleDataSource):
     def __init__(
         self,
         center_deg: float = 60.0,
-        amplitude_deg: float = 55.0,
-        period_s: float = 20.0,
-        noise_std_deg: float = 0.3,
+        amplitude_deg: float = 12.0,
+        period_s: float = 45.0,
+        noise_std_deg: float = 0.08,
         poll_interval_s: float = 0.25,
     ) -> None:
         self._center = center_deg
