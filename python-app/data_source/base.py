@@ -40,3 +40,17 @@ class IAngleDataSource(ABC):
     @abstractmethod
     def label(self) -> str:
         """Nome curto exibido na UI (ex: 'Simulação' ou 'RS485/Modbus RTU')."""
+
+    @property
+    def supports_calibration(self) -> bool:
+        """Indica se esta fonte suporta `calibrate()`. Por padrão, não."""
+        return False
+
+    def calibrate(self) -> None:
+        """Zera o eixo de tilt do acelerômetro na posição atual.
+
+        Chamada de forma síncrona (bloqueante) pelo chamador; fontes que
+        suportam calibração devem sobrescrever este método. Levanta
+        `NotImplementedError` se a fonte não suportar.
+        """
+        raise NotImplementedError("Esta fonte de dados não suporta calibração.")

@@ -33,9 +33,23 @@ class SimulatedAngleSource(IAngleDataSource):
         self._stop_event = threading.Event()
         self._t0 = 0.0
 
+        self._lock = threading.Lock()
+        self._offset_deg = 0.0
+        self._last_raw_deg = center_deg
+
     @property
     def label(self) -> str:
         return "Simulação"
+
+    @property
+    def supports_calibration(self) -> bool:
+        return True
+
+    def calibrate(self) -> None:
+        """Ajusta o offset para que o próximo ângulo lido seja ~0°,
+        simulando o zeramento do acelerômetro na posição atual."""
+        with self._lock:
+            self._offset_deg = self._last_raw_deg
 
     def start(self, on_reading: ReadingCallback, on_error: ErrorCallback | None = None) -> None:
         if self._thread is not None:
@@ -55,8 +69,13 @@ class SimulatedAngleSource(IAngleDataSource):
         while not self._stop_event.is_set():
             now = time.time()
             elapsed = now - self._t0
-            angle = self._center + self._amplitude * math.sin(2 * math.pi * elapsed / self._period)
-            angle += random.gauss(0.0, self._noise_std)
+            raw_angle = self._center + self._amplitude * math.sin(2 * math.pi * elapsed / self._period)
+            raw_angle += random.gauss(0.0, self._noise_std)
+
+            with self._lock:
+                self._last_raw_deg = raw_angle
+                angle = raw_angle - self._offset_deg
+
             angle = max(ANGLE_MIN_DEG, min(ANGLE_MAX_DEG, angle))
             on_reading(AngleReading(angle_deg=angle, timestamp=now))
             self._stop_event.wait(self._poll_interval)

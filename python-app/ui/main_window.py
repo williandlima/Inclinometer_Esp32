@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
+import threading
 
 from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QPixmap
 from PyQt5.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -27,8 +28,52 @@ from limits.limit_tracker import LimitTracker
 from report.report_generator import generate_report
 from ui.settings_dialog import AppSettings, SettingsDialog
 
-_VALUE_STYLE = "font-size: 20px; font-weight: bold;"
-_FLASH_STYLE = "font-size: 20px; font-weight: bold; background-color: #ffd54f; border-radius: 4px;"
+# Paleta Avibras Aeroco (azul marinho + laranja). O logo (PNG com fundo
+# transparente) é opcional: se `assets/logo.png` existir, é exibido no
+# cabeçalho; caso contrário, o título em texto já usa as mesmas cores.
+NAVY = "#0B2145"
+ORANGE = "#F5821F"
+LIGHT_BG = "#F4F6F9"
+LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "logo.png")
+
+_VALUE_STYLE = f"font-size: 20px; font-weight: bold; color: {NAVY};"
+_FLASH_STYLE = f"font-size: 20px; font-weight: bold; background-color: {ORANGE}; color: white; border-radius: 4px;"
+
+_CONN_STYLES = {
+    "parado": ("○ Parado", "color: #888;"),
+    "conectando": ("◐ Conectando...", f"color: {ORANGE}; font-weight: bold;"),
+    "conectado": ("● Conectado", "color: #2e7d32; font-weight: bold;"),
+    "erro": ("● Falha de conexão", "color: #c62828; font-weight: bold;"),
+    "simulacao": ("● Simulação (interna)", f"color: {NAVY}; font-weight: bold;"),
+}
+
+_APP_STYLESHEET = f"""
+QMainWindow, QWidget {{
+    background-color: {LIGHT_BG};
+}}
+QPushButton {{
+    background-color: {NAVY};
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 14px;
+    font-weight: bold;
+}}
+QPushButton:hover {{
+    background-color: {ORANGE};
+}}
+QPushButton:pressed {{
+    background-color: #cf6a12;
+}}
+QPushButton:disabled {{
+    background-color: #a9b2bd;
+}}
+QFrame {{
+    background-color: white;
+    border: 2px solid {ORANGE};
+    border-radius: 6px;
+}}
+"""
 
 
 class _SignalBridge(QObject):
@@ -37,6 +82,7 @@ class _SignalBridge(QObject):
 
     reading = pyqtSignal(object)  # AngleReading
     error = pyqtSignal(str)
+    calibration_done = pyqtSignal(bool, str)
 
 
 def _fmt_time(ts: float) -> str:
@@ -47,7 +93,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Inclinômetro — Painel Desktop")
-        self.resize(520, 420)
+        self.resize(520, 460)
+        self.setStyleSheet(_APP_STYLESHEET)
 
         self._settings = AppSettings()
         self._history = HistoryStore()
@@ -58,9 +105,11 @@ class MainWindow(QMainWindow):
         self._bridge = _SignalBridge()
         self._bridge.reading.connect(self._on_reading)
         self._bridge.error.connect(self._on_error)
+        self._bridge.calibration_done.connect(self._on_calibration_done)
 
         self._build_ui()
         self._update_mode_label()
+        self._set_connection_status("parado")
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -68,9 +117,15 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
+        root.addLayout(self._build_header())
+
         self.mode_label = QLabel()
         self.mode_label.setAlignment(Qt.AlignCenter)
         root.addWidget(self.mode_label)
+
+        self.connection_label = QLabel()
+        self.connection_label.setAlignment(Qt.AlignCenter)
+        root.addWidget(self.connection_label)
 
         self.angle_label = QLabel("--.--°")
         self.angle_label.setAlignment(Qt.AlignCenter)
@@ -89,15 +144,33 @@ class MainWindow(QMainWindow):
         self.start_stop_btn.clicked.connect(self._toggle_start_stop)
         self.reset_btn = QPushButton("Resetar limites")
         self.reset_btn.clicked.connect(self._reset_limits)
+        self.calibrate_btn = QPushButton("Calibrar")
+        self.calibrate_btn.clicked.connect(self._calibrate)
         self.settings_btn = QPushButton("Configurações...")
         self.settings_btn.clicked.connect(self._open_settings)
         self.report_btn = QPushButton("Gerar relatório PDF")
         self.report_btn.clicked.connect(self._generate_report)
-        for btn in (self.start_stop_btn, self.reset_btn, self.settings_btn, self.report_btn):
+        for btn in (self.start_stop_btn, self.reset_btn, self.calibrate_btn, self.settings_btn, self.report_btn):
             buttons_row.addWidget(btn)
         root.addLayout(buttons_row)
 
         self.statusBar().showMessage("Pronto.")
+
+    def _build_header(self) -> QHBoxLayout:
+        header = QHBoxLayout()
+        header.setAlignment(Qt.AlignCenter)
+
+        if os.path.isfile(LOGO_PATH):
+            logo_label = QLabel()
+            pixmap = QPixmap(LOGO_PATH)
+            if not pixmap.isNull():
+                logo_label.setPixmap(pixmap.scaledToHeight(48, Qt.SmoothTransformation))
+                header.addWidget(logo_label)
+
+        title_label = QLabel("Inclinômetro — Avibras Aeroco")
+        title_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {NAVY};")
+        header.addWidget(title_label)
+        return header
 
     def _build_limit_box(self, title: str) -> tuple[QFrame, QLabel, QLabel]:
         frame = QFrame()
@@ -124,6 +197,11 @@ class MainWindow(QMainWindow):
         modo = "Simulação" if self._settings.mode == "simulado" else "Real (RS485/Modbus RTU)"
         estado = "em execução" if self._running else "parado"
         self.mode_label.setText(f"Modo: {modo} — {estado}")
+
+    def _set_connection_status(self, status: str) -> None:
+        text, style = _CONN_STYLES[status]
+        self.connection_label.setText(text)
+        self.connection_label.setStyleSheet(style)
 
     # --------------------------------------------------------------- ações
     def _open_settings(self) -> None:
@@ -166,6 +244,7 @@ class MainWindow(QMainWindow):
         self._running = True
         self.start_stop_btn.setText("Parar")
         self._update_mode_label()
+        self._set_connection_status("simulacao" if self._settings.mode == "simulado" else "conectando")
         self.statusBar().showMessage(f"Conectado: {self._source.label}")
 
     def _stop(self) -> None:
@@ -176,6 +255,7 @@ class MainWindow(QMainWindow):
         self._running = False
         self.start_stop_btn.setText("Iniciar")
         self._update_mode_label()
+        self._set_connection_status("parado")
         self.statusBar().showMessage("Parado.")
 
     def _reset_limits(self) -> None:
@@ -224,6 +304,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ callbacks
     def _on_reading(self, reading: AngleReading) -> None:
+        if self._settings.mode == "real":
+            self._set_connection_status("conectado")
         self.angle_label.setText(f"{reading.angle_deg:.2f}°")
         self._history.add_reading(reading)
 
@@ -239,7 +321,38 @@ class MainWindow(QMainWindow):
                 self._flash(self.max_value_label)
 
     def _on_error(self, message: str) -> None:
+        if self._settings.mode == "real":
+            self._set_connection_status("erro")
         self.statusBar().showMessage(message, 5000)
+
+    def _calibrate(self) -> None:
+        if self._source is None or not self._running:
+            QMessageBox.warning(self, "Não conectado", "Inicie a leitura antes de calibrar.")
+            return
+        if not getattr(self._source, "supports_calibration", False):
+            QMessageBox.information(self, "Calibração", "Esta fonte de dados não suporta calibração.")
+            return
+
+        source = self._source
+        self.calibrate_btn.setEnabled(False)
+        self.statusBar().showMessage("Calibrando...")
+
+        def worker() -> None:
+            try:
+                source.calibrate()
+                self._bridge.calibration_done.emit(True, "Calibração concluída: posição atual definida como 0°.")
+            except Exception as exc:  # noqa: BLE001
+                self._bridge.calibration_done.emit(False, f"Falha na calibração: {exc}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_calibration_done(self, ok: bool, message: str) -> None:
+        self.calibrate_btn.setEnabled(True)
+        self.statusBar().showMessage(message, 5000)
+        if ok:
+            self._reset_limits()
+        else:
+            QMessageBox.warning(self, "Calibração", message)
 
     def _flash(self, label: QLabel) -> None:
         label.setStyleSheet(_FLASH_STYLE)

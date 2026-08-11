@@ -7,6 +7,10 @@ fase): o ângulo atual é exposto no registrador de entrada (input register)
 no próprio app (`limits.limit_tracker`), não depende de registradores extras
 no escravo — assim o contrato Modbus fica mínimo e estável mesmo antes do
 firmware existir.
+
+Calibração: escrever `True` na coil `CALIBRATE_COIL` sinaliza ao firmware
+para zerar o eixo de tilt do acelerômetro na posição atual (novo "zero"
+mecânico). Contrato assumido, a confirmar quando o firmware existir.
 """
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ from data_source.base import AngleReading, ErrorCallback, IAngleDataSource, Read
 
 ANGLE_INPUT_REGISTER = 0
 ANGLE_SCALE = 100.0  # registrador = ângulo * 100 (int16, resolução de 0.01°)
+CALIBRATE_COIL = 0
 
 
 class ModbusAngleSource(IAngleDataSource):
@@ -37,9 +42,29 @@ class ModbusAngleSource(IAngleDataSource):
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
+        self._client_lock = threading.Lock()
+        self._client = None
+
     @property
     def label(self) -> str:
         return f"RS485/Modbus RTU ({self._port}@{self._baudrate}, id={self._slave_id})"
+
+    @property
+    def supports_calibration(self) -> bool:
+        return True
+
+    def calibrate(self) -> None:
+        """Envia o comando de calibração (zerar tilt) ao escravo Modbus.
+
+        Bloqueante — deve ser chamado fora da thread da UI. Levanta
+        `RuntimeError`/`IOError` se não estiver conectado ou se a escrita falhar.
+        """
+        with self._client_lock:
+            if self._client is None:
+                raise RuntimeError("Não conectado ao dispositivo.")
+            result = self._client.write_coil(address=CALIBRATE_COIL, value=True, slave=self._slave_id)
+            if result.isError():
+                raise IOError(str(result))
 
     def start(self, on_reading: ReadingCallback, on_error: ErrorCallback | None = None) -> None:
         if self._thread is not None:
@@ -71,11 +96,15 @@ class ModbusAngleSource(IAngleDataSource):
                     on_error(f"Não foi possível abrir a porta serial {self._port}.")
                 return
 
+            with self._client_lock:
+                self._client = client
+
             while not self._stop_event.is_set():
                 try:
-                    result = client.read_input_registers(
-                        address=ANGLE_INPUT_REGISTER, count=1, slave=self._slave_id
-                    )
+                    with self._client_lock:
+                        result = client.read_input_registers(
+                            address=ANGLE_INPUT_REGISTER, count=1, slave=self._slave_id
+                        )
                     if result.isError():
                         raise IOError(str(result))
                     raw = result.registers[0]
@@ -86,4 +115,6 @@ class ModbusAngleSource(IAngleDataSource):
                         on_error(f"Erro de leitura Modbus: {exc}")
                 self._stop_event.wait(self._poll_interval)
         finally:
+            with self._client_lock:
+                self._client = None
             client.close()
