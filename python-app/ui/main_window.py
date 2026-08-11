@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
 )
 
 from data_source.base import AngleReading, IAngleDataSource
+from data_source.ble_source import BleAngleSource
 from data_source.modbus_source import ModbusAngleSource
 from data_source.simulated_source import SimulatedAngleSource
 from limits.history_store import HistoryStore
@@ -214,7 +215,11 @@ class MainWindow(QMainWindow):
         return frame, value_label, time_label
 
     def _update_mode_label(self) -> None:
-        modo = "Simulação" if self._settings.mode == "simulado" else "Real (RS485/Modbus RTU)"
+        modo = {
+            "simulado": "Simulação",
+            "real": "Real (RS485/Modbus RTU)",
+            "ble": "Real (Bluetooth BLE)",
+        }[self._settings.mode]
         estado = "em execução" if self._running else "parado"
         self.mode_label.setText(f"Modo: {modo} — {estado}")
 
@@ -245,9 +250,14 @@ class MainWindow(QMainWindow):
         if self._settings.mode == "real" and not self._settings.serial_port:
             QMessageBox.warning(self, "Configuração incompleta", "Selecione uma porta serial nas Configurações.")
             return
+        if self._settings.mode == "ble" and not self._settings.ble_address:
+            QMessageBox.warning(self, "Configuração incompleta", "Selecione ou informe um dispositivo BLE nas Configurações.")
+            return
 
         if self._settings.mode == "simulado":
             self._source = SimulatedAngleSource()
+        elif self._settings.mode == "ble":
+            self._source = BleAngleSource(device_address=self._settings.ble_address)
         else:
             self._source = ModbusAngleSource(
                 port=self._settings.serial_port,
@@ -324,7 +334,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ callbacks
     def _on_reading(self, reading: AngleReading) -> None:
-        if self._settings.mode == "real":
+        if self._settings.mode in ("real", "ble"):
             self._set_connection_status("conectado")
         self.angle_label.setText(f"{reading.angle_deg:.2f}°")
         self._history.add_reading(reading)
@@ -341,7 +351,7 @@ class MainWindow(QMainWindow):
                 self._flash(self.max_value_label)
 
     def _on_error(self, message: str) -> None:
-        if self._settings.mode == "real":
+        if self._settings.mode in ("real", "ble"):
             self._set_connection_status("erro")
         self.statusBar().showMessage(message, 5000)
 
