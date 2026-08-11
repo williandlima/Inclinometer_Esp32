@@ -24,6 +24,25 @@ ANGLE_SCALE = 100.0  # registrador = ângulo * 100 (int16, resolução de 0.01°
 CALIBRATE_COIL = 0
 
 
+def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 1.0) -> float:
+    """Testa a conexão RS485/Modbus RTU com o ESP32: abre a porta, faz uma
+    única leitura do ângulo e fecha a conexão. Retorna o ângulo lido (°) em
+    caso de sucesso; levanta exceção (IOError/RuntimeError) em caso de falha.
+    """
+    from pymodbus.client import ModbusSerialClient
+
+    client = ModbusSerialClient(port=port, baudrate=baudrate, timeout=timeout_s)
+    try:
+        if not client.connect():
+            raise IOError(f"Não foi possível abrir a porta serial {port}.")
+        result = client.read_input_registers(address=ANGLE_INPUT_REGISTER, count=1, slave=slave_id)
+        if result.isError():
+            raise IOError(str(result))
+        return result.registers[0] / ANGLE_SCALE
+    finally:
+        client.close()
+
+
 class ModbusAngleSource(IAngleDataSource):
     def __init__(
         self,

@@ -5,10 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PyQt5.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
 )
@@ -62,13 +66,46 @@ class SettingsDialog(QDialog):
         form.addRow("Baud rate:", self.baud_combo)
         form.addRow("Endereço Modbus (slave id):", self.slave_spin)
 
+        self.test_btn = QPushButton("Testar conexão com ESP32 (RS485)")
+        self.test_btn.clicked.connect(self._test_connection)
+        self.test_result_label = QLabel("")
+
+        test_row = QHBoxLayout()
+        test_row.addWidget(self.test_btn)
+        test_row.addWidget(self.test_result_label, 1)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addLayout(test_row)
         layout.addWidget(buttons)
+
+    def _test_connection(self) -> None:
+        port = self.port_combo.currentText().strip()
+        if not port:
+            self.test_result_label.setText("Selecione uma porta serial.")
+            self.test_result_label.setStyleSheet("color: #c62828;")
+            return
+
+        self.test_btn.setEnabled(False)
+        self.test_result_label.setText("Testando...")
+        self.test_result_label.setStyleSheet("color: #888;")
+        QApplication.processEvents()
+
+        try:
+            from data_source.modbus_source import test_connection
+
+            angle = test_connection(port, self.baud_combo.currentData(), self.slave_spin.value())
+            self.test_result_label.setText(f"✓ ESP32 respondeu — ângulo atual: {angle:.2f}°")
+            self.test_result_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
+        except Exception as exc:  # noqa: BLE001
+            self.test_result_label.setText(f"✗ Falha: {exc}")
+            self.test_result_label.setStyleSheet("color: #c62828; font-weight: bold;")
+        finally:
+            self.test_btn.setEnabled(True)
 
     def _populate_ports(self) -> None:
         if list_ports is None:
