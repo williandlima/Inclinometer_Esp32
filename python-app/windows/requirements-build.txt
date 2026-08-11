@@ -1,0 +1,5 @@
+# Dependência extra usada apenas para gerar o executável autônomo
+# (windows\build_exe.bat). Não é necessária para rodar o software a
+# partir do código-fonte (windows\run.bat) — nesse caso basta o
+# requirements.txt da raiz do python-app.
+pyinstaller>=6.5
