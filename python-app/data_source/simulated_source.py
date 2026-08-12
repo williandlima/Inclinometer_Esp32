@@ -37,6 +37,9 @@ class SimulatedAngleSource(IAngleDataSource):
         self._offset_deg = 0.0
         self._last_raw_deg = center_deg
 
+        self._vibration_thread: threading.Thread | None = None
+        self._vibration_stop_event = threading.Event()
+
     @property
     def label(self) -> str:
         return "Simulação"
@@ -79,3 +82,61 @@ class SimulatedAngleSource(IAngleDataSource):
             angle = max(ANGLE_MIN_DEG, min(ANGLE_MAX_DEG, angle))
             on_reading(AngleReading(angle_deg=angle, timestamp=now))
             self._stop_event.wait(self._poll_interval)
+
+    @property
+    def supports_vibration_capture(self) -> bool:
+        return True
+
+    def start_vibration_capture(
+        self,
+        duration_s: float,
+        rate_hz: float,
+        on_progress,
+        on_done,
+    ) -> None:
+        if self._vibration_thread is not None:
+            return
+        self._vibration_stop_event.clear()
+        self._vibration_thread = threading.Thread(
+            target=self._run_vibration_capture,
+            args=(duration_s, rate_hz, on_progress, on_done),
+            daemon=True,
+        )
+        self._vibration_thread.start()
+
+    def stop_vibration_capture(self) -> None:
+        self._vibration_stop_event.set()
+        if self._vibration_thread is not None:
+            self._vibration_thread.join(timeout=2.0)
+            self._vibration_thread = None
+
+    def _run_vibration_capture(self, duration_s: float, rate_hz: float, on_progress, on_done) -> None:
+        """Gera uma série sintética de "vibração" em torno de 0° (posição de
+        calibração): soma de duas oscilações de baixa amplitude, em
+        frequências plausíveis para balanço de mastro sob vento (~1.3Hz) e
+        vibração mecânica (~5Hz), mais ruído — só para exercitar todo o
+        fluxo de captura/estatística/relatório sem hardware real."""
+        interval = 1.0 / rate_hz
+        n_samples = max(1, int(duration_s * rate_hz))
+        readings: list[AngleReading] = []
+        t0 = time.time()
+        try:
+            for i in range(n_samples):
+                if self._vibration_stop_event.is_set():
+                    on_done(None, "Captura cancelada pelo usuário.")
+                    return
+                now = time.time()
+                elapsed = now - t0
+                vib = (
+                    0.15 * math.sin(2 * math.pi * 1.3 * elapsed)
+                    + 0.05 * math.sin(2 * math.pi * 5.0 * elapsed + 0.7)
+                    + random.gauss(0.0, 0.03)
+                )
+                readings.append(AngleReading(angle_deg=vib, timestamp=now))
+                on_progress(min(100.0, 100.0 * (i + 1) / n_samples))
+                self._vibration_stop_event.wait(interval)
+            on_done(readings, None)
+        except Exception as exc:  # noqa: BLE001
+            on_done(None, str(exc))
+        finally:
+            self._vibration_thread = None

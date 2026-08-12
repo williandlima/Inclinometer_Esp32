@@ -11,6 +11,22 @@ firmware existir.
 Calibração: escrever `True` na coil `CALIBRATE_COIL` sinaliza ao firmware
 para zerar o eixo de tilt do acelerômetro na posição atual (novo "zero"
 mecânico). Contrato assumido, a confirmar quando o firmware existir.
+
+Captura de vibração (leitura em alta taxa, usada para caracterizar variação
+angular por vento/vibração — o poll normal de ~250ms é lento demais para
+isso): contrato assumido, a confirmar quando o firmware existir.
+- App escreve `duration_s` em `VIBRATION_DURATION_REG` e `rate_hz` em
+  `VIBRATION_RATE_REG`, depois escreve `True` na coil `VIBRATION_START_COIL`
+  para iniciar. O firmware passa a amostrar internamente na taxa pedida e
+  guarda o buffer em memória.
+- App faz poll de `VIBRATION_STATUS_REG` (0=ocioso, 1=capturando, 2=pronto,
+  3=erro), `VIBRATION_PROGRESS_REG` (0-100) e `VIBRATION_SAMPLE_COUNT_REG`
+  (total de amostras, válido quando status=pronto).
+- Quando pronto, app lê o buffer em blocos: escreve o índice inicial em
+  `VIBRATION_CURSOR_REG`, depois lê `VIBRATION_BLOCK_SIZE` registradores a
+  partir de `VIBRATION_BLOCK_START_REG` (cada um = ângulo relativo ao "zero"
+  calibrado * `ANGLE_SCALE`, inteiro **com sinal** de 16 bits, já que a
+  variação pode ser negativa) — repete até completar `VIBRATION_SAMPLE_COUNT_REG`.
 """
 from __future__ import annotations
 
@@ -22,6 +38,21 @@ from data_source.base import AngleReading, ErrorCallback, IAngleDataSource, Read
 ANGLE_INPUT_REGISTER = 0
 ANGLE_SCALE = 100.0  # registrador = ângulo * 100 (int16, resolução de 0.01°)
 CALIBRATE_COIL = 0
+
+VIBRATION_START_COIL = 1
+VIBRATION_DURATION_REG = 10  # segundos (uint16)
+VIBRATION_RATE_REG = 11  # amostras/s (uint16)
+VIBRATION_STATUS_REG = 20  # 0=ocioso, 1=capturando, 2=pronto, 3=erro
+VIBRATION_PROGRESS_REG = 21  # percentual 0-100
+VIBRATION_SAMPLE_COUNT_REG = 22  # total de amostras capturadas (válido quando status=pronto)
+VIBRATION_CURSOR_REG = 30  # índice inicial do próximo bloco a ler (escrita)
+VIBRATION_BLOCK_START_REG = 31  # início do bloco de amostras (leitura)
+VIBRATION_BLOCK_SIZE = 32  # amostras por bloco de leitura
+VIBRATION_STATUS_POLL_INTERVAL_S = 0.5
+
+
+def _to_signed16(raw: int) -> int:
+    return raw - 0x10000 if raw >= 0x8000 else raw
 
 
 def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 1.0) -> float:
@@ -64,6 +95,9 @@ class ModbusAngleSource(IAngleDataSource):
         self._client_lock = threading.Lock()
         self._client = None
 
+        self._vibration_thread: threading.Thread | None = None
+        self._vibration_stop_event = threading.Event()
+
     @property
     def label(self) -> str:
         return f"RS485/Modbus RTU ({self._port}@{self._baudrate}, id={self._slave_id})"
@@ -84,6 +118,88 @@ class ModbusAngleSource(IAngleDataSource):
             result = self._client.write_coil(address=CALIBRATE_COIL, value=True, slave=self._slave_id)
             if result.isError():
                 raise IOError(str(result))
+
+    @property
+    def supports_vibration_capture(self) -> bool:
+        return True
+
+    def start_vibration_capture(self, duration_s: float, rate_hz: float, on_progress, on_done) -> None:
+        if self._vibration_thread is not None:
+            return
+        self._vibration_stop_event.clear()
+        self._vibration_thread = threading.Thread(
+            target=self._run_vibration_capture,
+            args=(duration_s, rate_hz, on_progress, on_done),
+            daemon=True,
+        )
+        self._vibration_thread.start()
+
+    def stop_vibration_capture(self) -> None:
+        self._vibration_stop_event.set()
+        if self._vibration_thread is not None:
+            self._vibration_thread.join(timeout=2.0)
+            self._vibration_thread = None
+
+    def _run_vibration_capture(self, duration_s: float, rate_hz: float, on_progress, on_done) -> None:
+        try:
+            with self._client_lock:
+                if self._client is None:
+                    raise RuntimeError("Não conectado ao dispositivo.")
+                client = self._client
+                r1 = client.write_register(address=VIBRATION_DURATION_REG, value=int(duration_s), slave=self._slave_id)
+                r2 = client.write_register(address=VIBRATION_RATE_REG, value=int(rate_hz), slave=self._slave_id)
+                r3 = client.write_coil(address=VIBRATION_START_COIL, value=True, slave=self._slave_id)
+                if r1.isError() or r2.isError() or r3.isError():
+                    raise IOError("Falha ao configurar/iniciar a captura de vibração no dispositivo.")
+
+            sample_count = 0
+            while True:
+                if self._vibration_stop_event.is_set():
+                    on_done(None, "Captura cancelada pelo usuário.")
+                    return
+                with self._client_lock:
+                    status_result = client.read_input_registers(
+                        address=VIBRATION_STATUS_REG, count=3, slave=self._slave_id
+                    )
+                if status_result.isError():
+                    raise IOError(str(status_result))
+                status, progress, sample_count = status_result.registers
+                if status == 2:
+                    break
+                if status == 3:
+                    raise IOError("Firmware reportou erro durante a captura de vibração.")
+                on_progress(float(progress))
+                self._vibration_stop_event.wait(VIBRATION_STATUS_POLL_INTERVAL_S)
+
+            on_progress(100.0)
+            capture_finished_at = time.time()
+            t_start = capture_finished_at - sample_count / rate_hz
+
+            readings: list[AngleReading] = []
+            index = 0
+            while index < sample_count:
+                block_size = min(VIBRATION_BLOCK_SIZE, sample_count - index)
+                with self._client_lock:
+                    cursor_result = client.write_register(
+                        address=VIBRATION_CURSOR_REG, value=index, slave=self._slave_id
+                    )
+                    if cursor_result.isError():
+                        raise IOError(str(cursor_result))
+                    block_result = client.read_input_registers(
+                        address=VIBRATION_BLOCK_START_REG, count=block_size, slave=self._slave_id
+                    )
+                if block_result.isError():
+                    raise IOError(str(block_result))
+                for i, raw in enumerate(block_result.registers):
+                    angle = _to_signed16(raw) / ANGLE_SCALE
+                    readings.append(AngleReading(angle_deg=angle, timestamp=t_start + (index + i) / rate_hz))
+                index += block_size
+
+            on_done(readings, None)
+        except Exception as exc:  # noqa: BLE001
+            on_done(None, str(exc))
+        finally:
+            self._vibration_thread = None
 
     def start(self, on_reading: ReadingCallback, on_error: ErrorCallback | None = None) -> None:
         if self._thread is not None:

@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -26,8 +27,10 @@ from data_source.modbus_source import ModbusAngleSource
 from data_source.simulated_source import SimulatedAngleSource
 from limits.history_store import HistoryStore
 from limits.limit_tracker import LimitTracker
-from report.report_generator import generate_report
+from limits.vibration_stats import compute_fft, compute_stats
+from report.report_generator import generate_report, generate_vibration_report
 from ui.settings_dialog import AppSettings, SettingsDialog
+from ui.vibration_dialog import VibrationConfigDialog, VibrationResultDialog
 
 # Paleta Avibras Aeroco (fundo azul marinho + detalhes laranja). O logo (PNG
 # com fundo transparente) é opcional: se `assets/logo.png` existir, é exibido
@@ -98,6 +101,8 @@ class _SignalBridge(QObject):
     reading = pyqtSignal(object)  # AngleReading
     error = pyqtSignal(str)
     calibration_done = pyqtSignal(bool, str)
+    vibration_progress = pyqtSignal(float)
+    vibration_done = pyqtSignal(object, str, float, float)  # amostras|None, erro, duration_s, rate_hz
 
 
 def _fmt_time(ts: float) -> str:
@@ -116,11 +121,14 @@ class MainWindow(QMainWindow):
         self._tracker = LimitTracker()
         self._source: IAngleDataSource | None = None
         self._running = False
+        self._vibration_progress_dialog: QProgressDialog | None = None
 
         self._bridge = _SignalBridge()
         self._bridge.reading.connect(self._on_reading)
         self._bridge.error.connect(self._on_error)
         self._bridge.calibration_done.connect(self._on_calibration_done)
+        self._bridge.vibration_progress.connect(self._on_vibration_progress)
+        self._bridge.vibration_done.connect(self._on_vibration_done)
 
         self._build_ui()
         self._update_mode_label()
@@ -161,11 +169,20 @@ class MainWindow(QMainWindow):
         self.reset_btn.clicked.connect(self._reset_limits)
         self.calibrate_btn = QPushButton("Calibrar")
         self.calibrate_btn.clicked.connect(self._calibrate)
+        self.vibration_btn = QPushButton("Modo Vibração")
+        self.vibration_btn.clicked.connect(self._start_vibration_capture)
         self.settings_btn = QPushButton("Configurações...")
         self.settings_btn.clicked.connect(self._open_settings)
         self.report_btn = QPushButton("Gerar relatório PDF")
         self.report_btn.clicked.connect(self._generate_report)
-        for btn in (self.start_stop_btn, self.reset_btn, self.calibrate_btn, self.settings_btn, self.report_btn):
+        for btn in (
+            self.start_stop_btn,
+            self.reset_btn,
+            self.calibrate_btn,
+            self.vibration_btn,
+            self.settings_btn,
+            self.report_btn,
+        ):
             buttons_row.addWidget(btn)
         root.addLayout(buttons_row)
 
@@ -383,6 +400,86 @@ class MainWindow(QMainWindow):
             self._reset_limits()
         else:
             QMessageBox.warning(self, "Calibração", message)
+
+    def _start_vibration_capture(self) -> None:
+        if self._source is None or not self._running:
+            QMessageBox.warning(self, "Não conectado", "Inicie a leitura antes de usar o Modo Vibração.")
+            return
+        if not getattr(self._source, "supports_vibration_capture", False):
+            QMessageBox.information(self, "Modo Vibração", "Esta fonte de dados não suporta captura de vibração.")
+            return
+
+        dialog = VibrationConfigDialog(self)
+        if dialog.exec_() != VibrationConfigDialog.Accepted:
+            return
+        duration_s, rate_hz = dialog.result_values()
+
+        progress = QProgressDialog("Capturando...", "Cancelar", 0, 100, self)
+        progress.setWindowTitle("Modo Vibração")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        source = self._source
+        progress.canceled.connect(lambda: getattr(source, "stop_vibration_capture", lambda: None)())
+        self._vibration_progress_dialog = progress
+
+        self.vibration_btn.setEnabled(False)
+        self.statusBar().showMessage("Captura de vibração em andamento...")
+
+        def on_progress(percent: float) -> None:
+            self._bridge.vibration_progress.emit(percent)
+
+        def on_done(readings: list[AngleReading] | None, error: str | None) -> None:
+            self._bridge.vibration_done.emit(readings if readings is not None else [], error or "", duration_s, rate_hz)
+
+        source.start_vibration_capture(duration_s, rate_hz, on_progress, on_done)
+
+    def _on_vibration_progress(self, percent: float) -> None:
+        if self._vibration_progress_dialog is not None:
+            self._vibration_progress_dialog.setValue(int(percent))
+
+    def _on_vibration_done(self, readings: list, error: str, duration_s: float, rate_hz: float) -> None:
+        self.vibration_btn.setEnabled(True)
+        if self._vibration_progress_dialog is not None:
+            self._vibration_progress_dialog.close()
+            self._vibration_progress_dialog = None
+
+        if error:
+            self.statusBar().showMessage(f"Captura de vibração: {error}", 5000)
+            if error != "Captura cancelada pelo usuário.":
+                QMessageBox.warning(self, "Modo Vibração", error)
+            return
+
+        if not readings:
+            QMessageBox.warning(self, "Modo Vibração", "Nenhuma amostra foi capturada.")
+            return
+
+        capture_id = self._history.save_vibration_capture(self._settings.mode, duration_s, rate_hz, readings)
+        stats = compute_stats(readings)
+        freqs, magnitudes = compute_fft(readings, rate_hz)
+        self.statusBar().showMessage("Captura de vibração concluída.", 5000)
+
+        result_dialog = VibrationResultDialog(stats, self)
+        result_dialog.exec_()
+        if not result_dialog.save_requested:
+            return
+
+        default_name = f"relatorio_vibracao_{_dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
+        default_path = os.path.join(os.getcwd(), default_name)
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar relatório de vibração", default_path, "PDF (*.pdf)")
+        if not path:
+            return
+
+        captures_by_id = {c.id: c for c in self._history.list_vibration_captures()}
+        capture_info = captures_by_id.get(capture_id)
+        try:
+            generate_vibration_report(path, capture_info, readings, stats, freqs, magnitudes)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Erro ao gerar relatório", str(exc))
+            return
+
+        QMessageBox.information(self, "Relatório gerado", f"Relatório salvo em:\n{path}")
 
     def _flash(self, label: QLabel) -> None:
         label.setStyleSheet(_FLASH_STYLE)
