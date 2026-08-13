@@ -23,6 +23,8 @@ class AngleReading:
 
 ReadingCallback = Callable[[AngleReading], None]
 ErrorCallback = Callable[[str], None]
+VibrationProgressCallback = Callable[[float], None]  # percentual 0-100
+VibrationDoneCallback = Callable[[list[AngleReading] | None, str | None], None]  # amostras, erro
 
 
 class IAngleDataSource(ABC):
@@ -54,3 +56,34 @@ class IAngleDataSource(ABC):
         `NotImplementedError` se a fonte não suportar.
         """
         raise NotImplementedError("Esta fonte de dados não suporta calibração.")
+
+    @property
+    def supports_vibration_capture(self) -> bool:
+        """Indica se esta fonte suporta captura de vibração em alta taxa
+        (`start_vibration_capture`). Por padrão, não."""
+        return False
+
+    def start_vibration_capture(
+        self,
+        duration_s: float,
+        rate_hz: float,
+        on_progress: VibrationProgressCallback,
+        on_done: VibrationDoneCallback,
+    ) -> None:
+        """Inicia uma captura de amostras em alta taxa por `duration_s`
+        segundos, a ~`rate_hz` amostras/s — usada para caracterizar
+        vibração/variação angular (ex: efeito de vento em um mastro), que a
+        leitura contínua normal (poll a cada ~250ms) não consegue captar.
+
+        Não bloqueante: roda em background e chama `on_progress(percentual)`
+        periodicamente e `on_done(amostras, erro)` ao final — `amostras` é
+        `None` e `erro` descreve a falha (ou cancelamento) em caso de erro.
+        Fontes que suportam devem sobrescrever este método. Levanta
+        `NotImplementedError` se a fonte não suportar.
+        """
+        raise NotImplementedError("Esta fonte de dados não suporta captura de vibração.")
+
+    def stop_vibration_capture(self) -> None:
+        """Cancela uma captura de vibração em andamento, se houver. Seguro
+        chamar mesmo sem captura em andamento. No-op por padrão."""
+        return

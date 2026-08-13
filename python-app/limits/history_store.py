@@ -38,8 +38,23 @@ CREATE TABLE IF NOT EXISTS limit_events (
     timestamp REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS vibration_captures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at REAL NOT NULL,
+    mode TEXT NOT NULL,
+    duration_s REAL NOT NULL,
+    rate_hz REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS vibration_samples (
+    capture_id INTEGER NOT NULL REFERENCES vibration_captures(id),
+    timestamp REAL NOT NULL,
+    angle_deg REAL NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_readings_session ON readings(session_id);
 CREATE INDEX IF NOT EXISTS idx_limit_events_session ON limit_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_vibration_samples_capture ON vibration_samples(capture_id);
 """
 
 
@@ -49,6 +64,15 @@ class SessionInfo:
     started_at: float
     ended_at: float | None
     mode: str
+
+
+@dataclass
+class VibrationCaptureInfo:
+    id: int
+    started_at: float
+    mode: str
+    duration_s: float
+    rate_hz: float
 
 
 class HistoryStore:
@@ -119,6 +143,34 @@ class HistoryStore:
             LimitEvent(kind=row[0], reading=AngleReading(angle_deg=row[1], timestamp=row[2]))
             for row in rows
         ]
+
+    def save_vibration_capture(
+        self, mode: str, duration_s: float, rate_hz: float, readings: list[AngleReading]
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO vibration_captures (started_at, mode, duration_s, rate_hz) VALUES (?, ?, ?, ?)",
+            (time.time(), mode, duration_s, rate_hz),
+        )
+        capture_id = cur.lastrowid
+        self._conn.executemany(
+            "INSERT INTO vibration_samples (capture_id, timestamp, angle_deg) VALUES (?, ?, ?)",
+            [(capture_id, r.timestamp, r.angle_deg) for r in readings],
+        )
+        self._conn.commit()
+        return capture_id
+
+    def list_vibration_captures(self) -> list[VibrationCaptureInfo]:
+        rows = self._conn.execute(
+            "SELECT id, started_at, mode, duration_s, rate_hz FROM vibration_captures ORDER BY started_at DESC"
+        ).fetchall()
+        return [VibrationCaptureInfo(*row) for row in rows]
+
+    def get_vibration_samples(self, capture_id: int) -> list[AngleReading]:
+        rows = self._conn.execute(
+            "SELECT angle_deg, timestamp FROM vibration_samples WHERE capture_id = ? ORDER BY timestamp",
+            (capture_id,),
+        ).fetchall()
+        return [AngleReading(angle_deg=row[0], timestamp=row[1]) for row in rows]
 
     def close(self) -> None:
         self._conn.close()

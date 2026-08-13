@@ -18,6 +18,10 @@ mesma arquitetura geral, mas com sua própria implementação em Kotlin).
 - Grava cada leitura e cada evento de limite em SQLite, por sessão.
 - Gera um **relatório em PDF** (gráfico do ângulo ao longo do tempo + tabela
   de eventos de limite + resumo) a partir do histórico de uma sessão.
+- Permite um **Modo Vibração**: captura em alta taxa (ex: 50Hz) por um
+  período configurável, para caracterizar variação angular por vento/vibração
+  (ex: mastro de pan-tilt) — calcula desvio padrão/RMS/pico-a-pico e o
+  espectro de frequência (FFT), com relatório em PDF próprio.
 - Interface com a identidade visual da Avibras Aeroco (fundo azul marinho,
   detalhes em laranja, logo opcional no canto superior direito).
 
@@ -42,10 +46,12 @@ graph TD
     subgraph limits["limits/"]
         LimitTracker["LimitTracker"]
         HistoryStore["HistoryStore (SQLite)"]
+        VibrationStats["vibration_stats<br/>(compute_stats/compute_fft)"]
     end
 
     subgraph report["report/"]
         ReportGenerator["generate_report()"]
+        VibrationReport["generate_vibration_report()"]
     end
 
     MainWindow --> SettingsDialog
@@ -56,9 +62,16 @@ graph TD
     MainWindow --> LimitTracker
     MainWindow --> HistoryStore
     MainWindow --> ReportGenerator
+    MainWindow --> VibrationStats
+    MainWindow --> VibrationReport
+    MainWindow --> VibrationDialog["ui.vibration_dialog<br/>(Config/Result)"]
     ReportGenerator --> HistoryStore
+    VibrationReport --> VibrationStats
     SettingsDialog -.teste de conexão.-> Modbus
     SettingsDialog -.teste/scan.-> Ble
+    IAngleDataSource -.captura de vibração.-> Simulated
+    IAngleDataSource -.captura de vibração.-> Modbus
+    IAngleDataSource -.captura de vibração.-> Ble
 ```
 
 `IAngleDataSource` é o ponto-chave da arquitetura: a UI e toda a lógica de
@@ -111,7 +124,38 @@ flowchart TD
     I --> J["Aviso com a falha específica"]
 ```
 
-## 4. Fluxo — Testar conexão (Configurações)
+## 4. Fluxo — Modo Vibração
+
+```mermaid
+flowchart TD
+    A["Usuário clica 'Modo Vibração'<br/>(leitura em execução)"] --> B{Fonte suporta<br/>captura de vibração?}
+    B -- não --> B1["Aviso: fonte não suporta"]
+    B -- sim --> C["Diálogo: duração (s) e taxa (Hz)"]
+    C --> D["source.start_vibration_capture(duração, taxa,<br/>on_progress, on_done) — não bloqueante"]
+    D --> E["QProgressDialog exibe progresso<br/>(cancelável)"]
+
+    D -.a cada atualização.-> F["on_progress(%)"]
+    F --> G["_SignalBridge.vibration_progress.emit"]
+    G --> H["Atualiza QProgressDialog"]
+
+    D -.ao concluir.-> I["on_done(amostras, erro)"]
+    I --> J["_SignalBridge.vibration_done.emit"]
+    J --> K{Erro ou<br/>cancelado?}
+    K -- sim --> K1["Mensagem de erro/cancelamento"]
+    K -- não --> L["history.save_vibration_capture()<br/>(sessão separada do monitoramento contínuo)"]
+    L --> M["vibration_stats.compute_stats()<br/>desvio padrão / RMS / pico-a-pico"]
+    M --> N["vibration_stats.compute_fft()<br/>espectro de frequência"]
+    N --> O["Diálogo de resultado: estatísticas<br/>+ opção 'Salvar relatório PDF'"]
+    O -- sim --> P["generate_vibration_report()<br/>gráfico tempo + espectro FFT"]
+    O -- não --> Q["(fim)"]
+```
+
+Simulação: gera uma vibração sintética (duas senoides de baixa amplitude +
+ruído) — testável de ponta a ponta neste ambiente. RS485/BLE seguem um
+contrato assumido (registradores Modbus / características BLE novas,
+documentados nos respectivos módulos), ainda sem hardware real para validar.
+
+## 5. Fluxo — Testar conexão (Configurações)
 
 ```mermaid
 flowchart TD
@@ -128,7 +172,7 @@ flowchart TD
     I -- não --> K["✗ Erro específico, em vermelho"]
 ```
 
-## 5. Fluxo — Gerar relatório PDF
+## 6. Fluxo — Gerar relatório PDF
 
 ```mermaid
 flowchart TD
@@ -150,7 +194,11 @@ flowchart TD
 - Os três fluxos reais (RS485, BLE, e o futuro firmware do ESP32) seguem
   contratos **assumidos**, documentados nos comentários de topo de
   `data_source/modbus_source.py` e `data_source/ble_source.py` — precisam
-  ser confirmados/ajustados quando o firmware existir de fato.
+  ser confirmados/ajustados quando o firmware existir de fato. Isso inclui o
+  contrato de captura de vibração (registradores/coils Modbus novos e
+  characteristics BLE novas) — só o caminho de **simulação** foi testado de
+  ponta a ponta neste ambiente; RS485/BLE não puderam ser validados contra
+  hardware real.
 - `LimitTracker` e `HistoryStore` são agnósticos à fonte de dados: qualquer
   nova fonte que implemente `IAngleDataSource` funciona sem alterações no
   resto do app.

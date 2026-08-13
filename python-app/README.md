@@ -53,6 +53,33 @@ O indicador abaixo do modo mostra o estado da conexão com o ESP32
 (conectando/conectado/falha), atualizado a cada leitura ou erro, seja via
 RS485 ou BLE.
 
+## Modo Vibração
+
+A leitura contínua normal (poll a cada ~250ms) é boa para acompanhar o
+ângulo, mas lenta demais para caracterizar **vibração** — por exemplo, medir
+a variação angular de um pan-tilt sob efeito de vento com o veículo parado.
+Para isso existe o botão **"Modo Vibração"**, disponível com a leitura em
+execução (habilite calibrando a posição de referência antes, com o botão
+**Calibrar**, para que a variação registrada seja relativa a ela):
+
+1. Escolha a **duração** (padrão 30s) e a **taxa de amostragem** (padrão
+   50Hz) da captura.
+2. O app mostra o progresso enquanto a captura acontece (pode ser cancelada).
+3. Ao final, mostra um resumo estatístico: **desvio padrão, RMS, pico a
+   pico, mínimo e máximo**.
+4. Opcionalmente, gera um **relatório em PDF** próprio, com o gráfico da
+   variação angular no tempo e o **espectro de frequência (FFT)** — útil
+   para identificar uma eventual frequência de ressonância dominante (ex:
+   balanço do mastro sob vento).
+
+Cada captura é salva separada das sessões de monitoramento contínuo no
+histórico (`limits/history_store.py`), para não misturar os dois tipos de
+dado. Em modo simulação, a captura gera uma vibração sintética (duas
+oscilações de baixa amplitude + ruído) só para exercitar todo o fluxo sem
+hardware — em modo real (RS485 ou BLE), segue um contrato assumido com o
+firmware, documentado nos módulos `data_source/modbus_source.py` e
+`data_source/ble_source.py` (ainda não confirmado/testado com hardware real).
+
 ## Identidade visual (Avibras Aeroco)
 
 A interface usa a paleta azul marinho + laranja da Avibras Aeroco

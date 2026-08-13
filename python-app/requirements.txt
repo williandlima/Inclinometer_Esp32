@@ -4,3 +4,4 @@ pyserial>=3.5
 bleak>=0.21
 reportlab>=4.0
 matplotlib>=3.8
+numpy>=1.24
