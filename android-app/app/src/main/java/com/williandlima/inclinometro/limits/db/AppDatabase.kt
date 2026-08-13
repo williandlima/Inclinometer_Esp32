@@ -6,8 +6,14 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [SessionEntity::class, ReadingEntity::class, LimitEventEntity::class],
-    version = 1,
+    entities = [
+        SessionEntity::class,
+        ReadingEntity::class,
+        LimitEventEntity::class,
+        VibrationCaptureEntity::class,
+        VibrationSampleEntity::class,
+    ],
+    version = 2,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): InclinometerDao
@@ -22,7 +28,11 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "inclinometro.db",
-                ).build().also { instance = it }
+                )
+                    // Projeto ainda em desenvolvimento, sem dados de usuário
+                    // reais em produção — dispensa migração formal por ora.
+                    .fallbackToDestructiveMigration()
+                    .build().also { instance = it }
             }
     }
 }

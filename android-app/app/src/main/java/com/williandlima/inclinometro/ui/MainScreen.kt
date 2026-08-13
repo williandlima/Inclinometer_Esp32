@@ -3,6 +3,8 @@ package com.williandlima.inclinometro.ui
 import android.content.Context
 import android.content.Intent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,27 +14,40 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.williandlima.inclinometro.datasource.AngleReading
 import com.williandlima.inclinometro.datasource.ConnectionMode
+import com.williandlima.inclinometro.limits.VibrationStats
 import com.williandlima.inclinometro.ui.theme.AmberFlash
+import com.williandlima.inclinometro.ui.theme.Green
+import com.williandlima.inclinometro.ui.theme.Orange
+import com.williandlima.inclinometro.ui.theme.Red
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -46,6 +61,8 @@ fun MainScreen(viewModel: MainViewModel) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    var showVibrationConfig by remember { mutableStateOf(false) }
 
     val minCardColor by animateColorAsState(
         targetValue = if (state.minFlash) AmberFlash else MaterialTheme.colorScheme.surfaceVariant,
@@ -62,9 +79,15 @@ fun MainScreen(viewModel: MainViewModel) {
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        BrandHeader()
+        Spacer(Modifier.height(8.dp))
+
         val modoLabel = if (state.mode == ConnectionMode.SIMULATED) "Simulação" else "Real (BLE)"
         val estadoLabel = if (state.running) "em execução" else "parado"
         Text("Modo: $modoLabel — $estadoLabel", style = MaterialTheme.typography.bodyMedium)
+
+        Spacer(Modifier.height(8.dp))
+        ConnectionBadge(state.connectionStatus)
 
         Spacer(Modifier.height(16.dp))
 
@@ -117,12 +140,24 @@ fun MainScreen(viewModel: MainViewModel) {
 
         Spacer(Modifier.height(8.dp))
 
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = viewModel::calibrate, enabled = state.running && !state.calibrating) {
+                Text(if (state.calibrating) "Calibrando..." else "Calibrar")
+            }
+            OutlinedButton(
+                onClick = { showVibrationConfig = true },
+                enabled = state.running && !state.vibrationCapturing,
+            ) {
+                Text("Modo Vibração")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
         Button(onClick = {
             scope.launch {
                 val file = viewModel.generateReportFile()
-                if (file != null) {
-                    sharePdf(context, file)
-                }
+                if (file != null) sharePdf(context, file)
             }
         }) {
             Text("Gerar relatório PDF")
@@ -131,13 +166,176 @@ fun MainScreen(viewModel: MainViewModel) {
         Spacer(Modifier.height(16.dp))
         Text(state.statusMessage, style = MaterialTheme.typography.bodySmall)
     }
+
+    if (showVibrationConfig) {
+        VibrationConfigDialog(
+            onConfirm = { durationS, rateHz ->
+                showVibrationConfig = false
+                viewModel.startVibrationCapture(durationS, rateHz)
+            },
+            onDismiss = { showVibrationConfig = false },
+        )
+    }
+
+    if (state.vibrationCapturing) {
+        VibrationProgressDialog(
+            progress = state.vibrationProgress,
+            onCancel = viewModel::cancelVibrationCapture,
+        )
+    }
+
+    state.vibrationResult?.let { stats ->
+        VibrationResultDialog(
+            stats = stats,
+            onDismiss = viewModel::dismissVibrationResult,
+            onSaveReport = {
+                scope.launch {
+                    val file = viewModel.generateVibrationReportFile()
+                    viewModel.dismissVibrationResult()
+                    if (file != null) sharePdf(context, file)
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun BrandHeader() {
+    val context = LocalContext.current
+    val logoResId = remember(context) { context.resources.getIdentifier("logo", "drawable", context.packageName) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Inclinômetro", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        if (logoResId != 0) {
+            Image(
+                painter = painterResource(id = logoResId),
+                contentDescription = null,
+                modifier = Modifier.height(40.dp),
+            )
+        } else {
+            Text("AVIBRAS aeroco", color = Orange, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+private data class ConnBadgeStyle(val text: String, val background: Color?, val textColor: Color)
+
+@Composable
+private fun ConnectionBadge(status: ConnectionStatus) {
+    val style = when (status) {
+        ConnectionStatus.PARADO -> ConnBadgeStyle("○ Parado", null, Color.Gray)
+        ConnectionStatus.CONECTANDO -> ConnBadgeStyle("◐ Conectando...", null, Orange)
+        ConnectionStatus.CONECTADO -> ConnBadgeStyle("● Conectado", Green, Color.White)
+        ConnectionStatus.ERRO -> ConnBadgeStyle("● Falha de conexão", Red, Color.White)
+        ConnectionStatus.SIMULACAO -> ConnBadgeStyle("● Simulação (interna)", null, Orange)
+    }
+    val modifier = if (style.background != null) {
+        Modifier
+            .background(style.background, RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+    } else {
+        Modifier
+    }
+    Text(style.text, color = style.textColor, fontWeight = FontWeight.Bold, modifier = modifier)
+}
+
+@Composable
+private fun VibrationConfigDialog(
+    onConfirm: (durationS: Int, rateHz: Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var durationText by remember { mutableStateOf("30") }
+    var rateText by remember { mutableStateOf("50") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Modo Vibração — Configurar captura") },
+        text = {
+            Column {
+                Text(
+                    "Posicione o pan-tilt na posição de referência e use \"Calibrar\" " +
+                        "antes de iniciar, para que a variação registrada seja relativa a essa posição.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = durationText,
+                    onValueChange = { durationText = it.filter(Char::isDigit) },
+                    label = { Text("Duração da captura (s)") },
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = rateText,
+                    onValueChange = { rateText = it.filter(Char::isDigit) },
+                    label = { Text("Taxa de amostragem (Hz)") },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val durationS = durationText.toIntOrNull()?.coerceIn(5, 600) ?: 30
+                val rateHz = rateText.toIntOrNull()?.coerceIn(1, 200) ?: 50
+                onConfirm(durationS, rateHz)
+            }) {
+                Text("Iniciar")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
+}
+
+@Composable
+private fun VibrationProgressDialog(progress: Int, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = { /* não fecha ao tocar fora enquanto captura */ },
+        title = { Text("Modo Vibração") },
+        text = {
+            Column {
+                Text("Capturando... $progress%")
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { progress / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onCancel) { Text("Cancelar") } },
+    )
+}
+
+@Composable
+private fun VibrationResultDialog(
+    stats: VibrationStats,
+    onDismiss: () -> Unit,
+    onSaveReport: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Modo Vibração — Resultado da captura") },
+        text = {
+            Column {
+                Text("Amostras: ${stats.nSamples} (duração efetiva: %.2f s)".format(stats.durationS))
+                Text("Média: %.3f°".format(stats.meanDeg))
+                Text("Desvio padrão: %.3f°".format(stats.stdDevDeg))
+                Text("RMS: %.3f°".format(stats.rmsDeg))
+                Text("Pico a pico: %.3f°".format(stats.peakToPeakDeg))
+                Text("Mínimo / Máximo: %.3f° / %.3f°".format(stats.minDeg, stats.maxDeg))
+            }
+        },
+        confirmButton = { TextButton(onClick = onSaveReport) { Text("Salvar relatório PDF") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Fechar") } },
+    )
 }
 
 @Composable
 private fun LimitCard(
     title: String,
     reading: AngleReading?,
-    containerColor: androidx.compose.ui.graphics.Color,
+    containerColor: Color,
     modifier: Modifier = Modifier,
 ) {
     Card(

@@ -27,3 +27,20 @@ data class LimitEventEntity(
     val angleDeg: Double,
     val timestamp: Long,
 )
+
+@Entity(tableName = "vibration_captures")
+data class VibrationCaptureEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val startedAt: Long,
+    val mode: String,
+    val durationS: Int,
+    val rateHz: Int,
+)
+
+@Entity(tableName = "vibration_samples")
+data class VibrationSampleEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val captureId: Long,
+    val timestamp: Long,
+    val angleDeg: Double,
+)
