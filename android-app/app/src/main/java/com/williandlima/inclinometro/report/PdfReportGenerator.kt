@@ -9,6 +9,8 @@ import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.limits.LimitEvent
 import com.williandlima.inclinometro.limits.LimitKind
 import com.williandlima.inclinometro.limits.SessionInfo
+import com.williandlima.inclinometro.limits.VibrationCaptureInfo
+import com.williandlima.inclinometro.limits.VibrationStats
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -185,6 +187,142 @@ object PdfReportGenerator {
 
             document.finishPage(page)
             pageNumber++
+        }
+    }
+
+    /**
+     * Relatório de uma captura de vibração (Modo Vibração): resumo
+     * estatístico, gráfico da variação angular no tempo e espectro de
+     * frequência (FFT) — equivalente ao `generate_vibration_report()` do
+     * app desktop.
+     */
+    suspend fun generateVibrationReport(
+        context: Context,
+        capture: VibrationCaptureInfo,
+        readings: List<AngleReading>,
+        stats: VibrationStats,
+        freqsHz: DoubleArray,
+        magnitudes: DoubleArray,
+    ): File = withContext(Dispatchers.IO) {
+        val document = PdfDocument()
+
+        val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, 1).create()
+        val page = document.startPage(pageInfo)
+        val canvas = page.canvas
+
+        val titlePaint = Paint().apply { textSize = 20f; isFakeBoldText = true; color = Color.BLACK }
+        val labelPaint = Paint().apply { textSize = 12f; isFakeBoldText = true; color = Color.DKGRAY }
+        val valuePaint = Paint().apply { textSize = 12f; color = Color.BLACK }
+        val headingPaint = Paint().apply { textSize = 14f; isFakeBoldText = true; color = Color.BLACK }
+
+        var y = MARGIN
+        canvas.drawText("Relatório de Captura de Vibração", MARGIN, y, titlePaint)
+        y += 30f
+
+        val modeLabel = if (capture.mode == ConnectionMode.SIMULATED) "Simulação" else "Real (BLE)"
+        val summaryRows = listOf(
+            "Modo" to modeLabel,
+            "Início" to timeFormat.format(Date(capture.startedAt)),
+            "Duração configurada" to "${capture.durationS} s",
+            "Taxa de amostragem" to "${capture.rateHz} Hz",
+            "Amostras capturadas" to stats.nSamples.toString(),
+            "Duração efetiva" to "%.2f s".format(stats.durationS),
+            "Média" to "%.3f°".format(stats.meanDeg),
+            "Desvio padrão" to "%.3f°".format(stats.stdDevDeg),
+            "RMS" to "%.3f°".format(stats.rmsDeg),
+            "Pico a pico" to "%.3f°".format(stats.peakToPeakDeg),
+            "Mínimo / Máximo" to "%.3f° / %.3f°".format(stats.minDeg, stats.maxDeg),
+        )
+        for ((label, value) in summaryRows) {
+            canvas.drawText("$label:", MARGIN, y, labelPaint)
+            canvas.drawText(value, MARGIN + 190f, y, valuePaint)
+            y += 18f
+        }
+
+        y += 16f
+        canvas.drawText("Variação angular ao longo do tempo", MARGIN, y, headingPaint)
+        y += 12f
+        drawVibrationTimeChart(canvas, readings, top = y, bottom = y + 200f)
+        y += 220f
+
+        canvas.drawText("Espectro de frequência (FFT)", MARGIN, y, headingPaint)
+        y += 12f
+        drawSpectrumChart(canvas, freqsHz, magnitudes, top = y, bottom = y + 200f)
+
+        document.finishPage(page)
+
+        val dir = File(context.getExternalFilesDir(null), "relatorios").apply { mkdirs() }
+        val fileName = "relatorio_vibracao_${System.currentTimeMillis()}.pdf"
+        val file = File(dir, fileName)
+        FileOutputStream(file).use { document.writeTo(it) }
+        document.close()
+        file
+    }
+
+    private fun drawVibrationTimeChart(
+        canvas: android.graphics.Canvas,
+        readings: List<AngleReading>,
+        top: Float,
+        bottom: Float,
+    ) {
+        val left = MARGIN
+        val right = PAGE_WIDTH - MARGIN
+        val axisPaint = Paint().apply { color = Color.GRAY; strokeWidth = 1f }
+        canvas.drawLine(left, top, left, bottom, axisPaint)
+        canvas.drawLine(left, bottom, right, bottom, axisPaint)
+        if (readings.isEmpty()) return
+
+        val t0 = readings.first().timestamp
+        val tEnd = readings.last().timestamp
+        val duration = (tEnd - t0).coerceAtLeast(1L)
+        val minAngle = readings.minOf { it.angleDeg }
+        val maxAngle = readings.maxOf { it.angleDeg }
+        val range = (maxAngle - minAngle).coerceAtLeast(0.01)
+
+        fun xFor(timestamp: Long): Float = left + (right - left) * (timestamp - t0).toFloat() / duration
+        fun yFor(angle: Double): Float = bottom - (bottom - top) * ((angle - minAngle) / range).toFloat()
+
+        val linePaint = Paint().apply { color = Color.rgb(31, 119, 180); strokeWidth = 1.5f; isAntiAlias = true }
+        var prevX: Float? = null
+        var prevY: Float? = null
+        for (reading in readings) {
+            val x = xFor(reading.timestamp)
+            val y = yFor(reading.angleDeg)
+            if (prevX != null && prevY != null) canvas.drawLine(prevX, prevY, x, y, linePaint)
+            prevX = x
+            prevY = y
+        }
+    }
+
+    private fun drawSpectrumChart(
+        canvas: android.graphics.Canvas,
+        freqsHz: DoubleArray,
+        magnitudes: DoubleArray,
+        top: Float,
+        bottom: Float,
+    ) {
+        val left = MARGIN
+        val right = PAGE_WIDTH - MARGIN
+        val axisPaint = Paint().apply { color = Color.GRAY; strokeWidth = 1f }
+        canvas.drawLine(left, top, left, bottom, axisPaint)
+        canvas.drawLine(left, bottom, right, bottom, axisPaint)
+        if (freqsHz.isEmpty()) return
+
+        val maxFreq = freqsHz.last().coerceAtLeast(0.01)
+        val maxMag = magnitudes.maxOrNull()?.coerceAtLeast(0.0001) ?: 0.0001
+
+        fun xFor(freq: Double): Float = left + (right - left) * (freq / maxFreq).toFloat()
+        fun yFor(mag: Double): Float = bottom - (bottom - top) * (mag / maxMag).toFloat()
+
+        val linePaint = Paint().apply { color = Color.rgb(214, 39, 40); strokeWidth = 1.5f; isAntiAlias = true }
+        var prevX: Float? = null
+        var prevY: Float? = null
+        for (i in freqsHz.indices) {
+            val x = xFor(freqsHz[i])
+            val y = yFor(magnitudes[i])
+            if (prevX != null && prevY != null) canvas.drawLine(prevX, prevY, x, y, linePaint)
+            prevX = x
+            prevY = y
         }
     }
 }
