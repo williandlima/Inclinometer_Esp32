@@ -28,7 +28,7 @@ private:
     uint16_t _vibrationCursor = 0;
 
     uint8_t _frame[256];
-    uint8_t _frameLen = 0;
+    uint16_t _frameLen = 0;  // uint16_t de propósito: precisa exceder 255 pra comparação com sizeof(_frame) ter efeito
     uint32_t _lastByteMs = 0;
 
     void handleFrame();
