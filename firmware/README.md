@@ -51,10 +51,16 @@ Se o hardware definitivo usar uma variante diferente do ESP32 (S3, C3,
 etc.), os pinos podem precisar de ajuste — essas variantes têm GPIOs
 restritos diferentes do WROOM-32 clássico assumido aqui.
 
-A fórmula do ângulo em `AngleSensor.cpp` (`atan2(ay, az)`) ainda assume uma
-orientação de montagem do MPU6050 **não confirmada** — pode precisar
-trocar os eixos/sinais usados conforme a orientação real do sensor no
-pan-tilt.
+A fórmula do ângulo em `AngleSensor.cpp` (`atan2(ay, az)`) assume uma
+orientação de montagem do MPU6050 já **recomendada, mas ainda não
+confirmada fisicamente**: eixo X do sensor alinhado ao eixo mecânico de
+giro do pan-tilt, com a rotação de 0-120° acontecendo no plano Y-Z (os
+dois eixos usados no `atan2`). Essa combinação mantém a sensibilidade da
+leitura quase constante em toda a faixa — sem a zona de baixa sensibilidade
+que um único eixo teria perto de 90°, o que é essencial para o **Modo
+Vibração** detectar variações de frações de grau em torno do zero
+calibrado. Ver "Orientação de montagem do sensor" em `docs/pinout.md`
+para o detalhamento e o teste de bancada de confirmação.
 
 ## Contrato implementado
 
@@ -126,7 +132,8 @@ hardware físico.
   precisar de ajuste fino em baudrates mais altas.
 - A UART0 (porta USB) fica dedicada ao protocolo Modbus RTU — não há canal
   de log/debug separado disponível hoje (ver comentário em `main.cpp`).
-- Orientação de montagem do sensor ainda não confirmada, como descrito
-  acima (a pinagem em si já está definida).
+- Orientação de montagem do sensor tem recomendação definida (eixo X no
+  giro, plano Y-Z), mas confirmação física em bancada ainda pendente,
+  como descrito acima (a pinagem em si já está definida).
 - Para o cabo até o painel de controle (~7m), use um **cabo de extensão
   USB ativo** — USB simples sem amplificação só é confiável até uns 5m.

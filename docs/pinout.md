@@ -114,9 +114,30 @@ datasheet do módulo, não de uma placa específica.
 
 - **Orientação de montagem do sensor**: a fórmula do ângulo em
   `firmware/src/AngleSensor.cpp` (`atan2(ay, az)`) assume uma orientação
-  específica dos eixos do MPU6050, que **ainda não foi confirmada** contra
-  a montagem real no pan-tilt — pode precisar ajustar os eixos/sinais
-  usados quando o sensor for montado fisicamente.
+  específica dos eixos do MPU6050 — **recomendação definida, confirmação
+  física ainda pendente**:
+  - Montar o MPU6050 com o **eixo X alinhado ao eixo mecânico de giro do
+    pan-tilt** (o pino/articulação de elevação), de forma que a rotação de
+    0–120° aconteça no **plano Y-Z** do sensor — é exatamente o par de
+    eixos que `atan2(ay, az)` usa.
+  - Motivo: com dois eixos (`atan2`) a sensibilidade da leitura fica quase
+    constante em toda a faixa, sem "zona morta" perto de 90° — diferente
+    de usar um único eixo (`asin`/`acos`), que perde resolução exatamente
+    ali. Isso é crítico não só para a leitura de ângulo contínua, mas
+    principalmente para o **Modo Vibração**, que precisa detectar
+    variações de frações de grau em torno do zero calibrado (90°) — é
+    justo a região onde um único eixo teria a pior sensibilidade.
+  - Acelerômetro puro (sem giroscópio) não distingue inclinação angular de
+    aceleração linear/translacional, mas vento em um pan-tilt no topo de
+    um mastro tende a produzir majoritariamente flexão angular (o mastro
+    dobra, a ponta gira) — exatamente o que se quer medir — então essa
+    abordagem é adequada sem precisar de fusão com giroscópio.
+  - **Confirmação em bancada** (pendente, ao montar o sensor fisicamente):
+    gravar `ax, ay, az` brutos enquanto o eixo é movimentado manualmente de
+    0° a 120° — confirma visualmente qual par de eixos varre o arco (um
+    deles deve manter módulo baixo e quase constante: esse é o X, o eixo
+    de giro) e os sinais corretos para o `atan2()` bater com o sentido
+    físico (crescente = subindo).
 - **Variante de placa**: esta pinagem assume um ESP32 DevKit clássico
   (WROOM-32) — confirmado na placa física em uso, junto com o chip
   conversor USB-serial CH9102X (ver seção "USB" acima). Variantes
