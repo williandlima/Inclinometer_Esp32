@@ -67,9 +67,11 @@ Passos (em um Windows com Python instalado):
   dongle extra, mas o computador precisa ter Bluetooth.
 - **USB/Modbus:** o modo via cabo USB direto ao ESP32 pode precisar do
   driver do chip USB-serial da placa (CP2102, CH340 ou FTDI, dependendo do
-  modelo) — normalmente instalado junto com o Windows, ou disponível no
-  site do fabricante do chip. Para distâncias maiores que ~5m, use um
-  cabo de extensão USB ativo.
+  modelo). **A placa usada no projeto tem um chip CH9102X (WCH)** — se a
+  porta COM não aparecer sozinha no Gerenciador de Dispositivos ao
+  conectar, procure e instale o driver oficial "CH9102" do fabricante WCH;
+  para os demais chips, o driver normalmente já vem com o Windows. Para
+  distâncias maiores que ~5m, use um cabo de extensão USB ativo.
 
 ## Solução de problemas
 
