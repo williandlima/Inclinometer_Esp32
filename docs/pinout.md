@@ -34,12 +34,66 @@ internamente ligada à UART0 do chip.
 Não usa GPIO — o rádio BLE é interno ao módulo ESP32 (antena embutida na
 maioria das placas DevKit). Nenhuma consideração de fiação adicional.
 
-## Pinos livres
+## Referência completa de pinos do ESP32 (WROOM-32)
 
-Como o projeto não usa mais RS485, os pinos que antes eram reservados para
-isso (GPIO 16, 17 e 4) estão livres para uso futuro — por exemplo, o pino
-INT do MPU6050 (ver tabela acima), um LED de status, ou um botão físico de
-calibração.
+Nomes dos pinos do próprio microcontrolador (GPIO), agrupados pelo que
+determina se dá pra usar cada um livremente — útil para escolher onde
+ligar algo novo no futuro.
+
+### Em uso neste projeto
+
+| Pino (GPIO) | Nome/alias | Uso |
+|---|---|---|
+| **GPIO21** | SDA | I2C — dados do MPU6050 |
+| **GPIO22** | SCL | I2C — clock do MPU6050 |
+| **GPIO1** | TX0 | UART0 — porta USB (Modbus RTU), TX |
+| **GPIO3** | RX0 | UART0 — porta USB (Modbus RTU), RX |
+
+### Livres para uso geral
+
+| Pino (GPIO) | Observação |
+|---|---|
+| **GPIO4** | Livre — antes era o controle de direção do RS485 (removido) |
+| **GPIO16** | Livre — antes era RX do RS485/UART2 (removido) |
+| **GPIO17** | Livre — antes era TX do RS485/UART2 (removido) |
+| **GPIO13**, **GPIO14**, **GPIO18**, **GPIO19**, **GPIO23** | Uso geral, sem restrição conhecida |
+| **GPIO25**, **GPIO26**, **GPIO27** | Uso geral; GPIO25/26 também servem como saída analógica (DAC) |
+| **GPIO32**, **GPIO33** | Uso geral; também entrada analógica (ADC1) |
+
+### Somente entrada (sem pull-up/down interno)
+
+| Pino (GPIO) | Observação |
+|---|---|
+| **GPIO34**, **GPIO35** | Só leitura (ex: sensor analógico, botão com pull-up externo) |
+| **GPIO36** (alias **VP**) | Só leitura |
+| **GPIO39** (alias **VN**) | Só leitura |
+
+### Cuidado — pinos de boot/strapping
+
+Definem o modo de boot do ESP32 ; usar como saída genérica pode impedir o
+chip de iniciar se o nível ficar "errado" no momento do reset.
+
+| Pino (GPIO) | Observação |
+|---|---|
+| **GPIO0** | Botão BOOT em muitas placas; deve ficar HIGH/flutuante no boot normal |
+| **GPIO2** | Ligado ao LED onboard em muitas placas; deve ficar LOW/flutuante em certos modos de boot |
+| **GPIO5** | Seleciona modo de boot SPI |
+| **GPIO12** | Seleciona a tensão da flash (3.3V/1.8V) — cuidado extra, pode até impedir o boot |
+| **GPIO15** | Controla verbosidade do log de boot |
+
+### Nunca usar — reservados para a flash interna
+
+**GPIO6 a GPIO11** — ligados internamente à memória flash do módulo. Usar
+qualquer um deles trava o ESP32 (não consegue nem iniciar).
+
+### Alimentação e reset (não são GPIO)
+
+| Pino | Função |
+|---|---|
+| **3V3** | Saída 3.3V regulada (alimenta o MPU6050 neste projeto) |
+| **GND** | Terra (vários pinos GND na placa, qualquer um serve) |
+| **5V** / **VIN** | Entrada de alimentação externa (5V, antes do regulador da placa) |
+| **EN** | Reset/enable do chip (botão RESET em muitas placas) |
 
 ## Notas
 
