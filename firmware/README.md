@@ -24,27 +24,47 @@ firmware/
     BleServer.h/.cpp      servidor BLE (GATT)
 ```
 
-## ⚠️ Pinagem — AJUSTAR conforme o projeto elétrico
+## Pinagem (ESP32 DevKit clássico / WROOM-32)
 
-O projeto elétrico (pinagem definitiva, escolha do conversor RS485, etc.) é
-responsabilidade separada, ainda em definição. Os pinos usados aqui
-(`firmware/src/Config.h`) são **placeholders** com valores comuns de dev
-kits ESP32:
+Mapeamento definido, refletido em `firmware/src/Config.h`:
 
-| Sinal | Pino (placeholder) |
-|---|---|
-| I2C SDA (MPU6050) | GPIO 21 |
-| I2C SCL (MPU6050) | GPIO 22 |
-| RS485 RX (UART2) | GPIO 16 |
-| RS485 TX (UART2) | GPIO 17 |
-| RS485 DE/RE (direção) | GPIO 4 |
+| Sinal | Pino ESP32 | Vai para | Observação |
+|---|---|---|---|
+| **I2C — MPU6050** | | | |
+| SDA | GPIO 21 | SDA do MPU6050 | Padrão I2C do ESP32 |
+| SCL | GPIO 22 | SCL do MPU6050 | Padrão I2C do ESP32 |
+| — | 3.3V | VCC do MPU6050 | Não usar 5V — ver nota de nível lógico abaixo |
+| — | GND | GND do MPU6050 | |
+| — | GND | AD0 do MPU6050 | Fixa endereço I2C em `0x68` (o que `Mpu6050.h` assume) |
+| **RS485 — via módulo transceptor** | | | |
+| TX (UART2) | GPIO 17 | **DI** do módulo RS485 | Saída do ESP32 → entrada do transceptor |
+| RX (UART2) | GPIO 16 | **RO** do módulo RS485 | Saída do transceptor → entrada do ESP32 |
+| Direção | GPIO 4 | **DE + RE̅** (ligados juntos) | Um único pino: HIGH = transmite, LOW = recebe (já implementado em `ModbusSlave.cpp`) |
+| — | 3.3V (ver nota) | VCC do módulo RS485 | Ver nota de nível lógico abaixo |
+| — | GND | GND do módulo RS485 | |
+| — | — | A / B do módulo | Vão para o barramento RS485 (par trançado), não para o ESP32 |
 
-Ajuste essas constantes em `Config.h` quando a pinagem definitiva existir.
+**Notas de hardware:**
+- **Nível lógico do módulo RS485**: usar um transceptor nativo 3.3V (ex:
+  MAX3485) para não precisar de level shifter entre ele e o ESP32 — módulos
+  MAX485 clássicos de 5V colocariam 5V nas linhas `DI`/`RO`/`DE`/`RE`, o que
+  pode danificar os pinos do ESP32.
+- **Terminação do barramento**: se o inclinômetro for a ponta do cabo (não
+  no meio de uma linha com vários equipamentos), colocar um resistor de
+  **120Ω entre A e B** no conector, para terminar a linha corretamente —
+  mais relevante com o cabo mais longo até o painel de controle (mastro a
+  7m).
+- Estes dois periféricos (I2C e RS485) não têm conflito de pinos entre si
+  nem com os pinos de *strapping* de boot do ESP32.
 
-Da mesma forma, a fórmula do ângulo em `AngleSensor.cpp` (`atan2(ay, az)`)
-assume uma orientação de montagem do MPU6050 que **ainda não foi
-confirmada** — pode precisar trocar os eixos/sinais usados conforme a
-orientação real do sensor no pan-tilt.
+Se o hardware definitivo usar uma variante diferente do ESP32 (S3, C3,
+etc.), os pinos podem precisar de ajuste — essas variantes têm GPIOs
+restritos diferentes do WROOM-32 clássico assumido aqui.
+
+A fórmula do ângulo em `AngleSensor.cpp` (`atan2(ay, az)`) ainda assume uma
+orientação de montagem do MPU6050 **não confirmada** — pode precisar
+trocar os eixos/sinais usados conforme a orientação real do sensor no
+pan-tilt.
 
 ## Contrato implementado
 
@@ -107,4 +127,5 @@ sensor, nem os protocolos RS485/BLE foram validados contra hardware físico.
   para detectar fim de frame, em vez do cálculo exato de 3.5 caracteres
   do padrão — funciona bem nas baudrates baixas típicas de RS485, mas
   pode precisar de ajuste fino em baudrates mais altas.
-- Pinagem e orientação do sensor são placeholders, como descrito acima.
+- Orientação de montagem do sensor ainda não confirmada, como descrito
+  acima (a pinagem em si já está definida).
