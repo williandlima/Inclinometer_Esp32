@@ -16,7 +16,9 @@ public:
     void begin();
 
     // Chamar a cada iteração do loop() — envia notify do ângulo em modo
-    // contínuo e do progresso/dados da captura de vibração.
+    // contínuo e do progresso/dados da captura de vibração. A versão do
+    // firmware é só leitura (não muda em runtime), então é escrita uma
+    // única vez em begin() e não precisa de notify.
     void update();
 
     // Chamados pelos callbacks de escrita GATT (ver BleServer.cpp).

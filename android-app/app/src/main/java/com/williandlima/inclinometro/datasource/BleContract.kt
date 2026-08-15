@@ -20,6 +20,11 @@ import java.util.UUID
  *   pronto, bytes 2-3 = total de amostras uint16 LE) e envia os dados em
  *   [VIBRATION_DATA_CHARACTERISTIC_UUID] em pacotes (bytes 0-1 = índice
  *   inicial uint16 LE, restante = amostras int16 LE com sinal).
+ * - Versão do firmware: [FIRMWARE_VERSION_CHARACTERISTIC_UUID], read-only,
+ *   2 bytes little-endian = `major*10000 + minor*100 + patch` (ex: "1.0.0"
+ *   -> 10000). Valor fixo (não muda em runtime, sem notify) — ainda não
+ *   lido pelo app Android (só documentado aqui para paridade de contrato;
+ *   o app desktop já exibe no teste de conexão).
  */
 object BleContract {
     val SERVICE_UUID: UUID = UUID.fromString("6e6e0001-3c17-4a2e-8f4b-1a2b3c4d5e6f")
@@ -28,6 +33,7 @@ object BleContract {
     val VIBRATION_CONFIG_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0004-3c17-4a2e-8f4b-1a2b3c4d5e6f")
     val VIBRATION_STATUS_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0005-3c17-4a2e-8f4b-1a2b3c4d5e6f")
     val VIBRATION_DATA_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f")
+    val FIRMWARE_VERSION_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f")
     val CLIENT_CHARACTERISTIC_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     const val ANGLE_SCALE = 100.0

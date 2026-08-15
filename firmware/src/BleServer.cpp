@@ -65,6 +65,14 @@ void BleServer::begin() {
         service->createCharacteristic(CHAR_VIBRATION_DATA_UUID, BLECharacteristic::PROPERTY_NOTIFY);
     vibrationDataChar->addDescriptor(new BLE2902());
 
+    BLECharacteristic *firmwareVersionChar =
+        service->createCharacteristic(CHAR_FIRMWARE_VERSION_UUID, BLECharacteristic::PROPERTY_READ);
+    uint8_t versionPayload[2] = {
+        static_cast<uint8_t>(FIRMWARE_VERSION_CODE & 0xFF),
+        static_cast<uint8_t>(FIRMWARE_VERSION_CODE >> 8),
+    };
+    firmwareVersionChar->setValue(versionPayload, 2);
+
     service->start();
 
     BLEAdvertising *advertising = BLEDevice::getAdvertising();

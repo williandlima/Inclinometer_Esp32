@@ -59,9 +59,9 @@ Passos (em um Windows com Python instalado):
   isso acontecer, use "Mais informações → Executar assim mesmo" ou
   adicione uma exceção no antivírus. Assinar digitalmente o `.exe` é uma
   opção futura se isso incomodar no ambiente corporativo.
-- **Logo:** para a logo da Avibras Aeroco aparecer no cabeçalho, o
-  arquivo `assets/logo.png` precisa existir antes de gerar o executável
-  (ver seção "Identidade visual" no `README.md` principal).
+- **Logo:** a logo da Avibras Aeroco já está versionada em `assets/logo.jpg`
+  e é empacotada automaticamente ao gerar o executável (ver seção
+  "Identidade visual" no `README.md` principal).
 - **Bluetooth (BLE):** o modo de leitura via Bluetooth usa o adaptador
   Bluetooth nativo do próprio computador (via `bleak`); não precisa de
   dongle extra, mas o computador precisa ter Bluetooth.

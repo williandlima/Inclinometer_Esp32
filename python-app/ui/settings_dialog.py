@@ -137,18 +137,21 @@ class SettingsDialog(QDialog):
                     raise ValueError("Selecione uma porta serial.")
                 from data_source.modbus_source import test_connection
 
-                angle = test_connection(port, self.baud_combo.currentData(), self.slave_spin.value())
+                result = test_connection(port, self.baud_combo.currentData(), self.slave_spin.value())
             elif mode == "ble":
                 address = self.ble_combo.currentText().strip()
                 if not address:
                     raise ValueError("Selecione ou informe um endereço BLE.")
                 from data_source.ble_source import test_connection
 
-                angle = test_connection(address)
+                result = test_connection(address)
             else:
                 return
 
-            self.test_result_label.setText(f"✓ ESP32 respondeu — ângulo atual: {angle:.2f}°")
+            self.test_result_label.setText(
+                f"✓ ESP32 respondeu — ângulo atual: {result.angle_deg:.2f}° "
+                f"(firmware v{result.firmware_version})"
+            )
             self.test_result_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
         except Exception as exc:  # noqa: BLE001
             self.test_result_label.setText(f"✗ Falha: {exc}")

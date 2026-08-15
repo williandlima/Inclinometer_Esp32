@@ -33,12 +33,14 @@ from __future__ import annotations
 
 import threading
 import time
+from typing import NamedTuple
 
 from data_source.base import AngleReading, ErrorCallback, IAngleDataSource, ReadingCallback
 
 ANGLE_INPUT_REGISTER = 0
 ANGLE_SCALE = 100.0  # registrador = ângulo * 100 (int16, resolução de 0.01°)
 CALIBRATE_COIL = 0
+FIRMWARE_VERSION_REGISTER = 40  # registrador = major*10000 + minor*100 + patch (ex: "1.0.0" -> 10000)
 
 VIBRATION_START_COIL = 1
 VIBRATION_DURATION_REG = 10  # segundos (uint16)
@@ -56,10 +58,23 @@ def _to_signed16(raw: int) -> int:
     return raw - 0x10000 if raw >= 0x8000 else raw
 
 
-def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 1.0) -> float:
-    """Testa a conexão Modbus RTU (via USB) com o ESP32: abre a porta, faz uma
-    única leitura do ângulo e fecha a conexão. Retorna o ângulo lido (°) em
-    caso de sucesso; levanta exceção (IOError/RuntimeError) em caso de falha.
+def _decode_firmware_version(code: int) -> str:
+    major = code // 10000
+    minor = (code // 100) % 100
+    patch = code % 100
+    return f"{major}.{minor}.{patch}"
+
+
+class ConnectionTestResult(NamedTuple):
+    angle_deg: float
+    firmware_version: str
+
+
+def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 1.0) -> ConnectionTestResult:
+    """Testa a conexão Modbus RTU (via USB) com o ESP32: abre a porta, lê o
+    ângulo e a versão do firmware uma única vez, e fecha a conexão. Retorna
+    ambos em caso de sucesso; levanta exceção (IOError/RuntimeError) em caso
+    de falha.
     """
     from pymodbus.client import ModbusSerialClient
 
@@ -70,7 +85,14 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
         result = client.read_input_registers(address=ANGLE_INPUT_REGISTER, count=1, slave=slave_id)
         if result.isError():
             raise IOError(str(result))
-        return result.registers[0] / ANGLE_SCALE
+        angle_deg = result.registers[0] / ANGLE_SCALE
+
+        version_result = client.read_input_registers(address=FIRMWARE_VERSION_REGISTER, count=1, slave=slave_id)
+        firmware_version = (
+            _decode_firmware_version(version_result.registers[0]) if not version_result.isError() else "?"
+        )
+
+        return ConnectionTestResult(angle_deg, firmware_version)
     finally:
         client.close()
 

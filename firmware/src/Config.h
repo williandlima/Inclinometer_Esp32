@@ -17,6 +17,15 @@ constexpr int PIN_I2C_SDA = 21;
 constexpr int PIN_I2C_SCL = 22;
 
 // ============================================================================
+// Versão do firmware — bump manual a cada mudança relevante de contrato ou
+// comportamento. FIRMWARE_VERSION_CODE codifica a mesma versão como inteiro
+// (major*10000 + minor*100 + patch) para caber num único registrador
+// Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
+// ============================================================================
+constexpr char FIRMWARE_VERSION[] = "1.0.0";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10000;
+
+// ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
 // ============================================================================
 constexpr uint8_t MODBUS_SLAVE_ID = 1;
@@ -25,6 +34,7 @@ constexpr uint32_t MODBUS_BAUDRATE = 9600;
 constexpr uint16_t REG_ANGLE_INPUT = 0;       // input register: ângulo * ANGLE_SCALE (uint16)
 constexpr uint16_t COIL_CALIBRATE = 0;        // coil: write true -> zera o eixo de tilt
 constexpr uint16_t COIL_VIBRATION_START = 1;  // coil: write true -> inicia captura de vibração
+constexpr uint16_t REG_FIRMWARE_VERSION = 40; // input register: FIRMWARE_VERSION_CODE (somente leitura)
 
 constexpr uint16_t REG_VIBRATION_DURATION = 10;  // holding register: duração da captura (s)
 constexpr uint16_t REG_VIBRATION_RATE = 11;      // holding register: taxa de amostragem (Hz)
@@ -48,6 +58,7 @@ constexpr char CHAR_CALIBRATE_UUID[] = "6e6e0003-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 constexpr char CHAR_VIBRATION_CONFIG_UUID[] = "6e6e0004-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 constexpr char CHAR_VIBRATION_STATUS_UUID[] = "6e6e0005-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 constexpr char CHAR_VIBRATION_DATA_UUID[] = "6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f";
+constexpr char CHAR_FIRMWARE_VERSION_UUID[] = "6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 constexpr uint32_t BLE_NOTIFY_INTERVAL_MS = 200;  // taxa de notificação do ângulo em modo contínuo
 
 // ============================================================================
