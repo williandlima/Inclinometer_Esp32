@@ -89,6 +89,8 @@ void ModbusSlave::handleReadInputRegisters(uint16_t startAddr, uint16_t count) {
             values[i] = _vibration.progressPercent();
         } else if (addr == REG_VIBRATION_SAMPLE_COUNT) {
             values[i] = _vibration.sampleCount();
+        } else if (addr == REG_FIRMWARE_VERSION) {
+            values[i] = FIRMWARE_VERSION_CODE;
         } else if (addr >= REG_VIBRATION_BLOCK_START && addr < REG_VIBRATION_BLOCK_START + VIBRATION_BLOCK_SIZE) {
             uint16_t sampleIndex = _vibrationCursor + (addr - REG_VIBRATION_BLOCK_START);
             values[i] = static_cast<uint16_t>(_vibration.sampleAt(sampleIndex));

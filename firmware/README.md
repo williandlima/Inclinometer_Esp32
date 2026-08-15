@@ -1,5 +1,13 @@
 # Firmware — Inclinômetro ESP32
 
+**Versão atual: `1.0.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
+quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
+`major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
+`10000`). Bump manual em `Config.h` a cada mudança relevante de contrato ou
+comportamento — sem isso os apps não têm como saber qual versão do firmware
+estão falando.
+
 Firmware do ESP32 que expõe o ângulo do MPU6050 tanto por **Modbus RTU via
 cabo USB direto** quanto por **Bluetooth LE**, simultaneamente, seguindo os
 contratos já assumidos e documentados nos dois apps:
@@ -82,6 +90,7 @@ ponto de vista do `pyserial`).
 | Input reg. 20-22 | leitura | Status / progresso (%) / total de amostras da captura |
 | Holding reg. 30 | escrita | Cursor (índice inicial do bloco a ler) |
 | Input reg. 31-62 | leitura | Bloco de até 32 amostras (int16, ângulo relativo * 100) |
+| Input reg. 40 | leitura | Versão do firmware (`FIRMWARE_VERSION_CODE`, ver acima) |
 
 ### BLE (serviço `6e6e0001-...`)
 
@@ -92,6 +101,7 @@ ponto de vista do `pyserial`).
 | `6e6e0004-...` (config vibração) | write | 4 bytes LE: duração(s) + taxa(Hz) → inicia captura |
 | `6e6e0005-...` (status vibração) | notify | status/progresso/total de amostras |
 | `6e6e0006-...` (dados vibração) | notify | Amostras em pacotes (índice + até 8 amostras int16 LE) |
+| `6e6e0007-...` (versão firmware) | read | `FIRMWARE_VERSION_CODE` (uint16 LE, ver acima) — valor fixo, sem notify |
 
 Detalhes byte a byte de cada mensagem estão comentados no topo de
 `ModbusSlave.cpp`/`BleServer.cpp` e nos módulos Python/Kotlin equivalentes.

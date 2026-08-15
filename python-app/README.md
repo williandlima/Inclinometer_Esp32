@@ -37,7 +37,8 @@ Na tela, use **Configurações** para escolher entre:
 
 Em qualquer um dos modos reais, o botão **"Testar conexão com ESP32"** faz uma
 leitura única para confirmar a comunicação antes de iniciar uma sessão —
-mostra o ângulo lido (verde) ou o erro específico (vermelho).
+mostra o ângulo lido e a versão do firmware conectado (verde), ou o erro
+específico (vermelho).
 
 O firmware do ESP32 já implementa os dois modos reais (`firmware/`), mas
 ainda não foi validado contra hardware físico: USB/Modbus RTU lê o
@@ -85,15 +86,16 @@ firmware, documentado nos módulos `data_source/modbus_source.py` e
 ## Identidade visual (Avibras Aeroco)
 
 A interface usa a paleta azul marinho + laranja da Avibras Aeroco
-(`ui/main_window.py`, constantes `NAVY`/`ORANGE`). Para exibir a logo no
-cabeçalho, coloque o arquivo em `assets/logo.png` (PNG com fundo
-transparente) — se o arquivo não existir, o app mostra só o título em texto
-com as mesmas cores.
+(`ui/main_window.py`, constantes `NAVY`/`ORANGE`). A logo oficial já está
+versionada em `assets/logo.jpg` e aparece automaticamente no cabeçalho —
+para trocar por um arquivo diferente, basta substituir por `assets/logo.png`,
+`assets/logo.jpg` ou `assets/logo.jpeg` (o app procura nessa ordem); sem
+nenhum desses, mostra só o título em texto com as mesmas cores.
 
 ## Estrutura
 
 ```
-assets/        logo (assets/logo.png, não versionado — ver acima)
+assets/        logo (assets/logo.jpg)
 data_source/   fontes de dados de ângulo (simulada, Modbus RTU via USB e BLE real)
 limits/        rastreamento de limites (mín/máx) e histórico persistente (SQLite)
 ui/            janela principal e diálogo de configurações (PyQt5)

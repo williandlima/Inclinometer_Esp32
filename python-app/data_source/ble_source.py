@@ -24,6 +24,9 @@ consistentes:
     pacotes de notify: bytes 0-1 = índice inicial do pacote (uint16 LE),
     restante = amostras sequenciais (int16 LE, **com sinal**, ângulo * 100),
     quantas couberem no MTU — repete até cobrir o total informado.
+- Versão do firmware: `FIRMWARE_VERSION_CHARACTERISTIC_UUID`, read-only,
+  2 bytes little-endian = `major*10000 + minor*100 + patch` (ex: "1.0.0" ->
+  10000). Valor fixo (não muda em runtime, sem notify).
 
 Usa a biblioteca `bleak` (multiplataforma: Windows/Linux/macOS), importada
 localmente para não exigir a dependência quando só o modo simulado ou
@@ -35,6 +38,7 @@ import asyncio
 import struct
 import threading
 import time
+from typing import NamedTuple
 
 from data_source.base import AngleReading, ErrorCallback, IAngleDataSource, ReadingCallback
 
@@ -44,6 +48,7 @@ CALIBRATE_CHARACTERISTIC_UUID = "6e6e0003-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_CONFIG_CHARACTERISTIC_UUID = "6e6e0004-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_STATUS_CHARACTERISTIC_UUID = "6e6e0005-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_DATA_CHARACTERISTIC_UUID = "6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f"
+FIRMWARE_VERSION_CHARACTERISTIC_UUID = "6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 ANGLE_SCALE = 100.0
 CONNECT_TIMEOUT_S = 10.0
 VIBRATION_TIMEOUT_MARGIN_S = 30.0
@@ -60,16 +65,37 @@ def _to_signed16(raw: int) -> int:
     return raw - 0x10000 if raw >= 0x8000 else raw
 
 
-def test_connection(device_address: str, timeout_s: float = 8.0) -> float:
-    """Testa a conexão BLE com o ESP32: conecta, lê o ângulo uma vez e
-    desconecta. Retorna o ângulo lido (°) em caso de sucesso; levanta
-    exceção em caso de falha."""
+def _decode_firmware_version(raw: bytearray | bytes) -> str:
+    if len(raw) < 2:
+        return "?"
+    code = raw[0] | (raw[1] << 8)
+    major = code // 10000
+    minor = (code // 100) % 100
+    patch = code % 100
+    return f"{major}.{minor}.{patch}"
+
+
+class ConnectionTestResult(NamedTuple):
+    angle_deg: float
+    firmware_version: str
+
+
+def test_connection(device_address: str, timeout_s: float = 8.0) -> ConnectionTestResult:
+    """Testa a conexão BLE com o ESP32: conecta, lê o ângulo e a versão do
+    firmware uma única vez, e desconecta. Retorna ambos em caso de sucesso;
+    levanta exceção em caso de falha."""
     from bleak import BleakClient
 
-    async def _test() -> float:
+    async def _test() -> ConnectionTestResult:
         async with BleakClient(device_address, timeout=timeout_s) as client:
             raw = await client.read_gatt_char(ANGLE_CHARACTERISTIC_UUID)
-            return _decode_angle(raw)
+            angle_deg = _decode_angle(raw)
+            try:
+                version_raw = await client.read_gatt_char(FIRMWARE_VERSION_CHARACTERISTIC_UUID)
+                firmware_version = _decode_firmware_version(version_raw)
+            except Exception:  # noqa: BLE001 - diagnóstico secundário, não deve derrubar o teste
+                firmware_version = "?"
+            return ConnectionTestResult(angle_deg, firmware_version)
 
     return asyncio.run(_test())
 

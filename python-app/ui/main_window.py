@@ -32,17 +32,28 @@ from report.report_generator import generate_report, generate_vibration_report
 from ui.settings_dialog import AppSettings, SettingsDialog
 from ui.vibration_dialog import VibrationConfigDialog, VibrationResultDialog
 
-# Paleta Avibras Aeroco (fundo azul marinho + detalhes laranja). O logo (PNG
-# com fundo transparente) é opcional: se `assets/logo.png` existir, é exibido
-# no canto superior direito; caso contrário, o título em texto já usa a
-# mesma identidade visual.
+# Paleta Avibras Aeroco (fundo azul marinho + detalhes laranja). O logo é
+# opcional: se `assets/logo.<ext>` existir (png, jpg ou jpeg), é exibido no
+# canto superior direito; caso contrário, o título em texto já usa a mesma
+# identidade visual.
 NAVY = "#0B2145"
 NAVY_PANEL = "#15305F"  # tom mais claro que o fundo, para destacar painéis/caixas
 ORANGE = "#F5821F"
 TEXT_LIGHT = "#F4F6F9"
 GREEN = "#2e7d32"
 RED = "#c62828"
-LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "logo.png")
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+
+
+def _find_logo_path() -> str | None:
+    for ext in ("png", "jpg", "jpeg"):
+        candidate = os.path.join(_ASSETS_DIR, f"logo.{ext}")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+LOGO_PATH = _find_logo_path()
 
 _VALUE_STYLE = f"font-size: 20px; font-weight: bold; color: {TEXT_LIGHT};"
 _FLASH_STYLE = f"font-size: 20px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 4px;"
@@ -197,11 +208,15 @@ class MainWindow(QMainWindow):
 
         header.addStretch(1)
 
-        if os.path.isfile(LOGO_PATH):
+        if LOGO_PATH is not None:
             logo_label = QLabel()
             pixmap = QPixmap(LOGO_PATH)
             if not pixmap.isNull():
-                logo_label.setPixmap(pixmap.scaledToHeight(48, Qt.SmoothTransformation))
+                logo_label.setPixmap(pixmap.scaledToHeight(40, Qt.SmoothTransformation))
+                # A logo tem fundo branco (não transparente) — um "cartão"
+                # branco arredondado ao redor evita que pareça um retângulo
+                # solto sobre o fundo azul marinho do cabeçalho.
+                logo_label.setStyleSheet("background-color: white; border-radius: 6px; padding: 6px 10px;")
                 header.addWidget(logo_label, 0, Qt.AlignRight)
         else:
             logo_label = QLabel("AVIBRAS aeroco")
