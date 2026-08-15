@@ -1,9 +1,11 @@
 # Pinout — Inclinômetro ESP32
 
-Mapeamento completo de pinos do ESP32, para o hardware definido até aqui:
-**MPU6050 via I2C** (sensor) + **comunicação com o PC via cabo USB direto**
-(sem RS485 — decisão tomada explicitamente, ver `firmware/README.md`).
-Placa assumida: **ESP32 DevKit clássico (WROOM-32)**.
+Mapeamento completo de pinos do ESP32, para o hardware **definido e
+confirmado**: **MPU6050 via I2C** (sensor) + **comunicação com o PC via
+cabo USB direto** (sem RS485 — decisão tomada explicitamente, ver
+`firmware/README.md`). Placa confirmada: **ESP32 DevKit clássico
+(WROOM-32)**, com chip conversor USB-serial **CH9102X** (WCH) identificado
+na placa física em uso.
 
 ## I2C — MPU6050 (acelerômetro)
 
@@ -28,6 +30,28 @@ internamente ligada à UART0 do chip.
 | Alcance sem amplificação | ~5m | Limite do USB 2.0 padrão |
 | Alcance necessário no projeto | ~7m (mastro do pan-tilt) | **Excede o limite padrão** |
 | Solução | **Cabo de extensão USB ativo** (10-20m, com amplificador embutido) | Vendido pronto, sem precisar de hub/alimentação extra no meio do caminho |
+
+### Chip conversor USB-serial (na placa, não no ESP32)
+
+O ESP32 (módulo WROOM-32) **não tem USB nativo** — quem faz a conversão
+USB ↔ UART é um chip à parte, já embutido na placa DevKit. Na placa usada
+neste projeto, esse chip é o **CH9102X** (fabricante WCH, mesma família do
+CH340, só que mais novo/mais rápido). Isso já resolve tudo sozinho:
+
+- Não precisa de nenhum adaptador externo (CP2102 ou outro) — o CH9102X
+  já faz esse papel.
+- Pode precisar instalar o driver **CH9102** da WCH no Windows, caso a
+  porta COM não apareça automaticamente ao conectar (ver
+  `python-app/windows/INSTALACAO_WINDOWS.md`). No Linux costuma funcionar
+  nativo, sem driver adicional.
+- Alimentação do CH9102X vem do **VBUS (5V)** do próprio USB (pino
+  `VDD5`); o pino `V3` é só a saída do regulador 3,3V *interno* do chip
+  (leva só um capacitor de desacoplamento) — não alimenta o ESP32. O 3,3V
+  do ESP32/MPU6050 vem de um regulador separado, já embutido na placa
+  DevKit.
+- O pull-up de 1,5kΩ no D+ (sinalização USB full-speed) também já está
+  embutido no CH9102X — nada disso é fiação que o projeto precisa
+  adicionar.
 
 ## Bluetooth LE
 
@@ -94,8 +118,10 @@ datasheet do módulo, não de uma placa específica.
   a montagem real no pan-tilt — pode precisar ajustar os eixos/sinais
   usados quando o sensor for montado fisicamente.
 - **Variante de placa**: esta pinagem assume um ESP32 DevKit clássico
-  (WROOM-32). Variantes diferentes (S3, C3, etc.) têm GPIOs restritos
-  diferentes e podem precisar de ajuste.
+  (WROOM-32) — confirmado na placa física em uso, junto com o chip
+  conversor USB-serial CH9102X (ver seção "USB" acima). Variantes
+  diferentes (S3, C3, etc.) têm GPIOs restritos diferentes e podem
+  precisar de ajuste.
 - **Placa vs. módulo**: a tabela de referência usa os nomes do datasheet
   do **módulo** ESP32-WROOM-32 (Espressif). A serigrafia da sua placa
   DevKit específica pode rotular os pinos de forma simplificada (só o

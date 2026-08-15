@@ -34,9 +34,10 @@ firmware/
 
 ## Pinagem (ESP32 DevKit clássico / WROOM-32)
 
-Mapeamento definido, refletido em `firmware/src/Config.h`. Como a
-comunicação com o PC vai pela porta USB nativa do ESP32, o único hardware
-extra é o MPU6050:
+Hardware confirmado: placa **ESP32 DevKit clássico (WROOM-32)**, com chip
+conversor USB-serial **CH9102X** (WCH) — mapeamento definido, refletido em
+`firmware/src/Config.h`. Como a comunicação com o PC vai pela porta USB
+nativa do ESP32, o único hardware extra é o MPU6050:
 
 | Sinal | Pino ESP32 | Vai para | Observação |
 |---|---|---|---|
