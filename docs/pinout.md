@@ -34,66 +34,57 @@ internamente ligada à UART0 do chip.
 Não usa GPIO — o rádio BLE é interno ao módulo ESP32 (antena embutida na
 maioria das placas DevKit). Nenhuma consideração de fiação adicional.
 
-## Referência completa de pinos do ESP32 (WROOM-32)
+## Referência completa de pinos — datasheet ESP32-WROOM-32 (Espressif)
 
-Nomes dos pinos do próprio microcontrolador (GPIO), agrupados pelo que
-determina se dá pra usar cada um livremente — útil para escolher onde
-ligar algo novo no futuro.
+Tabela de pinos do módulo, com os **nomes originais do fabricante**
+(coluna "Nome", exatamente como aparece no *ESP32-WROOM-32 Datasheet* da
+Espressif — Table 4, "Pin Definitions"), o número do pino no encapsulamento
+(1-38), o alias GPIO (o que o código/Arduino usa) e o status neste projeto.
 
-### Em uso neste projeto
+Nem toda placa DevKit expõe os 38 pinos do módulo (alguns fabricantes
+omitem os pinos de flash e o NC) — mas os nomes abaixo são os do
+datasheet do módulo, não de uma placa específica.
 
-| Pino (GPIO) | Nome/alias | Uso |
-|---|---|---|
-| **GPIO21** | SDA | I2C — dados do MPU6050 |
-| **GPIO22** | SCL | I2C — clock do MPU6050 |
-| **GPIO1** | TX0 | UART0 — porta USB (Modbus RTU), TX |
-| **GPIO3** | RX0 | UART0 — porta USB (Modbus RTU), RX |
-
-### Livres para uso geral
-
-| Pino (GPIO) | Observação |
-|---|---|
-| **GPIO4** | Livre — antes era o controle de direção do RS485 (removido) |
-| **GPIO16** | Livre — antes era RX do RS485/UART2 (removido) |
-| **GPIO17** | Livre — antes era TX do RS485/UART2 (removido) |
-| **GPIO13**, **GPIO14**, **GPIO18**, **GPIO19**, **GPIO23** | Uso geral, sem restrição conhecida |
-| **GPIO25**, **GPIO26**, **GPIO27** | Uso geral; GPIO25/26 também servem como saída analógica (DAC) |
-| **GPIO32**, **GPIO33** | Uso geral; também entrada analógica (ADC1) |
-
-### Somente entrada (sem pull-up/down interno)
-
-| Pino (GPIO) | Observação |
-|---|---|
-| **GPIO34**, **GPIO35** | Só leitura (ex: sensor analógico, botão com pull-up externo) |
-| **GPIO36** (alias **VP**) | Só leitura |
-| **GPIO39** (alias **VN**) | Só leitura |
-
-### Cuidado — pinos de boot/strapping
-
-Definem o modo de boot do ESP32 ; usar como saída genérica pode impedir o
-chip de iniciar se o nível ficar "errado" no momento do reset.
-
-| Pino (GPIO) | Observação |
-|---|---|
-| **GPIO0** | Botão BOOT em muitas placas; deve ficar HIGH/flutuante no boot normal |
-| **GPIO2** | Ligado ao LED onboard em muitas placas; deve ficar LOW/flutuante em certos modos de boot |
-| **GPIO5** | Seleciona modo de boot SPI |
-| **GPIO12** | Seleciona a tensão da flash (3.3V/1.8V) — cuidado extra, pode até impedir o boot |
-| **GPIO15** | Controla verbosidade do log de boot |
-
-### Nunca usar — reservados para a flash interna
-
-**GPIO6 a GPIO11** — ligados internamente à memória flash do módulo. Usar
-qualquer um deles trava o ESP32 (não consegue nem iniciar).
-
-### Alimentação e reset (não são GPIO)
-
-| Pino | Função |
-|---|---|
-| **3V3** | Saída 3.3V regulada (alimenta o MPU6050 neste projeto) |
-| **GND** | Terra (vários pinos GND na placa, qualquer um serve) |
-| **5V** / **VIN** | Entrada de alimentação externa (5V, antes do regulador da placa) |
-| **EN** | Reset/enable do chip (botão RESET em muitas placas) |
+| Pino nº | Nome (datasheet) | GPIO | Status / uso neste projeto |
+|---|---|---|---|
+| 1 | **GND** | — | Terra |
+| 2 | **3V3** | — | Alimentação 3.3V → VCC do MPU6050 |
+| 3 | **EN** | — | Reset/enable do chip (botão RESET em muitas placas) |
+| 4 | **SENSOR_VP** | GPIO36 | Só entrada (sem pull-up/down interno) |
+| 5 | **SENSOR_VN** | GPIO39 | Só entrada (sem pull-up/down interno) |
+| 6 | **IO34** | GPIO34 | Só entrada (sem pull-up/down interno) |
+| 7 | **IO35** | GPIO35 | Só entrada (sem pull-up/down interno) |
+| 8 | **IO32** | GPIO32 | Livre — também ADC1 |
+| 9 | **IO33** | GPIO33 | Livre — também ADC1 |
+| 10 | **IO25** | GPIO25 | Livre — também DAC1 |
+| 11 | **IO26** | GPIO26 | Livre — também DAC2 |
+| 12 | **IO27** | GPIO27 | Livre |
+| 13 | **IO14** | GPIO14 | Livre |
+| 14 | **IO12** | GPIO12 | ⚠️ Strapping — seleciona a tensão da flash, cuidado extra |
+| 15 | **GND** | — | Terra |
+| 16 | **IO13** | GPIO13 | Livre |
+| 17 | **SHD/SD2** | GPIO9 | 🚫 Reservado (flash interna) — nunca usar |
+| 18 | **SWP/SD3** | GPIO10 | 🚫 Reservado (flash interna) — nunca usar |
+| 19 | **SCS/CMD** | GPIO11 | 🚫 Reservado (flash interna) — nunca usar |
+| 20 | **SCK/CLK** | GPIO6 | 🚫 Reservado (flash interna) — nunca usar |
+| 21 | **SDO/SD0** | GPIO7 | 🚫 Reservado (flash interna) — nunca usar |
+| 22 | **SDI/SD1** | GPIO8 | 🚫 Reservado (flash interna) — nunca usar |
+| 23 | **IO15** | GPIO15 | ⚠️ Strapping — verbosidade do log de boot |
+| 24 | **IO2** | GPIO2 | ⚠️ Strapping — ligado ao LED onboard em muitas placas |
+| 25 | **IO0** | GPIO0 | ⚠️ Strapping — botão BOOT em muitas placas |
+| 26 | **IO4** | GPIO4 | Livre — antes era o controle de direção do RS485 (removido) |
+| 27 | **IO16** | GPIO16 | Livre — antes era RX do RS485/UART2 (removido) |
+| 28 | **IO17** | GPIO17 | Livre — antes era TX do RS485/UART2 (removido) |
+| 29 | **IO5** | GPIO5 | ⚠️ Strapping — seleciona modo de boot SPI |
+| 30 | **IO18** | GPIO18 | Livre |
+| 31 | **IO19** | GPIO19 | Livre |
+| 32 | **NC** | — | Não conectado |
+| 33 | **IO21** | GPIO21 | ✅ **Em uso — SDA** (I2C, MPU6050) |
+| 34 | **RXD0** | GPIO3 | ✅ **Em uso — UART0 RX** (Modbus RTU via USB) |
+| 35 | **TXD0** | GPIO1 | ✅ **Em uso — UART0 TX** (Modbus RTU via USB) |
+| 36 | **IO22** | GPIO22 | ✅ **Em uso — SCL** (I2C, MPU6050) |
+| 37 | **IO23** | GPIO23 | Livre |
+| 38 | **GND** | — | Terra |
 
 ## Notas
 
@@ -105,5 +96,10 @@ qualquer um deles trava o ESP32 (não consegue nem iniciar).
 - **Variante de placa**: esta pinagem assume um ESP32 DevKit clássico
   (WROOM-32). Variantes diferentes (S3, C3, etc.) têm GPIOs restritos
   diferentes e podem precisar de ajuste.
+- **Placa vs. módulo**: a tabela de referência usa os nomes do datasheet
+  do **módulo** ESP32-WROOM-32 (Espressif). A serigrafia da sua placa
+  DevKit específica pode rotular os pinos de forma simplificada (só o
+  número do GPIO, ex: "21" em vez de "IO21") e pode não expor todos os 38
+  pinos do módulo (os de flash e o NC costumam ficar de fora do conector).
 - Fonte da verdade no código: `firmware/src/Config.h` (constantes de pino)
   e `firmware/README.md` (contexto e decisões).
