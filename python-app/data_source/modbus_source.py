@@ -1,4 +1,5 @@
-"""Fonte de dados real: leitura do ângulo via RS485/Modbus RTU.
+"""Fonte de dados real: leitura do ângulo via Modbus RTU, pela porta serial
+USB do ESP32 (conectado direto por cabo — sem RS485).
 
 Contrato assumido com o firmware do ESP32 (ainda não implementado nesta
 fase): o ângulo atual é exposto no registrador de entrada (input register)
@@ -56,7 +57,7 @@ def _to_signed16(raw: int) -> int:
 
 
 def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 1.0) -> float:
-    """Testa a conexão RS485/Modbus RTU com o ESP32: abre a porta, faz uma
+    """Testa a conexão Modbus RTU (via USB) com o ESP32: abre a porta, faz uma
     única leitura do ângulo e fecha a conexão. Retorna o ângulo lido (°) em
     caso de sucesso; levanta exceção (IOError/RuntimeError) em caso de falha.
     """
@@ -100,7 +101,7 @@ class ModbusAngleSource(IAngleDataSource):
 
     @property
     def label(self) -> str:
-        return f"RS485/Modbus RTU ({self._port}@{self._baudrate}, id={self._slave_id})"
+        return f"USB/Modbus RTU ({self._port}@{self._baudrate}, id={self._slave_id})"
 
     @property
     def supports_calibration(self) -> bool:
@@ -216,7 +217,7 @@ class ModbusAngleSource(IAngleDataSource):
 
     def _run(self, on_reading: ReadingCallback, on_error: ErrorCallback | None) -> None:
         # Import local para não exigir pymodbus/pyserial quando só o modo
-        # simulado for usado (ex: ambiente de desenvolvimento sem RS485).
+        # simulado for usado (ex: ambiente de desenvolvimento sem o ESP32 conectado).
         from pymodbus.client import ModbusSerialClient
 
         client = ModbusSerialClient(

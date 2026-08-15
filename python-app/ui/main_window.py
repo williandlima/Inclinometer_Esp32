@@ -234,7 +234,7 @@ class MainWindow(QMainWindow):
     def _update_mode_label(self) -> None:
         modo = {
             "simulado": "Simulação",
-            "real": "Real (RS485/Modbus RTU)",
+            "real": "Real (USB/Modbus RTU)",
             "ble": "Real (Bluetooth BLE)",
         }[self._settings.mode]
         estado = "em execução" if self._running else "parado"

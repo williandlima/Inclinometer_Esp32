@@ -1,4 +1,4 @@
-"""Diálogo de configurações: escolha de modo (simulado / RS485 / BLE) e
+"""Diálogo de configurações: escolha de modo (simulado / USB / BLE) e
 parâmetros de conexão de cada transporte."""
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ except ImportError:  # pyserial pode não estar instalado em modo só-simulaçã
 
 @dataclass
 class AppSettings:
-    mode: str = "simulado"  # "simulado" | "real" (RS485/Modbus RTU) | "ble"
+    mode: str = "simulado"  # "simulado" | "real" (USB/Modbus RTU) | "ble"
     serial_port: str = ""
     baudrate: int = 9600
     slave_id: int = 1
@@ -43,14 +43,14 @@ class SettingsDialog(QDialog):
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("Simulação", "simulado")
-        self.mode_combo.addItem("Real (RS485/Modbus RTU)", "real")
+        self.mode_combo.addItem("Real (USB/Modbus RTU)", "real")
         self.mode_combo.addItem("Real (Bluetooth BLE)", "ble")
         idx = self.mode_combo.findData(current.mode)
         if idx >= 0:
             self.mode_combo.setCurrentIndex(idx)
         self.mode_combo.currentIndexChanged.connect(self._update_visible_fields)
 
-        # --- RS485/Modbus RTU ---
+        # --- USB/Modbus RTU ---
         self.port_combo = QComboBox()
         self.port_combo.setEditable(True)
         self._populate_ports()
@@ -68,9 +68,9 @@ class SettingsDialog(QDialog):
         self.slave_spin.setRange(1, 247)
         self.slave_spin.setValue(current.slave_id)
 
-        self.rs485_port_label = QLabel("Porta serial:")
-        self.rs485_baud_label = QLabel("Baud rate:")
-        self.rs485_slave_label = QLabel("Endereço Modbus (slave id):")
+        self.usb_port_label = QLabel("Porta serial:")
+        self.usb_baud_label = QLabel("Baud rate:")
+        self.usb_slave_label = QLabel("Endereço Modbus (slave id):")
 
         # --- Bluetooth BLE ---
         self.ble_combo = QComboBox()
@@ -88,9 +88,9 @@ class SettingsDialog(QDialog):
 
         form = QFormLayout()
         form.addRow("Modo:", self.mode_combo)
-        form.addRow(self.rs485_port_label, self.port_combo)
-        form.addRow(self.rs485_baud_label, self.baud_combo)
-        form.addRow(self.rs485_slave_label, self.slave_spin)
+        form.addRow(self.usb_port_label, self.port_combo)
+        form.addRow(self.usb_baud_label, self.baud_combo)
+        form.addRow(self.usb_slave_label, self.slave_spin)
         form.addRow(self.ble_row_label, ble_row)
 
         self.test_btn = QPushButton("Testar conexão com ESP32")
@@ -114,8 +114,8 @@ class SettingsDialog(QDialog):
 
     def _update_visible_fields(self) -> None:
         mode = self.mode_combo.currentData()
-        for widget in (self.rs485_port_label, self.port_combo, self.rs485_baud_label,
-                       self.baud_combo, self.rs485_slave_label, self.slave_spin):
+        for widget in (self.usb_port_label, self.port_combo, self.usb_baud_label,
+                       self.baud_combo, self.usb_slave_label, self.slave_spin):
             widget.setVisible(mode == "real")
         self.ble_row_label.setVisible(mode == "ble")
         self.ble_combo.setVisible(mode == "ble")

@@ -65,9 +65,11 @@ Passos (em um Windows com Python instalado):
 - **Bluetooth (BLE):** o modo de leitura via Bluetooth usa o adaptador
   Bluetooth nativo do próprio computador (via `bleak`); não precisa de
   dongle extra, mas o computador precisa ter Bluetooth.
-- **RS485/Modbus:** o modo via porta serial precisa do driver do
-  conversor USB-RS485 usado (normalmente instalado junto com o
-  Windows ou disponível no site do fabricante do conversor).
+- **USB/Modbus:** o modo via cabo USB direto ao ESP32 pode precisar do
+  driver do chip USB-serial da placa (CP2102, CH340 ou FTDI, dependendo do
+  modelo) — normalmente instalado junto com o Windows, ou disponível no
+  site do fabricante do chip. Para distâncias maiores que ~5m, use um
+  cabo de extensão USB ativo.
 
 ## Solução de problemas
 

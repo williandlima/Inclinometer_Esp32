@@ -6,25 +6,22 @@
 #include "Config.h"
 
 namespace {
-HardwareSerial &rs485 = Serial2;
-
-void setTransmitMode(bool transmit) {
-    digitalWrite(PIN_RS485_DE_RE, transmit ? HIGH : LOW);
-}
+// UART0 — a mesma porta serial usada para gravar o firmware, exposta como
+// porta USB/COM direto pelo chip USB-UART embutido do ESP32. Full-duplex,
+// então (diferente de RS485) não precisa de nenhum controle de direção.
+HardwareSerial &link = Serial;
 }  // namespace
 
 void ModbusSlave::begin() {
-    pinMode(PIN_RS485_DE_RE, OUTPUT);
-    setTransmitMode(false);
-    rs485.begin(MODBUS_BAUDRATE, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
+    link.begin(MODBUS_BAUDRATE);
 }
 
 void ModbusSlave::update() {
-    while (rs485.available()) {
+    while (link.available()) {
         if (_frameLen < sizeof(_frame)) {
-            _frame[_frameLen++] = rs485.read();
+            _frame[_frameLen++] = link.read();
         } else {
-            rs485.read();  // descarta, frame maior que o esperado
+            link.read();  // descarta, frame maior que o esperado
         }
         _lastByteMs = millis();
     }
@@ -174,10 +171,8 @@ void ModbusSlave::sendResponse(const uint8_t *payload, uint8_t len) {
     frame[len] = crc & 0xFF;
     frame[len + 1] = crc >> 8;
 
-    setTransmitMode(true);
-    rs485.write(frame, len + 2);
-    rs485.flush();
-    setTransmitMode(false);
+    link.write(frame, len + 2);
+    link.flush();
 }
 
 uint16_t ModbusSlave::crc16(const uint8_t *data, uint8_t len) {
