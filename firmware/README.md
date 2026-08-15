@@ -1,12 +1,20 @@
 # Firmware — Inclinômetro ESP32
 
-Firmware do ESP32 que expõe o ângulo do MPU6050 tanto por **RS485/Modbus
-RTU** quanto por **Bluetooth LE**, simultaneamente, seguindo os contratos já
-assumidos e documentados nos dois apps:
+Firmware do ESP32 que expõe o ângulo do MPU6050 tanto por **Modbus RTU via
+cabo USB direto** quanto por **Bluetooth LE**, simultaneamente, seguindo os
+contratos já assumidos e documentados nos dois apps:
 
-- `python-app/data_source/modbus_source.py` (RS485)
+- `python-app/data_source/modbus_source.py` (Modbus RTU / USB)
 - `python-app/data_source/ble_source.py` (BLE)
 - `android-app/app/.../datasource/BleContract.kt` (BLE)
+
+A comunicação com o PC usa a porta serial USB nativa do ESP32 (a mesma já
+usada para gravar o firmware) — **não usa RS485**. Essa decisão foi tomada
+porque a distância até o painel de controle (~7m, no mastro do pan-tilt)
+excede o alcance confiável de USB simples (~5m), mas um **cabo de extensão
+USB ativo** (com amplificador de sinal embutido, vendido pronto para
+10-20m) resolve isso sem precisar de RS485/transceptor/terminação de
+barramento.
 
 ## Estrutura
 
@@ -20,35 +28,42 @@ firmware/
     AngleSensor.h/.cpp     ângulo por atan2 + calibração (offset)
     VibrationCapture.h/.cpp  motor de captura em alta taxa, compartilhado
                              pelos dois transportes
-    ModbusSlave.h/.cpp    escravo Modbus RTU sobre RS485
+    ModbusSlave.h/.cpp    escravo Modbus RTU sobre a porta serial USB (UART0)
     BleServer.h/.cpp      servidor BLE (GATT)
 ```
 
-## ⚠️ Pinagem — AJUSTAR conforme o projeto elétrico
+## Pinagem (ESP32 DevKit clássico / WROOM-32)
 
-O projeto elétrico (pinagem definitiva, escolha do conversor RS485, etc.) é
-responsabilidade separada, ainda em definição. Os pinos usados aqui
-(`firmware/src/Config.h`) são **placeholders** com valores comuns de dev
-kits ESP32:
+Mapeamento definido, refletido em `firmware/src/Config.h`. Como a
+comunicação com o PC vai pela porta USB nativa do ESP32, o único hardware
+extra é o MPU6050:
 
-| Sinal | Pino (placeholder) |
-|---|---|
-| I2C SDA (MPU6050) | GPIO 21 |
-| I2C SCL (MPU6050) | GPIO 22 |
-| RS485 RX (UART2) | GPIO 16 |
-| RS485 TX (UART2) | GPIO 17 |
-| RS485 DE/RE (direção) | GPIO 4 |
+| Sinal | Pino ESP32 | Vai para | Observação |
+|---|---|---|---|
+| SDA | GPIO 21 | SDA do MPU6050 | Padrão I2C do ESP32 |
+| SCL | GPIO 22 | SCL do MPU6050 | Padrão I2C do ESP32 |
+| — | 3.3V | VCC do MPU6050 | Não usar 5V (linhas I2C ficam em 5V e podem danificar o ESP32) |
+| — | GND | GND do MPU6050 | |
+| — | GND | AD0 do MPU6050 | Fixa endereço I2C em `0x68` (o que `Mpu6050.h` assume) |
 
-Ajuste essas constantes em `Config.h` quando a pinagem definitiva existir.
+Se o hardware definitivo usar uma variante diferente do ESP32 (S3, C3,
+etc.), os pinos podem precisar de ajuste — essas variantes têm GPIOs
+restritos diferentes do WROOM-32 clássico assumido aqui.
 
-Da mesma forma, a fórmula do ângulo em `AngleSensor.cpp` (`atan2(ay, az)`)
-assume uma orientação de montagem do MPU6050 que **ainda não foi
-confirmada** — pode precisar trocar os eixos/sinais usados conforme a
-orientação real do sensor no pan-tilt.
+A fórmula do ângulo em `AngleSensor.cpp` (`atan2(ay, az)`) ainda assume uma
+orientação de montagem do MPU6050 **não confirmada** — pode precisar
+trocar os eixos/sinais usados conforme a orientação real do sensor no
+pan-tilt.
 
 ## Contrato implementado
 
-### RS485 / Modbus RTU (escravo, ID configurável em `Config.h`, padrão 1)
+### Modbus RTU via USB (escravo, ID configurável em `Config.h`, padrão 1)
+
+Trafega pela mesma porta serial que aparece no PC como uma porta COM/tty
+normal quando o ESP32 é conectado por USB — o app desktop (`python-app`)
+já espera exatamente isso (não faz distinção entre "porta serial real" e
+"porta serial via USB do ESP32", já que ambas são portas seriais comuns do
+ponto de vista do `pyserial`).
 
 | Registrador | Tipo | Função |
 |---|---|---|
@@ -95,7 +110,8 @@ baixar a logo da Avibras Aeroco). O código foi revisado manualmente com
 cuidado (tipos, includes, formato de cada mensagem confrontado byte a byte
 com os módulos Python/Kotlin), mas **precisa ser compilado e testado em
 hardware real** antes de considerar o firmware pronto — nem a lógica de
-sensor, nem os protocolos RS485/BLE foram validados contra hardware físico.
+sensor, nem os protocolos Modbus RTU (via USB)/BLE foram validados contra
+hardware físico.
 
 ## Limitações conhecidas / próximos passos
 
@@ -105,6 +121,11 @@ sensor, nem os protocolos RS485/BLE foram validados contra hardware físico.
 - Calibração não é persistida entre reboots (offset fica só em RAM).
 - Framing Modbus RTU usa um timeout fixo simplificado (5ms de silêncio)
   para detectar fim de frame, em vez do cálculo exato de 3.5 caracteres
-  do padrão — funciona bem nas baudrates baixas típicas de RS485, mas
-  pode precisar de ajuste fino em baudrates mais altas.
-- Pinagem e orientação do sensor são placeholders, como descrito acima.
+  do padrão — funciona bem na baudrate usada no projeto (9600), mas pode
+  precisar de ajuste fino em baudrates mais altas.
+- A UART0 (porta USB) fica dedicada ao protocolo Modbus RTU — não há canal
+  de log/debug separado disponível hoje (ver comentário em `main.cpp`).
+- Orientação de montagem do sensor ainda não confirmada, como descrito
+  acima (a pinagem em si já está definida).
+- Para o cabo até o painel de controle (~7m), use um **cabo de extensão
+  USB ativo** — USB simples sem amplificação só é confiável até uns 5m.

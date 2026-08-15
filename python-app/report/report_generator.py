@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 _MODE_LABELS = {
     "simulado": "Simulação",
-    "real": "Real (RS485/Modbus RTU)",
+    "real": "Real (USB/Modbus RTU)",
     "ble": "Real (Bluetooth BLE)",
 }
 

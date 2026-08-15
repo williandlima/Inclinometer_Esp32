@@ -1,8 +1,8 @@
 """Interface comum de fonte de dados de ângulo.
 
-Tanto o modo simulado quanto o modo real (Modbus RTU via RS485) implementam
-esta interface, permitindo trocar a fonte sem alterar o resto do app (UI,
-rastreamento de limites, histórico e relatório).
+Tanto o modo simulado quanto os modos reais (Modbus RTU via USB, BLE)
+implementam esta interface, permitindo trocar a fonte sem alterar o resto
+do app (UI, rastreamento de limites, histórico e relatório).
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ class IAngleDataSource(ABC):
     @property
     @abstractmethod
     def label(self) -> str:
-        """Nome curto exibido na UI (ex: 'Simulação' ou 'RS485/Modbus RTU')."""
+        """Nome curto exibido na UI (ex: 'Simulação' ou 'USB/Modbus RTU')."""
 
     @property
     def supports_calibration(self) -> bool:

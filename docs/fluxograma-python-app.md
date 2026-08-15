@@ -8,13 +8,14 @@ mesma arquitetura geral, mas com sua própria implementação em Kotlin).
 ## O que o software faz até aqui
 
 - Lê o ângulo do inclinômetro (0–120°) em tempo real, por um de três modos:
-  **Simulação** (dados sintéticos), **RS485/Modbus RTU** ou **Bluetooth BLE**
-  — o firmware do ESP32 ainda não existe, então os modos reais seguem um
-  contrato assumido, documentado nos próprios módulos de fonte de dados.
+  **Simulação** (dados sintéticos), **USB/Modbus RTU** (cabo direto ao
+  ESP32) ou **Bluetooth BLE** — o firmware do ESP32 já implementa os dois
+  modos reais (`firmware/`), mas ainda não foi validado contra hardware
+  físico.
 - Rastreia os limites (mínimo/máximo) atingidos durante a sessão e destaca
   na tela quando um novo extremo é registrado.
 - Permite **calibrar** (zerar o eixo de tilt na posição atual).
-- Permite **testar a conexão** (RS485 ou BLE) antes de iniciar uma sessão.
+- Permite **testar a conexão** (USB ou BLE) antes de iniciar uma sessão.
 - Grava cada leitura e cada evento de limite em SQLite, por sessão.
 - Gera um **relatório em PDF** (gráfico do ângulo ao longo do tempo + tabela
   de eventos de limite + resumo) a partir do histórico de uma sessão.
@@ -39,7 +40,7 @@ graph TD
     subgraph data_source["data_source/"]
         IAngleDataSource["IAngleDataSource (interface)"]
         Simulated["SimulatedAngleSource"]
-        Modbus["ModbusAngleSource (RS485)"]
+        Modbus["ModbusAngleSource (USB)"]
         Ble["BleAngleSource (BLE)"]
     end
 
@@ -76,7 +77,7 @@ graph TD
 
 `IAngleDataSource` é o ponto-chave da arquitetura: a UI e toda a lógica de
 limites/histórico/relatório trabalham só com essa interface, então trocar
-entre simulação e hardware real (RS485 ou BLE) não exige nenhuma mudança no
+entre simulação e hardware real (USB ou BLE) não exige nenhuma mudança no
 resto do app.
 
 ## 2. Fluxo principal — Iniciar leitura
@@ -116,7 +117,7 @@ flowchart TD
     B -- não --> B1["Aviso: inicie a leitura /<br/>fonte não suporta calibração"]
     B -- sim --> C["Thread separada chama<br/>source.calibrate() (bloqueante)"]
     C --> D{Sucesso?}
-    D -- sim --> E["RS485: escreve coil CALIBRATE_COIL<br/>BLE: escreve característica de calibração<br/>Simulação: aplica offset interno"]
+    D -- sim --> E["USB: escreve coil CALIBRATE_COIL<br/>BLE: escreve característica de calibração<br/>Simulação: aplica offset interno"]
     E --> F["calibration_done(True, msg)"]
     F --> G["Mensagem de sucesso na barra de status"]
     F --> H["_reset_limits(): zera Mín/Máx exibidos<br/>(mantém sessão/histórico anterior)"]
@@ -151,20 +152,20 @@ flowchart TD
 ```
 
 Simulação: gera uma vibração sintética (duas senoides de baixa amplitude +
-ruído) — testável de ponta a ponta neste ambiente. RS485/BLE seguem um
-contrato assumido (registradores Modbus / características BLE novas,
-documentados nos respectivos módulos), ainda sem hardware real para validar.
+ruído) — testável de ponta a ponta neste ambiente. USB/BLE seguem o
+contrato implementado no firmware (registradores Modbus / características
+BLE), ainda sem hardware real para validar.
 
 ## 5. Fluxo — Testar conexão (Configurações)
 
 ```mermaid
 flowchart TD
-    A["Usuário abre 'Configurações'"] --> B["Escolhe modo:<br/>Simulação / RS485 / BLE"]
+    A["Usuário abre 'Configurações'"] --> B["Escolhe modo:<br/>Simulação / USB / BLE"]
     B --> C["Campos do modo escolhido aparecem<br/>(porta+baud+slave ou endereço BLE)"]
     C --> D["Opcional: 'Escanear' lista<br/>dispositivos BLE próximos"]
     C --> E["Clica 'Testar conexão'"]
     E --> F{Modo}
-    F -- RS485 --> G["modbus_source.test_connection()<br/>lê 1x o registrador de ângulo"]
+    F -- USB --> G["modbus_source.test_connection()<br/>lê 1x o registrador de ângulo"]
     F -- BLE --> H["ble_source.test_connection()<br/>conecta, lê 1x a característica, desconecta"]
     G --> I{Sucesso?}
     H --> I
@@ -191,14 +192,14 @@ flowchart TD
 
 ## Notas para próximas análises
 
-- Os três fluxos reais (RS485, BLE, e o futuro firmware do ESP32) seguem
-  contratos **assumidos**, documentados nos comentários de topo de
-  `data_source/modbus_source.py` e `data_source/ble_source.py` — precisam
-  ser confirmados/ajustados quando o firmware existir de fato. Isso inclui o
-  contrato de captura de vibração (registradores/coils Modbus novos e
-  characteristics BLE novas) — só o caminho de **simulação** foi testado de
-  ponta a ponta neste ambiente; RS485/BLE não puderam ser validados contra
-  hardware real.
+- Os fluxos reais (USB, BLE) seguem contratos já **implementados no
+  firmware** (`firmware/`), documentados nos comentários de topo de
+  `data_source/modbus_source.py` e `data_source/ble_source.py` — mas ainda
+  precisam ser confirmados/ajustados quando o firmware for de fato
+  compilado e testado em hardware real. Isso inclui o contrato de captura
+  de vibração (registradores/coils Modbus e characteristics BLE) — só o
+  caminho de **simulação** foi testado de ponta a ponta neste ambiente;
+  USB/BLE não puderam ser validados contra hardware real.
 - `LimitTracker` e `HistoryStore` são agnósticos à fonte de dados: qualquer
   nova fonte que implemente `IAngleDataSource` funciona sem alterações no
   resto do app.

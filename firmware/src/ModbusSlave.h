@@ -5,7 +5,8 @@
 #include "AngleSensor.h"
 #include "VibrationCapture.h"
 
-// Escravo Modbus RTU sobre RS485 (UART2 + pino de direção DE/RE) — contrato
+// Escravo Modbus RTU sobre a porta serial USB do ESP32 (UART0 — a mesma
+// usada para gravar o firmware, sem hardware adicional) — contrato
 // documentado em python-app/data_source/modbus_source.py. Implementa só o
 // necessário: função 0x04 (read input registers), 0x05 (write single coil)
 // e 0x06 (write single register).

@@ -3,20 +3,18 @@
 #include <Arduino.h>
 
 // ============================================================================
-// Configuração de hardware — AJUSTAR conforme o projeto elétrico definitivo.
-// Os valores abaixo são placeholders (pinagem padrão de dev kits ESP32),
-// já que o projeto elétrico (responsabilidade do time de hardware) ainda
-// não definiu a pinagem final do inclinômetro.
+// Configuração de hardware — pinagem definida para ESP32 DevKit clássico
+// (WROOM-32). Ver firmware/README.md para o mapeamento completo.
+//
+// Comunicação com o PC é via cabo USB direto (porta serial nativa do ESP32,
+// a mesma usada para gravar o firmware) — não usa mais RS485, então não há
+// pinos nem módulo transceptor adicionais para essa parte.
 // ============================================================================
 
-// I2C do MPU6050 (padrão do ESP32 DevKit)
+// I2C do MPU6050 (padrão do ESP32 DevKit). AD0 do sensor deve ir para GND
+// (endereço 0x68, o que o driver em Mpu6050.h assume).
 constexpr int PIN_I2C_SDA = 21;
 constexpr int PIN_I2C_SCL = 22;
-
-// RS485 (conversor UART-RS485, ex: módulo MAX485) — usa a UART2 do ESP32
-constexpr int PIN_RS485_RX = 16;
-constexpr int PIN_RS485_TX = 17;
-constexpr int PIN_RS485_DE_RE = 4;  // controle de direção (HIGH = transmite, LOW = recebe)
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py

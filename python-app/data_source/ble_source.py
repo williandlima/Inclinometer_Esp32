@@ -1,6 +1,6 @@
 """Fonte de dados real: leitura do ângulo via Bluetooth Low Energy (BLE),
-usando o adaptador Bluetooth do próprio notebook (sem necessidade de
-dongle RS485).
+usando o adaptador Bluetooth do próprio notebook (sem precisar de cabo até
+o ESP32, diferente do modo USB/Modbus RTU).
 
 Contrato assumido com o firmware do ESP32 (ainda não implementado nesta
 fase) — o mesmo usado pelo app Android, para manter os transportes
@@ -9,7 +9,7 @@ consistentes:
   notify (e read) de 2 bytes little-endian igual a `angulo * ANGLE_SCALE`.
 - Calibração: escrever o byte `0x01` na característica
   `CALIBRATE_CHARACTERISTIC_UUID` sinaliza ao firmware para zerar o eixo de
-  tilt na posição atual (equivalente à coil Modbus usada no modo RS485).
+  tilt na posição atual (equivalente à coil Modbus usada no modo USB/Modbus RTU).
 - Captura de vibração (leitura em alta taxa, para caracterizar variação
   angular por vento/vibração — o notify normal já é "tempo real", mas numa
   taxa que depende do firmware; este modo pede uma taxa/duração explícitas):
@@ -26,8 +26,8 @@ consistentes:
     quantas couberem no MTU — repete até cobrir o total informado.
 
 Usa a biblioteca `bleak` (multiplataforma: Windows/Linux/macOS), importada
-localmente para não exigir a dependência quando só o modo simulado ou RS485
-forem usados.
+localmente para não exigir a dependência quando só o modo simulado ou
+USB/Modbus RTU forem usados.
 """
 from __future__ import annotations
 
