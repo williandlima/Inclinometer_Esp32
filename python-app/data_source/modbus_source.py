@@ -42,6 +42,16 @@ from typing import NamedTuple
 
 from data_source.base import AngleReading, ErrorCallback, IAngleDataSource, ReadingCallback
 
+# Muitas placas ESP32 (incluindo a usada neste projeto, com chip CH9102)
+# resetam a placa via DTR/RTS toda vez que a porta serial é aberta — é o
+# mesmo mecanismo de auto-reset usado para gravar o firmware sem apertar
+# botão. Isso significa que CADA conexão nova (não só a primeira do app)
+# reinicia o ESP32, que leva um tempo pra voltar a responder Modbus:
+# inicialização de I2C + do stack BLE do firmware (BLEDevice::init) pode
+# levar bem mais que 1s. Sem essa folga, a primeira leitura logo após
+# conectar falha com timeout mesmo com o hardware saudável.
+BOARD_RESET_GRACE_S = 2.5
+
 ANGLE_INPUT_REGISTER = 0
 ANGLE_SCALE = 100.0  # registrador = ângulo * 100 (int16, resolução de 0.01°)
 CALIBRATE_COIL = 0
@@ -87,6 +97,7 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
     try:
         if not client.connect():
             raise IOError(f"Não foi possível abrir a porta serial {port}.")
+        time.sleep(BOARD_RESET_GRACE_S)  # ver BOARD_RESET_GRACE_S: a porta abrir já reseta o ESP32
         result = client.read_input_registers(address=ANGLE_INPUT_REGISTER, count=1, device_id=slave_id)
         if result.isError():
             raise IOError(str(result))
@@ -261,6 +272,12 @@ class ModbusAngleSource(IAngleDataSource):
 
             with self._client_lock:
                 self._client = client
+
+            # Ver BOARD_RESET_GRACE_S: a porta abrir já reseta o ESP32 — sem
+            # essa folga, a primeira leitura falharia com timeout mesmo com o
+            # hardware saudável. Usa wait() em vez de sleep() pra "Parar"
+            # continuar responsivo mesmo durante essa espera inicial.
+            self._stop_event.wait(BOARD_RESET_GRACE_S)
 
             while not self._stop_event.is_set():
                 try:
