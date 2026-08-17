@@ -9,19 +9,22 @@ namespace {
 // UART0 — a mesma porta serial usada para gravar o firmware, exposta como
 // porta USB/COM direto pelo chip USB-UART embutido do ESP32. Full-duplex,
 // então (diferente de RS485) não precisa de nenhum controle de direção.
-HardwareSerial &link = Serial;
+// Nome evita "link" de propósito: colide com o `int link(const char*,
+// const char*)` de sys/unistd.h (chega via <functional> -> HardwareSerial.h),
+// dando "reference to 'link' is ambiguous" na hora de compilar.
+HardwareSerial &modbusSerial = Serial;
 }  // namespace
 
 void ModbusSlave::begin() {
-    link.begin(MODBUS_BAUDRATE);
+    modbusSerial.begin(MODBUS_BAUDRATE);
 }
 
 void ModbusSlave::update() {
-    while (link.available()) {
+    while (modbusSerial.available()) {
         if (_frameLen < sizeof(_frame)) {
-            _frame[_frameLen++] = link.read();
+            _frame[_frameLen++] = modbusSerial.read();
         } else {
-            link.read();  // descarta, frame maior que o esperado
+            modbusSerial.read();  // descarta, frame maior que o esperado
         }
         _lastByteMs = millis();
     }
@@ -173,8 +176,8 @@ void ModbusSlave::sendResponse(const uint8_t *payload, uint8_t len) {
     frame[len] = crc & 0xFF;
     frame[len + 1] = crc >> 8;
 
-    link.write(frame, len + 2);
-    link.flush();
+    modbusSerial.write(frame, len + 2);
+    modbusSerial.flush();
 }
 
 uint16_t ModbusSlave::crc16(const uint8_t *data, uint8_t len) {
