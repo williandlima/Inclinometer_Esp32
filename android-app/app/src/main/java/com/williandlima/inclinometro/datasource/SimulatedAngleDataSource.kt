@@ -18,7 +18,12 @@ class SimulatedAngleDataSource(
     private val centerDeg: Double = 0.0,
     private val amplitudeDeg: Double = 12.0,
     private val periodS: Double = 45.0,
-    private val noiseStdDeg: Double = 0.08,
+    // Ruído equivalente ao que o firmware entrega JÁ FILTRADO (filtro interno
+    // do MPU6050 + média móvel, ver firmware/src/AngleSensor.h). A fonte
+    // simulada substitui o conjunto sensor+firmware, então imitar o sinal cru
+    // aqui daria uma falsa impressão de instabilidade que o hardware real não
+    // tem mais.
+    private val noiseStdDeg: Double = 0.015,
     private val pollIntervalMs: Long = 250L,
 ) : AngleDataSource {
 

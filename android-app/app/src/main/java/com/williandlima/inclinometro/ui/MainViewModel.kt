@@ -37,10 +37,22 @@ import kotlinx.coroutines.withTimeoutOrNull
  * (`_CONN_STYLES` em `python-app/ui/main_window.py`). */
 enum class ConnectionStatus { PARADO, CONECTANDO, CONECTADO, ERRO, SIMULACAO }
 
+// Exibição da leitura contínua em degraus de 0,25°, igual ao app desktop. O
+// grosso da estabilidade vem do firmware (filtro interno do MPU6050 + média
+// móvel, ver firmware/src/AngleSensor.h); aqui é só a apresentação.
+//
+// A histerese evita o último resíduo de tremulação: sem ela, um valor parado
+// bem na fronteira entre dois degraus (ex: 1,125°) alterna entre 1,00° e
+// 1,25° a cada leitura. Nada disso afeta os dados guardados — histórico,
+// mín/máx e relatório usam sempre o ângulo bruto (`currentAngle`).
+private const val DISPLAY_ANGLE_STEP_DEG = 0.25
+private const val DISPLAY_ANGLE_HYSTERESIS_DEG = 0.05
+
 data class UiState(
     val mode: ConnectionMode = ConnectionMode.SIMULATED,
     val running: Boolean = false,
-    val currentAngle: Double? = null,
+    val currentAngle: Double? = null,   // valor bruto da leitura
+    val displayAngle: Double? = null,   // valor exibido (degrau de 0,25° com histerese)
     val minReading: AngleReading? = null,
     val maxReading: AngleReading? = null,
     val minFlash: Boolean = false,
@@ -186,6 +198,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     running = true,
                     minReading = null,
                     maxReading = null,
+                    displayAngle = null,
                     statusMessage = "Conectado: ${source.label}",
                     connectionStatus = if (mode == ConnectionMode.SIMULATED) {
                         ConnectionStatus.SIMULACAO
@@ -208,12 +221,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Arredonda para o degrau de exibição, com histerese para não alternar
+     * entre dois degraus quando o valor fica na fronteira. */
+    private fun angleForDisplay(angleDeg: Double, current: Double?): Double {
+        val step = DISPLAY_ANGLE_STEP_DEG
+        if (current != null && kotlin.math.abs(angleDeg - current) < step / 2 + DISPLAY_ANGLE_HYSTERESIS_DEG) {
+            return current
+        }
+        return Math.round(angleDeg / step) * step
+    }
+
     private suspend fun onReading(reading: AngleReading) {
         val sessionId = currentSessionId ?: return
         repository.addReading(sessionId, reading)
         _uiState.update {
             it.copy(
                 currentAngle = reading.angleDeg,
+                displayAngle = angleForDisplay(reading.angleDeg, it.displayAngle),
                 connectionStatus = if (it.mode == ConnectionMode.REAL) ConnectionStatus.CONECTADO else it.connectionStatus,
             )
         }
@@ -249,7 +273,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = currentSessionId
         viewModelScope.launch {
             sessionId?.let { repository.endSession(it) }
-            _uiState.update { it.copy(running = false, statusMessage = "Parado.", connectionStatus = ConnectionStatus.PARADO) }
+            _uiState.update {
+                it.copy(
+                    running = false,
+                    displayAngle = null,
+                    statusMessage = "Parado.",
+                    connectionStatus = ConnectionStatus.PARADO,
+                )
+            }
         }
     }
 

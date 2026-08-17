@@ -26,6 +26,7 @@ void setup() {
 }
 
 void loop() {
+    angleSensor.update();  // alimenta o filtro da leitura contínua
     vibrationCapture.update();
     modbusSlave.update();
     bleServer.update();

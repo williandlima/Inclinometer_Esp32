@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.0.2`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.1.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -129,6 +129,40 @@ com os módulos Python/Kotlin), mas **precisa ser compilado e testado em
 hardware real** antes de considerar o firmware pronto — nem a lógica de
 sensor, nem os protocolos Modbus RTU (via USB)/BLE foram validados contra
 hardware físico.
+
+## Estabilidade da leitura (v1.1.0)
+
+Nos primeiros testes com hardware real a leitura não parava de variar nos
+centésimos de grau. Eram duas causas, as duas no firmware:
+
+1. **O filtro passa-baixa interno do MPU6050 nunca era configurado.** O chip
+   liga com `DLPF_CFG=0`, ou seja, 260Hz de banda passante no acelerômetro —
+   praticamente sem filtro. Todo o ruído mecânico/térmico de alta frequência
+   entrava em cada amostra. Isso ainda causava **aliasing** no Modo Vibração:
+   amostrando a 50Hz (Nyquist 25Hz) um sinal de 260Hz de banda, o ruído acima
+   de 25Hz era rebatido para dentro da faixa medida e sujava a FFT. Agora
+   `Mpu6050::begin()` configura `DLPF_CFG=4` (21Hz), que corta esse ruído no
+   hardware e serve de anti-aliasing, ainda deixando passar com folga as
+   frequências de interesse do ensaio (1-5Hz).
+2. **A leitura contínua não tinha filtragem nenhuma.** Cada leitura Modbus /
+   notify BLE disparava uma única amostra instantânea direto no `atan2`.
+   Agora `AngleSensor::update()` (chamado no `loop()`) amostra o sensor a
+   100Hz e mantém uma média móvel exponencial com constante de tempo de 0.5s
+   (`ANGLE_FILTER_TIME_CONSTANT_S`), e é esse valor filtrado que
+   `readAngleDeg()` devolve.
+
+**O Modo Vibração não passa por esse filtro, de propósito** — é justamente
+ali que a sensibilidade a frações de grau é o objetivo. A captura continua
+usando `readRelativeAngleDeg()`, que faz uma leitura instantânea a cada
+amostra. Os dois caminhos estão separados em `AngleSensor.h`.
+
+A calibração também passou a usar o valor filtrado em vez de uma amostra
+isolada, ficando repetível mesmo com o sensor sob vibração.
+
+Do lado dos apps, a exibição do valor em tempo real é arredondada para
+degraus de 0,25° com histerese (evita alternar entre dois degraus quando o
+valor fica na fronteira). Isso é só apresentação: histórico, mín/máx e
+relatórios continuam usando o ângulo bruto.
 
 ## Limitações conhecidas / próximos passos
 

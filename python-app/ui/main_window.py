@@ -55,15 +55,19 @@ def _find_logo_path() -> str | None:
 
 LOGO_PATH = _find_logo_path()
 
-# O sensor é sensível o bastante a vibração/ruído para a leitura "piscar" a
-# cada centésimo de grau; arredondar o valor exibido em tempo real para
-# múltiplos de 0,25° reduz esse ruído visual sem perder resolução nos dados
-# guardados (histórico/relatório continuam com o valor bruto).
+# Exibição da leitura contínua em degraus de 0,25°. O grosso da estabilidade
+# vem do firmware (filtro interno do MPU6050 + média móvel, ver
+# firmware/src/AngleSensor.h); aqui é só a apresentação.
+#
+# A histerese evita o último resíduo de tremulação: sem ela, um valor parado
+# bem na fronteira entre dois degraus (ex: 1,125°) alterna entre 1,00° e 1,25°
+# a cada leitura. Só troca de degrau quando o valor passa da fronteira com
+# uma margem extra.
+#
+# Nada disso afeta os dados guardados: histórico, mín/máx e relatório usam
+# sempre o ângulo bruto.
 DISPLAY_ANGLE_STEP_DEG = 0.25
-
-
-def _round_to_display_step(angle_deg: float, step: float = DISPLAY_ANGLE_STEP_DEG) -> float:
-    return round(angle_deg / step) * step
+DISPLAY_ANGLE_HYSTERESIS_DEG = 0.05
 
 _VALUE_STYLE = f"font-size: 20px; font-weight: bold; color: {TEXT_LIGHT};"
 _FLASH_STYLE = f"font-size: 20px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 4px;"
@@ -143,6 +147,7 @@ class MainWindow(QMainWindow):
         self._source: IAngleDataSource | None = None
         self._running = False
         self._vibration_progress_dialog: QProgressDialog | None = None
+        self._displayed_angle: float | None = None  # degrau atualmente exibido (histerese)
 
         self._bridge = _SignalBridge()
         self._bridge.reading.connect(self._on_reading)
@@ -308,6 +313,7 @@ class MainWindow(QMainWindow):
             )
 
         self._tracker.reset()
+        self._displayed_angle = None
         self._history.start_session(mode=self._settings.mode)
         self._source.start(
             on_reading=lambda r: self._bridge.reading.emit(r),
@@ -325,6 +331,7 @@ class MainWindow(QMainWindow):
             self._source = None
         self._history.end_session()
         self._running = False
+        self._displayed_angle = None
         self.start_stop_btn.setText("Iniciar")
         self._update_mode_label()
         self._set_connection_status("parado")
@@ -374,11 +381,20 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(self, "Relatório gerado", f"Relatório salvo em:\n{path}")
 
+    def _angle_for_display(self, angle_deg: float) -> float:
+        """Arredonda para o degrau de exibição, com histerese para não
+        alternar entre dois degraus quando o valor fica na fronteira."""
+        step = DISPLAY_ANGLE_STEP_DEG
+        current = self._displayed_angle
+        if current is None or abs(angle_deg - current) >= step / 2 + DISPLAY_ANGLE_HYSTERESIS_DEG:
+            self._displayed_angle = round(angle_deg / step) * step
+        return self._displayed_angle
+
     # ------------------------------------------------------------ callbacks
     def _on_reading(self, reading: AngleReading) -> None:
         if self._settings.mode in ("real", "ble"):
             self._set_connection_status("conectado")
-        self.angle_label.setText(f"{_round_to_display_step(reading.angle_deg):.2f}°")
+        self.angle_label.setText(f"{self._angle_for_display(reading.angle_deg):.2f}°")
         self._history.add_reading(reading)
 
         for event in self._tracker.process(reading):

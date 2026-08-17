@@ -7,7 +7,15 @@
 bool Mpu6050::begin() {
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
     // Sai do modo sleep (padrão de fábrica) e usa o clock interno.
-    return writeRegister(REG_PWR_MGMT_1, 0x00);
+    if (!writeRegister(REG_PWR_MGMT_1, 0x00)) {
+        return false;
+    }
+    // Liga o filtro passa-baixa interno e fixa o fundo de escala — ver a
+    // justificativa de cada valor em Mpu6050.h.
+    if (!writeRegister(REG_CONFIG, DLPF_CFG_21HZ)) {
+        return false;
+    }
+    return writeRegister(REG_ACCEL_CONFIG, ACCEL_RANGE_2G);
 }
 
 bool Mpu6050::writeRegister(uint8_t reg, uint8_t value) {

@@ -20,7 +20,12 @@ class SimulatedAngleSource(IAngleDataSource):
         center_deg: float = 0.0,
         amplitude_deg: float = 12.0,
         period_s: float = 45.0,
-        noise_std_deg: float = 0.08,
+        # Ruído equivalente ao que o firmware entrega JÁ FILTRADO (filtro
+        # interno do MPU6050 + média móvel, ver firmware/src/AngleSensor.h).
+        # A fonte simulada substitui o conjunto sensor+firmware, então imitar
+        # o sinal cru aqui daria uma falsa impressão de instabilidade que o
+        # hardware real não tem mais.
+        noise_std_deg: float = 0.015,
         poll_interval_s: float = 0.25,
     ) -> None:
         self._center = center_deg

@@ -22,8 +22,8 @@ constexpr int PIN_I2C_SCL = 22;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.0.2";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10002;
+constexpr char FIRMWARE_VERSION[] = "1.1.0";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10100;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -69,4 +69,22 @@ constexpr uint32_t BLE_VIBRATION_CHUNK_INTERVAL_MS = 20;  // intervalo entre pac
 constexpr float ANGLE_SCALE = 100.0f;  // valor no protocolo = ângulo * ANGLE_SCALE
 constexpr float ANGLE_MIN_DEG = -60.0f;
 constexpr float ANGLE_MAX_DEG = 60.0f;
+
+// ============================================================================
+// Filtro da leitura contínua (só do ângulo "normal" — o Modo Vibração NÃO
+// passa por aqui, de propósito).
+//
+// Mesmo com o filtro interno do MPU6050 ligado (ver Mpu6050.h), uma amostra
+// isolada do acelerômetro ainda carrega ruído suficiente para a leitura
+// tremular nos centésimos de grau. A leitura de ângulo do dia a dia precisa
+// ser estável; já a captura de vibração precisa justamente do sinal cru, com
+// toda a sensibilidade — por isso os dois caminhos são separados em
+// AngleSensor (readAngleDeg filtrado vs readRelativeAngleDeg instantâneo).
+//
+// Média móvel exponencial alimentada a cada ANGLE_SAMPLE_INTERVAL_MS. Com
+// 10ms de amostragem e 0.5s de constante de tempo, o ruído branco cai cerca
+// de 10x, com ~0.5s para a leitura acompanhar um movimento real.
+// ============================================================================
+constexpr uint32_t ANGLE_SAMPLE_INTERVAL_MS = 10;     // 100Hz de amostragem interna
+constexpr float ANGLE_FILTER_TIME_CONSTANT_S = 0.5f;  // maior = mais estável, porém mais lento
 constexpr uint16_t VIBRATION_MAX_SAMPLES = 6000;  // limite de memória do buffer de captura
