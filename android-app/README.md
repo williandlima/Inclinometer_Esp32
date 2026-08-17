@@ -38,6 +38,11 @@ Na tela, escolha entre:
   desktop). O app segue o contrato BLE definido em `datasource/BleContract.kt`,
   o mesmo implementado no firmware (`firmware/src/BleServer.cpp`).
 
+O botão **"Testar conexão com ESP32"** (`datasource/BleConnectionTester.kt`)
+faz uma leitura única do ângulo e da versão do firmware, sem iniciar uma
+sessão de leitura contínua — mostra o resultado (verde) ou o erro específico
+(vermelho), equivalente ao mesmo botão no app desktop.
+
 O indicador de conexão mostra o estado (conectando/conectado/falha), a
 exemplo do app desktop.
 

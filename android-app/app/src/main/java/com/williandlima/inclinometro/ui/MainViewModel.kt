@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.williandlima.inclinometro.datasource.AngleDataSource
 import com.williandlima.inclinometro.datasource.AngleReading
 import com.williandlima.inclinometro.datasource.BleAngleDataSource
+import com.williandlima.inclinometro.datasource.BleConnectionTester
 import com.williandlima.inclinometro.datasource.BleScanner
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.datasource.SimulatedAngleDataSource
@@ -49,6 +50,9 @@ data class UiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.PARADO,
     val scanning: Boolean = false,
     val scanResults: List<BleScanner.Found> = emptyList(),
+    val bleTestInProgress: Boolean = false,
+    val bleTestResult: String? = null,
+    val bleTestSuccess: Boolean = false,
     val calibrating: Boolean = false,
     val vibrationCapturing: Boolean = false,
     val vibrationProgress: Int = 0,
@@ -66,6 +70,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var collectJob: Job? = null
     private var vibrationJob: Job? = null
     private var scanJob: Job? = null
+    private var testJob: Job? = null
     private var currentSessionId: Long? = null
     private var currentSource: AngleDataSource? = null
 
@@ -119,6 +124,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelBleScan() {
         scanJob?.cancel()
+    }
+
+    // ------------------------------------------------------ testar conexão
+
+    fun testBleConnection() {
+        val address = _uiState.value.bleDeviceAddress.trim()
+        if (address.isBlank()) {
+            _uiState.update {
+                it.copy(bleTestResult = "Informe ou escaneie um endereço MAC primeiro.", bleTestSuccess = false)
+            }
+            return
+        }
+        if (_uiState.value.bleTestInProgress) return
+        _uiState.update { it.copy(bleTestInProgress = true, bleTestResult = "Testando...", bleTestSuccess = false) }
+        testJob = viewModelScope.launch {
+            try {
+                val result = BleConnectionTester.test(getApplication(), address)
+                _uiState.update {
+                    it.copy(
+                        bleTestResult = "✓ ESP32 respondeu — ângulo atual: %.2f° (firmware v%s)".format(
+                            result.angleDeg,
+                            result.firmwareVersion,
+                        ),
+                        bleTestSuccess = true,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update { it.copy(bleTestResult = "✗ Falha: ${e.message}", bleTestSuccess = false) }
+            } finally {
+                _uiState.update { it.copy(bleTestInProgress = false) }
+            }
+        }
     }
 
     fun toggleStartStop() {
@@ -357,6 +396,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         collectJob?.cancel()
         vibrationJob?.cancel()
         scanJob?.cancel()
+        testJob?.cancel()
         super.onCleared()
     }
 

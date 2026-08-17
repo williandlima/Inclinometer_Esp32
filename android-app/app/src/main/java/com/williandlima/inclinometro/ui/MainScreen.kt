@@ -144,6 +144,10 @@ fun MainScreen(viewModel: MainViewModel) {
                     viewModel.cancelBleScan()
                 },
                 onScanDialogDismiss = viewModel::cancelBleScan,
+                testInProgress = state.bleTestInProgress,
+                testResult = state.bleTestResult,
+                testSuccess = state.bleTestSuccess,
+                onTestConnectionClick = viewModel::testBleConnection,
             )
             Spacer(Modifier.height(16.dp))
         }
@@ -386,6 +390,10 @@ private fun ModeSelector(
     onScanClick: () -> Unit,
     onScanResultSelected: (String) -> Unit,
     onScanDialogDismiss: () -> Unit,
+    testInProgress: Boolean,
+    testResult: String?,
+    testSuccess: Boolean,
+    onTestConnectionClick: () -> Unit,
 ) {
     var showScanDialog by remember { mutableStateOf(false) }
 
@@ -412,6 +420,18 @@ private fun ModeSelector(
                 }) {
                     Text("Escanear")
                 }
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onTestConnectionClick, enabled = !testInProgress) {
+                Text(if (testInProgress) "Testando..." else "Testar conexão com ESP32")
+            }
+            testResult?.let {
+                Text(
+                    it,
+                    color = if (testSuccess) Green else Red,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }
