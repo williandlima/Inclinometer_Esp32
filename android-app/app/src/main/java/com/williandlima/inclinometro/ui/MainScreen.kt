@@ -58,6 +58,15 @@ import kotlinx.coroutines.launch
 
 private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale("pt", "BR"))
 
+// O sensor é sensível o bastante a vibração/ruído para a leitura "piscar" a
+// cada centésimo de grau; arredondar o valor exibido em tempo real para
+// múltiplos de 0,25° reduz esse ruído visual sem perder resolução nos dados
+// guardados (histórico/relatório continuam com o valor bruto em UiState).
+private const val DISPLAY_ANGLE_STEP_DEG = 0.25
+
+private fun roundToDisplayStep(angleDeg: Double): Double =
+    Math.round(angleDeg / DISPLAY_ANGLE_STEP_DEG) * DISPLAY_ANGLE_STEP_DEG
+
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val state by viewModel.uiState.collectAsState()
@@ -94,7 +103,7 @@ fun MainScreen(viewModel: MainViewModel) {
         Spacer(Modifier.height(16.dp))
 
         Text(
-            text = state.currentAngle?.let { "%.2f°".format(it) } ?: "--.--°",
+            text = state.currentAngle?.let { "%.2f°".format(roundToDisplayStep(it)) } ?: "--.--°",
             style = MaterialTheme.typography.displayLarge,
             fontWeight = FontWeight.Bold,
         )

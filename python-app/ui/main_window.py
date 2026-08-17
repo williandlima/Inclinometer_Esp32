@@ -55,6 +55,16 @@ def _find_logo_path() -> str | None:
 
 LOGO_PATH = _find_logo_path()
 
+# O sensor é sensível o bastante a vibração/ruído para a leitura "piscar" a
+# cada centésimo de grau; arredondar o valor exibido em tempo real para
+# múltiplos de 0,25° reduz esse ruído visual sem perder resolução nos dados
+# guardados (histórico/relatório continuam com o valor bruto).
+DISPLAY_ANGLE_STEP_DEG = 0.25
+
+
+def _round_to_display_step(angle_deg: float, step: float = DISPLAY_ANGLE_STEP_DEG) -> float:
+    return round(angle_deg / step) * step
+
 _VALUE_STYLE = f"font-size: 20px; font-weight: bold; color: {TEXT_LIGHT};"
 _FLASH_STYLE = f"font-size: 20px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 4px;"
 
@@ -368,7 +378,7 @@ class MainWindow(QMainWindow):
     def _on_reading(self, reading: AngleReading) -> None:
         if self._settings.mode in ("real", "ble"):
             self._set_connection_status("conectado")
-        self.angle_label.setText(f"{reading.angle_deg:.2f}°")
+        self.angle_label.setText(f"{_round_to_display_step(reading.angle_deg):.2f}°")
         self._history.add_reading(reading)
 
         for event in self._tracker.process(reading):
