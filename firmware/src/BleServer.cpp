@@ -106,6 +106,7 @@ void BleServer::notifyAngle() {
 
 void BleServer::updateVibrationNotify() {
     VibrationCapture::Status status = _vibration.status();
+    uint32_t now = millis();
 
     if (status == VibrationCapture::Status::Idle) {
         _lastReportedVibrationStatus = VibrationCapture::Status::Idle;
@@ -113,9 +114,15 @@ void BleServer::updateVibrationNotify() {
     }
 
     if (status == VibrationCapture::Status::Capturing) {
-        uint8_t payload[2] = {static_cast<uint8_t>(status), _vibration.progressPercent()};
-        vibrationStatusChar->setValue(payload, 2);
-        vibrationStatusChar->notify();
+        // Throttled: sem isso, notify() seria chamado a cada iteração do
+        // loop() (milhares de vezes/segundo) e sobrecarregaria a fila BLE.
+        bool justStarted = _lastReportedVibrationStatus != VibrationCapture::Status::Capturing;
+        if (justStarted || now - _lastVibrationStatusNotifyMs >= BLE_VIBRATION_STATUS_NOTIFY_INTERVAL_MS) {
+            uint8_t payload[2] = {static_cast<uint8_t>(status), _vibration.progressPercent()};
+            vibrationStatusChar->setValue(payload, 2);
+            vibrationStatusChar->notify();
+            _lastVibrationStatusNotifyMs = now;
+        }
         _lastReportedVibrationStatus = status;
         return;
     }
@@ -130,9 +137,40 @@ void BleServer::updateVibrationNotify() {
         return;
     }
 
-    // status == Ready
+    // status == Ready: primeiro esvazia todo o buffer de amostras (com
+    // pacing entre pacotes) e só então notifica "pronto" na characteristic
+    // de status. A ordem importa: o app (ble_source.py) considera a
+    // captura concluída assim que recebe esse "pronto" — se ele chegasse
+    // antes dos dados, o app leria um resultado truncado.
+    uint16_t total = _vibration.sampleCount();
+    if (_vibrationDataCursor < total) {
+        if (now - _lastVibrationChunkMs < BLE_VIBRATION_CHUNK_INTERVAL_MS) {
+            return;
+        }
+        _lastVibrationChunkMs = now;
+
+        // Pacotes pequenos: o ATT MTU padrão do BLE (sem negociação) só
+        // garante 20 bytes úteis por notificação — 2 bytes de índice + 8
+        // amostras (16 bytes) = 18 bytes, cabe mesmo sem MTU maior negociado.
+        constexpr uint16_t kSamplesPerPacket = 8;
+        uint16_t remaining = total - _vibrationDataCursor;
+        uint16_t chunk = remaining < kSamplesPerPacket ? remaining : kSamplesPerPacket;
+
+        uint8_t payload[2 + kSamplesPerPacket * 2];
+        payload[0] = static_cast<uint8_t>(_vibrationDataCursor & 0xFF);
+        payload[1] = static_cast<uint8_t>(_vibrationDataCursor >> 8);
+        for (uint16_t i = 0; i < chunk; i++) {
+            int16_t sample = _vibration.sampleAt(_vibrationDataCursor + i);
+            payload[2 + i * 2] = static_cast<uint8_t>(sample & 0xFF);
+            payload[2 + i * 2 + 1] = static_cast<uint8_t>((sample >> 8) & 0xFF);
+        }
+        vibrationDataChar->setValue(payload, 2 + chunk * 2);
+        vibrationDataChar->notify();
+        _vibrationDataCursor += chunk;
+        return;
+    }
+
     if (_lastReportedVibrationStatus != VibrationCapture::Status::Ready) {
-        uint16_t total = _vibration.sampleCount();
         uint8_t payload[4] = {
             static_cast<uint8_t>(status),
             100,
@@ -142,32 +180,7 @@ void BleServer::updateVibrationNotify() {
         vibrationStatusChar->setValue(payload, 4);
         vibrationStatusChar->notify();
         _lastReportedVibrationStatus = status;
-        _vibrationDataCursor = 0;
     }
-
-    uint16_t total = _vibration.sampleCount();
-    if (_vibrationDataCursor >= total) {
-        return;
-    }
-
-    // Envia em pacotes pequenos: o ATT MTU padrão do BLE (sem negociação)
-    // só garante 20 bytes úteis por notificação — 2 bytes de índice + 8
-    // amostras (16 bytes) = 18 bytes, cabe mesmo sem MTU maior negociado.
-    constexpr uint16_t kSamplesPerPacket = 8;
-    uint16_t remaining = total - _vibrationDataCursor;
-    uint16_t chunk = remaining < kSamplesPerPacket ? remaining : kSamplesPerPacket;
-
-    uint8_t payload[2 + kSamplesPerPacket * 2];
-    payload[0] = static_cast<uint8_t>(_vibrationDataCursor & 0xFF);
-    payload[1] = static_cast<uint8_t>(_vibrationDataCursor >> 8);
-    for (uint16_t i = 0; i < chunk; i++) {
-        int16_t sample = _vibration.sampleAt(_vibrationDataCursor + i);
-        payload[2 + i * 2] = static_cast<uint8_t>(sample & 0xFF);
-        payload[2 + i * 2 + 1] = static_cast<uint8_t>((sample >> 8) & 0xFF);
-    }
-    vibrationDataChar->setValue(payload, 2 + chunk * 2);
-    vibrationDataChar->notify();
-    _vibrationDataCursor += chunk;
 }
 
 void BleServer::update() {

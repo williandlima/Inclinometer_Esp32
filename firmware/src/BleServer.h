@@ -32,6 +32,8 @@ private:
     uint32_t _lastAngleNotifyMs = 0;
     VibrationCapture::Status _lastReportedVibrationStatus = VibrationCapture::Status::Idle;
     uint16_t _vibrationDataCursor = 0;
+    uint32_t _lastVibrationStatusNotifyMs = 0;
+    uint32_t _lastVibrationChunkMs = 0;
 
     void notifyAngle();
     void updateVibrationNotify();

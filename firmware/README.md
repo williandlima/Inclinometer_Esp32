@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.0.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.0.1`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -132,6 +132,20 @@ hardware físico.
 
 ## Limitações conhecidas / próximos passos
 
+- **[1.0.1]** `BleServer::updateVibrationNotify()` notificava o status
+  "pronto" da captura de vibração *antes* de terminar de transmitir todas
+  as amostras pela characteristic de dados, e chamava `notify()` sem
+  nenhum controle de taxa (a cada iteração do `loop()`) — o app Python
+  (`ble_source.py`) libera o resultado assim que recebe o "pronto", então
+  isso causava dados truncados/perdidos no Modo Vibração via BLE, além do
+  risco de sobrecarregar a fila de notificação do BLE numa captura longa.
+  Corrigido: agora os dados são enviados primeiro (com um intervalo mínimo
+  de `BLE_VIBRATION_CHUNK_INTERVAL_MS` entre pacotes) e o "pronto" só é
+  notificado depois que o último bloco foi enviado; o status/progresso
+  durante a captura também passou a ser limitado por
+  `BLE_VIBRATION_STATUS_NOTIFY_INTERVAL_MS`. Ainda não validado contra
+  hardware real (só revisão de código) — atenção especial a isso ao testar
+  o Modo Vibração via BLE.
 - Buffer de captura de vibração limitado a `VIBRATION_MAX_SAMPLES = 6000`
   amostras (~12KB de RAM) — captura pedida além disso é truncada
   silenciosamente (menos amostras que o solicitado, mas sem erro).

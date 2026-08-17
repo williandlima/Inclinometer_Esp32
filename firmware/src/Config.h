@@ -22,8 +22,8 @@ constexpr int PIN_I2C_SCL = 22;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.0.0";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10000;
+constexpr char FIRMWARE_VERSION[] = "1.0.1";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10001;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -60,6 +60,8 @@ constexpr char CHAR_VIBRATION_STATUS_UUID[] = "6e6e0005-3c17-4a2e-8f4b-1a2b3c4d5
 constexpr char CHAR_VIBRATION_DATA_UUID[] = "6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 constexpr char CHAR_FIRMWARE_VERSION_UUID[] = "6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 constexpr uint32_t BLE_NOTIFY_INTERVAL_MS = 200;  // taxa de notificação do ângulo em modo contínuo
+constexpr uint32_t BLE_VIBRATION_STATUS_NOTIFY_INTERVAL_MS = 300;  // limita notify() de status/progresso durante a captura
+constexpr uint32_t BLE_VIBRATION_CHUNK_INTERVAL_MS = 20;  // intervalo entre pacotes de dados da captura (evita congestionar o BLE)
 
 // ============================================================================
 // Compartilhados entre os dois transportes
