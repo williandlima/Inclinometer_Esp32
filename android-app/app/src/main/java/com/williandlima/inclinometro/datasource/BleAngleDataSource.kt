@@ -25,8 +25,14 @@ import kotlinx.coroutines.withTimeout
  *
  * O firmware segue esse contrato (ver `firmware/README.md`), mas não foi
  * validado contra hardware real ainda. Seleção de dispositivo é feita por
- * endereço MAC informado pelo usuário (sem tela de scan dedicada por
- * enquanto).
+ * endereço MAC informado pelo usuário, ou pela tela de scan (`BleScanner`).
+ *
+ * No Android só pode haver UMA operação GATT em andamento por vez na mesma
+ * conexão (habilitar notify, escrever característica) — disparar a próxima
+ * antes do callback da anterior chegar (`onDescriptorWrite`/
+ * `onCharacteristicWrite`) faz a operação seguinte falhar silenciosamente,
+ * sem erro nenhum. Por isso todas passam por [enqueueGattOperation] em vez
+ * de serem chamadas direto.
  */
 @SuppressLint("MissingPermission")
 class BleAngleDataSource(
@@ -43,6 +49,26 @@ class BleAngleDataSource(
     private var pendingWriteContinuation: CancellableContinuation<Unit>? = null
     private var vibrationStatusListener: ((status: Int, progress: Int, totalSamples: Int) -> Unit)? = null
     private var vibrationDataListener: ((startIndex: Int, samples: ShortArray) -> Unit)? = null
+
+    private val gattOperationQueue = ArrayDeque<() -> Unit>()
+    private var gattOperationInFlight = false
+
+    private fun enqueueGattOperation(operation: () -> Unit) {
+        gattOperationQueue.addLast(operation)
+        if (!gattOperationInFlight) {
+            processNextGattOperation()
+        }
+    }
+
+    private fun processNextGattOperation() {
+        val next = gattOperationQueue.removeFirstOrNull()
+        if (next == null) {
+            gattOperationInFlight = false
+            return
+        }
+        gattOperationInFlight = true
+        next()
+    }
 
     override fun readings(): Flow<AngleReading> = callbackFlow {
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -74,18 +100,31 @@ class BleAngleDataSource(
                 val vibrationStatusChar = service.getCharacteristic(BleContract.VIBRATION_STATUS_CHARACTERISTIC_UUID)
                 val vibrationDataChar = service.getCharacteristic(BleContract.VIBRATION_DATA_CHARACTERISTIC_UUID)
 
-                enableNotify(g, angleCharacteristic)
-                vibrationStatusChar?.let { enableNotify(g, it) }
-                vibrationDataChar?.let { enableNotify(g, it) }
+                // Enfileiradas: ver nota da classe sobre operações GATT
+                // seriais no Android.
+                enqueueGattOperation { enableNotify(g, angleCharacteristic) }
+                vibrationStatusChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
+                vibrationDataChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
             }
 
             private fun enableNotify(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
                 g.setCharacteristicNotification(characteristic, true)
-                val descriptor = characteristic.getDescriptor(BleContract.CLIENT_CHARACTERISTIC_CONFIG_UUID) ?: return
+                val descriptor = characteristic.getDescriptor(BleContract.CLIENT_CHARACTERISTIC_CONFIG_UUID)
+                if (descriptor == null) {
+                    processNextGattOperation()
+                    return
+                }
                 @Suppress("DEPRECATION")
                 descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                 @Suppress("DEPRECATION")
-                g.writeDescriptor(descriptor)
+                val started = g.writeDescriptor(descriptor)
+                if (!started) {
+                    processNextGattOperation()
+                }
+            }
+
+            override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+                processNextGattOperation()
             }
 
             @Suppress("DEPRECATION")
@@ -103,13 +142,14 @@ class BleAngleDataSource(
                 characteristic: BluetoothGattCharacteristic,
                 status: Int,
             ) {
-                val continuation = pendingWriteContinuation ?: return
+                val continuation = pendingWriteContinuation
                 pendingWriteContinuation = null
                 if (status == BluetoothGatt.GATT_SUCCESS) {
-                    continuation.resume(Unit)
+                    continuation?.resume(Unit)
                 } else {
-                    continuation.resumeWithException(IOException("Falha ao escrever característica BLE (status=$status)."))
+                    continuation?.resumeWithException(IOException("Falha ao escrever característica BLE (status=$status)."))
                 }
+                processNextGattOperation()
             }
 
             private fun emitAngleFromBytes(raw: ByteArray) {
@@ -153,6 +193,8 @@ class BleAngleDataSource(
             gatt = null
             calibrateCharacteristic = null
             vibrationConfigCharacteristic = null
+            gattOperationQueue.clear()
+            gattOperationInFlight = false
         }
     }
 
@@ -246,16 +288,19 @@ class BleAngleDataSource(
         characteristic: BluetoothGattCharacteristic,
         value: ByteArray,
     ) = suspendCancellableCoroutine<Unit> { continuation ->
-        pendingWriteContinuation = continuation
-        @Suppress("DEPRECATION")
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        @Suppress("DEPRECATION")
-        characteristic.value = value
-        @Suppress("DEPRECATION")
-        val started = g.writeCharacteristic(characteristic)
-        if (!started) {
-            pendingWriteContinuation = null
-            continuation.resumeWithException(IOException("Falha ao iniciar escrita BLE."))
+        enqueueGattOperation {
+            pendingWriteContinuation = continuation
+            @Suppress("DEPRECATION")
+            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            @Suppress("DEPRECATION")
+            characteristic.value = value
+            @Suppress("DEPRECATION")
+            val started = g.writeCharacteristic(characteristic)
+            if (!started) {
+                pendingWriteContinuation = null
+                processNextGattOperation()
+                continuation.resumeWithException(IOException("Falha ao iniciar escrita BLE."))
+            }
         }
     }
 }
