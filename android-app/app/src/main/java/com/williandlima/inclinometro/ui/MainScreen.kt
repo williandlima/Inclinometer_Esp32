@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.williandlima.inclinometro.datasource.AngleReading
+import com.williandlima.inclinometro.datasource.BleScanner
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.limits.VibrationStats
 import com.williandlima.inclinometro.ui.theme.AmberFlash
@@ -125,6 +127,14 @@ fun MainScreen(viewModel: MainViewModel) {
                 onModeChange = viewModel::setMode,
                 bleAddress = state.bleDeviceAddress,
                 onBleAddressChange = viewModel::setBleDeviceAddress,
+                scanning = state.scanning,
+                scanResults = state.scanResults,
+                onScanClick = viewModel::scanBleDevices,
+                onScanResultSelected = { address ->
+                    viewModel.setBleDeviceAddress(address)
+                    viewModel.cancelBleScan()
+                },
+                onScanDialogDismiss = viewModel::cancelBleScan,
             )
             Spacer(Modifier.height(16.dp))
         }
@@ -362,7 +372,14 @@ private fun ModeSelector(
     onModeChange: (ConnectionMode) -> Unit,
     bleAddress: String,
     onBleAddressChange: (String) -> Unit,
+    scanning: Boolean,
+    scanResults: List<BleScanner.Found>,
+    onScanClick: () -> Unit,
+    onScanResultSelected: (String) -> Unit,
+    onScanDialogDismiss: () -> Unit,
 ) {
+    var showScanDialog by remember { mutableStateOf(false) }
+
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             RadioButton(selected = mode == ConnectionMode.SIMULATED, onClick = { onModeChange(ConnectionMode.SIMULATED) })
@@ -372,13 +389,77 @@ private fun ModeSelector(
             Text("Real (BLE)")
         }
         if (mode == ConnectionMode.REAL) {
-            OutlinedTextField(
-                value = bleAddress,
-                onValueChange = onBleAddressChange,
-                label = { Text("Endereço MAC do dispositivo BLE") },
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = bleAddress,
+                    onValueChange = onBleAddressChange,
+                    label = { Text("Endereço MAC do dispositivo BLE") },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = {
+                    showScanDialog = true
+                    onScanClick()
+                }) {
+                    Text("Escanear")
+                }
+            }
         }
     }
+
+    if (showScanDialog) {
+        BleScanDialog(
+            scanning = scanning,
+            results = scanResults,
+            onSelect = { address ->
+                onScanResultSelected(address)
+                showScanDialog = false
+            },
+            onDismiss = {
+                showScanDialog = false
+                onScanDialogDismiss()
+            },
+        )
+    }
+}
+
+@Composable
+private fun BleScanDialog(
+    scanning: Boolean,
+    results: List<BleScanner.Found>,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Dispositivos BLE") },
+        text = {
+            Column {
+                if (scanning) {
+                    Text("Escaneando...", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                }
+                if (results.isEmpty()) {
+                    if (!scanning) {
+                        Text("Nenhum dispositivo BLE encontrado por perto.", style = MaterialTheme.typography.bodySmall)
+                    }
+                } else {
+                    results.forEach { found ->
+                        Text(
+                            "${found.name} (${found.address})",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(found.address) }
+                                .padding(vertical = 8.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar") } },
+    )
 }
 
 private fun sharePdf(context: Context, file: File) {

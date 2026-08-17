@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.williandlima.inclinometro.datasource.AngleDataSource
 import com.williandlima.inclinometro.datasource.AngleReading
 import com.williandlima.inclinometro.datasource.BleAngleDataSource
+import com.williandlima.inclinometro.datasource.BleScanner
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.datasource.SimulatedAngleDataSource
 import com.williandlima.inclinometro.limits.HistoryRepository
@@ -24,10 +25,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Estado da conexão exibido na UI, mesma semântica do app desktop
  * (`_CONN_STYLES` em `python-app/ui/main_window.py`). */
@@ -44,6 +47,8 @@ data class UiState(
     val statusMessage: String = "Pronto.",
     val bleDeviceAddress: String = "",
     val connectionStatus: ConnectionStatus = ConnectionStatus.PARADO,
+    val scanning: Boolean = false,
+    val scanResults: List<BleScanner.Found> = emptyList(),
     val calibrating: Boolean = false,
     val vibrationCapturing: Boolean = false,
     val vibrationProgress: Int = 0,
@@ -60,6 +65,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var collectJob: Job? = null
     private var vibrationJob: Job? = null
+    private var scanJob: Job? = null
     private var currentSessionId: Long? = null
     private var currentSource: AngleDataSource? = null
 
@@ -76,6 +82,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBleDeviceAddress(address: String) {
         _uiState.update { it.copy(bleDeviceAddress = address) }
+    }
+
+    // ---------------------------------------------------------- scan BLE
+
+    fun scanBleDevices() {
+        if (_uiState.value.scanning) return
+        _uiState.update { it.copy(scanning = true, scanResults = emptyList(), statusMessage = "Escaneando dispositivos BLE...") }
+        scanJob = viewModelScope.launch {
+            val found = linkedMapOf<String, BleScanner.Found>()
+            try {
+                withTimeoutOrNull(BLE_SCAN_TIMEOUT_MS) {
+                    BleScanner.scan(getApplication()).collect { result ->
+                        found[result.address] = result
+                        _uiState.update { it.copy(scanResults = found.values.toList()) }
+                    }
+                }
+                _uiState.update {
+                    it.copy(
+                        statusMessage = if (found.isEmpty()) {
+                            "Nenhum dispositivo BLE encontrado por perto."
+                        } else {
+                            "${found.size} dispositivo(s) encontrado(s)."
+                        },
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update { it.copy(statusMessage = "Falha ao escanear: ${e.message}") }
+            } finally {
+                _uiState.update { it.copy(scanning = false) }
+            }
+        }
+    }
+
+    fun cancelBleScan() {
+        scanJob?.cancel()
     }
 
     fun toggleStartStop() {
@@ -313,6 +356,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         collectJob?.cancel()
         vibrationJob?.cancel()
+        scanJob?.cancel()
         super.onCleared()
+    }
+
+    private companion object {
+        // Mesma duração usada como default em ble_source.py (scan_devices).
+        const val BLE_SCAN_TIMEOUT_MS = 5000L
     }
 }

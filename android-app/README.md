@@ -31,10 +31,12 @@ Room) e configurar o SDK automaticamente na primeira sincronização.
 Na tela, escolha entre:
 - **Simulação**: gera ângulos sintéticos (mesmos parâmetros do app desktop),
   para desenvolver/testar sem hardware.
-- **Real (BLE)**: informe o endereço MAC do inclinômetro ESP32 (ainda não há
-  tela de scan/pareamento dedicada — meta para uma próxima etapa). O app
-  segue o contrato BLE definido em `datasource/BleContract.kt`, o mesmo
-  implementado no firmware (`firmware/src/BleServer.cpp`).
+- **Real (BLE)**: informe o endereço MAC do inclinômetro ESP32, ou toque em
+  **Escanear** para listar os dispositivos anunciando o serviço BLE do
+  inclinômetro nas proximidades e selecionar um da lista (`datasource/BleScanner.kt`,
+  filtrado por `BleContract.SERVICE_UUID` — equivalente ao "Escanear" do app
+  desktop). O app segue o contrato BLE definido em `datasource/BleContract.kt`,
+  o mesmo implementado no firmware (`firmware/src/BleServer.cpp`).
 
 O indicador de conexão mostra o estado (conectando/conectado/falha), a
 exemplo do app desktop.
