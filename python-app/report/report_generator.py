@@ -53,7 +53,7 @@ def _build_chart_image(readings: list["AngleReading"], events: list["LimitEvent"
 
     ax.set_xlabel("Tempo (s)")
     ax.set_ylabel("Ângulo (°)")
-    ax.set_ylim(-5, 125)
+    ax.set_ylim(-65, 65)
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend(loc="upper right")
     fig.tight_layout()

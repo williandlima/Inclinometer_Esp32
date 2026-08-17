@@ -10,9 +10,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable
 
-# Faixa física do inclinômetro (0-120 graus), usada para clamping/validação.
-ANGLE_MIN_DEG = 0.0
-ANGLE_MAX_DEG = 120.0
+# Faixa física do inclinômetro (-60 a +60 graus), usada para clamping/validação.
+ANGLE_MIN_DEG = -60.0
+ANGLE_MAX_DEG = 60.0
 
 
 @dataclass(frozen=True)

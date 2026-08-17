@@ -118,8 +118,8 @@ datasheet do módulo, não de uma placa específica.
   física ainda pendente**:
   - Montar o MPU6050 com o **eixo X alinhado ao eixo mecânico de giro do
     pan-tilt** (o pino/articulação de elevação), de forma que a rotação de
-    0–120° aconteça no **plano Y-Z** do sensor — é exatamente o par de
-    eixos que `atan2(ay, az)` usa.
+    -60° a +60° (120° de curso total) aconteça no **plano Y-Z** do sensor —
+    é exatamente o par de eixos que `atan2(ay, az)` usa.
   - Motivo: com dois eixos (`atan2`) a sensibilidade da leitura fica quase
     constante em toda a faixa, sem "zona morta" perto de 90° — diferente
     de usar um único eixo (`asin`/`acos`), que perde resolução exatamente
@@ -134,8 +134,9 @@ datasheet do módulo, não de uma placa específica.
     abordagem é adequada sem precisar de fusão com giroscópio.
   - **Confirmação em bancada** (pendente, ao montar o sensor fisicamente):
     gravar `ax, ay, az` brutos enquanto o eixo é movimentado manualmente de
-    0° a 120° — confirma visualmente qual par de eixos varre o arco (um
-    deles deve manter módulo baixo e quase constante: esse é o X, o eixo
+    um extremo ao outro do curso (-60° a +60°) — confirma visualmente qual
+    par de eixos varre o arco (um deles deve manter módulo baixo e quase
+    constante: esse é o X, o eixo
     de giro) e os sinais corretos para o `atan2()` bater com o sentido
     físico (crescente = subindo).
 - **Variante de placa**: esta pinagem assume um ESP32 DevKit clássico

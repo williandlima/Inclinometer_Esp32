@@ -10,12 +10,12 @@ import kotlinx.coroutines.flow.flow
  * Fonte de dados simulada: gera ângulos sintéticos sem hardware real.
  *
  * Usada para desenvolver e testar o app antes do firmware/hardware do ESP32
- * estarem prontos. Gera uma oscilação senoidal dentro da faixa 0-120°, somada
- * a ruído gaussiano, com os mesmos parâmetros padrão do app desktop (Python)
- * para gerar dados comparáveis durante os testes.
+ * estarem prontos. Gera uma oscilação senoidal dentro da faixa -60° a +60°,
+ * somada a ruído gaussiano, com os mesmos parâmetros padrão do app desktop
+ * (Python) para gerar dados comparáveis durante os testes.
  */
 class SimulatedAngleDataSource(
-    private val centerDeg: Double = 60.0,
+    private val centerDeg: Double = 0.0,
     private val amplitudeDeg: Double = 12.0,
     private val periodS: Double = 45.0,
     private val noiseStdDeg: Double = 0.08,

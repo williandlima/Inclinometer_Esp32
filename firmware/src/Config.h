@@ -22,8 +22,8 @@ constexpr int PIN_I2C_SCL = 22;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.0.1";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10001;
+constexpr char FIRMWARE_VERSION[] = "1.0.2";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10002;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -31,7 +31,7 @@ constexpr uint16_t FIRMWARE_VERSION_CODE = 10001;
 constexpr uint8_t MODBUS_SLAVE_ID = 1;
 constexpr uint32_t MODBUS_BAUDRATE = 9600;
 
-constexpr uint16_t REG_ANGLE_INPUT = 0;       // input register: ângulo * ANGLE_SCALE (uint16)
+constexpr uint16_t REG_ANGLE_INPUT = 0;       // input register: ângulo * ANGLE_SCALE (int16 com sinal, faixa -60~+60°)
 constexpr uint16_t COIL_CALIBRATE = 0;        // coil: write true -> zera o eixo de tilt
 constexpr uint16_t COIL_VIBRATION_START = 1;  // coil: write true -> inicia captura de vibração
 constexpr uint16_t REG_FIRMWARE_VERSION = 40; // input register: FIRMWARE_VERSION_CODE (somente leitura)
@@ -67,6 +67,6 @@ constexpr uint32_t BLE_VIBRATION_CHUNK_INTERVAL_MS = 20;  // intervalo entre pac
 // Compartilhados entre os dois transportes
 // ============================================================================
 constexpr float ANGLE_SCALE = 100.0f;  // valor no protocolo = ângulo * ANGLE_SCALE
-constexpr float ANGLE_MIN_DEG = 0.0f;
-constexpr float ANGLE_MAX_DEG = 120.0f;
+constexpr float ANGLE_MIN_DEG = -60.0f;
+constexpr float ANGLE_MAX_DEG = 60.0f;
 constexpr uint16_t VIBRATION_MAX_SAMPLES = 6000;  // limite de memória do buffer de captura

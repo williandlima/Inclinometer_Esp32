@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.0.1`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.0.2`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -62,7 +62,7 @@ restritos diferentes do WROOM-32 clássico assumido aqui.
 A fórmula do ângulo em `AngleSensor.cpp` (`atan2(ay, az)`) assume uma
 orientação de montagem do MPU6050 já **recomendada, mas ainda não
 confirmada fisicamente**: eixo X do sensor alinhado ao eixo mecânico de
-giro do pan-tilt, com a rotação de 0-120° acontecendo no plano Y-Z (os
+giro do pan-tilt, com a rotação de -60° a +60° acontecendo no plano Y-Z (os
 dois eixos usados no `atan2`). Essa combinação mantém a sensibilidade da
 leitura quase constante em toda a faixa — sem a zona de baixa sensibilidade
 que um único eixo teria perto de 90°, o que é essencial para o **Modo
@@ -82,7 +82,7 @@ ponto de vista do `pyserial`).
 
 | Registrador | Tipo | Função |
 |---|---|---|
-| Input reg. 0 | leitura | Ângulo atual * 100 (uint16) |
+| Input reg. 0 | leitura | Ângulo atual * 100 (int16, com sinal, faixa -60~+60°) |
 | Coil 0 | escrita | `true` → calibra (zera o eixo de tilt) |
 | Coil 1 | escrita | `true` → inicia captura de vibração |
 | Holding reg. 10 | escrita | Duração da captura (s) |
@@ -96,7 +96,7 @@ ponto de vista do `pyserial`).
 
 | Characteristic | Propriedade | Função |
 |---|---|---|
-| `6e6e0002-...` (ângulo) | read/notify | Ângulo atual * 100 (uint16 LE), a cada ~200ms |
+| `6e6e0002-...` (ângulo) | read/notify | Ângulo atual * 100 (int16 LE, com sinal, faixa -60~+60°), a cada ~200ms |
 | `6e6e0003-...` (calibrar) | write | Byte `0x01` → calibra |
 | `6e6e0004-...` (config vibração) | write | 4 bytes LE: duração(s) + taxa(Hz) → inicia captura |
 | `6e6e0005-...` (status vibração) | notify | status/progresso/total de amostras |
@@ -132,6 +132,16 @@ hardware físico.
 
 ## Limitações conhecidas / próximos passos
 
+- **[1.0.2]** Faixa de medição mudou de 0°~120° para -60°~+60° (0° agora é
+  a posição calibrada, não mais um extremo mecânico). Isso muda a
+  codificação do ângulo em `REG_ANGLE_INPUT` (Modbus) e na characteristic
+  de ângulo (BLE): antes era sempre não-negativo, agora é `int16` com
+  sinal — os dois apps (`modbus_source.py`/`ble_source.py`,
+  `BleAngleDataSource.kt`) já foram atualizados pra decodificar como
+  valor com sinal. Firmware em si não mudou nada na codificação (o cast
+  pra `uint16_t` já produzia o padrão de bits correto em complemento de
+  dois para valores negativos) — só os limites `ANGLE_MIN_DEG`/
+  `ANGLE_MAX_DEG` em `Config.h`.
 - **[1.0.1]** `BleServer::updateVibrationNotify()` notificava o status
   "pronto" da captura de vibração *antes* de terminar de transmitir todas
   as amostras pela characteristic de dados, e chamava `notify()` sem

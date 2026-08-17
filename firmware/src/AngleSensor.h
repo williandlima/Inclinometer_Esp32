@@ -4,7 +4,7 @@
 
 // Calcula o ângulo de inclinação (tilt) a partir do acelerômetro do
 // MPU6050, usando atan2 entre dois eixos para manter sensibilidade
-// praticamente uniforme em toda a faixa 0-120° — evita a região de baixa
+// praticamente uniforme em toda a faixa -60° a +60° — evita a região de baixa
 // sensibilidade que a leitura de um único eixo teria perto de 90°
 // (ver docs/fluxograma-python-app.md e a discussão do ensaio de vibração).
 //

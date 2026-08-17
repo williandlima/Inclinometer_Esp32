@@ -154,8 +154,8 @@ class BleAngleDataSource(
 
             private fun emitAngleFromBytes(raw: ByteArray) {
                 if (raw.size < 2) return
-                val rawValue = (raw[0].toInt() and 0xFF) or ((raw[1].toInt() and 0xFF) shl 8)
-                val angle = rawValue / BleContract.ANGLE_SCALE
+                val rawValue = ((raw[1].toInt() and 0xFF) shl 8) or (raw[0].toInt() and 0xFF)
+                val angle = rawValue.toShort() / BleContract.ANGLE_SCALE
                 trySend(AngleReading(angleDeg = angle, timestamp = System.currentTimeMillis()))
             }
 

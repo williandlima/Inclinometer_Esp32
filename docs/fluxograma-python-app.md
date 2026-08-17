@@ -7,7 +7,7 @@ mesma arquitetura geral, mas com sua própria implementação em Kotlin).
 
 ## O que o software faz até aqui
 
-- Lê o ângulo do inclinômetro (0–120°) em tempo real, por um de três modos:
+- Lê o ângulo do inclinômetro (-60° a +60°) em tempo real, por um de três modos:
   **Simulação** (dados sintéticos), **USB/Modbus RTU** (cabo direto ao
   ESP32) ou **Bluetooth BLE** — o firmware do ESP32 já implementa os dois
   modos reais (`firmware/`), mas ainda não foi validado contra hardware

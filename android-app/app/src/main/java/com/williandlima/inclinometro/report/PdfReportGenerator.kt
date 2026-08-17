@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
+import com.williandlima.inclinometro.datasource.ANGLE_MAX_DEG
+import com.williandlima.inclinometro.datasource.ANGLE_MIN_DEG
 import com.williandlima.inclinometro.datasource.AngleReading
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.limits.LimitEvent
@@ -125,7 +127,8 @@ object PdfReportGenerator {
         val duration = (tEnd - t0).coerceAtLeast(1L)
 
         fun xFor(timestamp: Long): Float = left + (right - left) * (timestamp - t0).toFloat() / duration
-        fun yFor(angle: Double): Float = bottom - (bottom - top) * (angle / 120.0).toFloat()
+        fun yFor(angle: Double): Float =
+            bottom - (bottom - top) * ((angle - ANGLE_MIN_DEG) / (ANGLE_MAX_DEG - ANGLE_MIN_DEG)).toFloat()
 
         val linePaint = Paint().apply { color = Color.rgb(31, 119, 180); strokeWidth = 2f; isAntiAlias = true }
         var prevX: Float? = null

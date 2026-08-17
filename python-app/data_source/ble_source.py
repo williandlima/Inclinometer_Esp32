@@ -6,7 +6,8 @@ Contrato assumido com o firmware do ESP32 (ainda não implementado nesta
 fase) — o mesmo usado pelo app Android, para manter os transportes
 consistentes:
 - Serviço `SERVICE_UUID`, característica `ANGLE_CHARACTERISTIC_UUID` com
-  notify (e read) de 2 bytes little-endian igual a `angulo * ANGLE_SCALE`.
+  notify (e read) de 2 bytes little-endian (int16, **com sinal**, faixa
+  -60.00° a +60.00°) igual a `angulo * ANGLE_SCALE`.
 - Calibração: escrever o byte `0x01` na característica
   `CALIBRATE_CHARACTERISTIC_UUID` sinaliza ao firmware para zerar o eixo de
   tilt na posição atual (equivalente à coil Modbus usada no modo USB/Modbus RTU).
@@ -58,7 +59,7 @@ def _decode_angle(raw: bytearray | bytes) -> float:
     if len(raw) < 2:
         raise IOError("Resposta BLE inválida (esperado ao menos 2 bytes).")
     raw_value = raw[0] | (raw[1] << 8)
-    return raw_value / ANGLE_SCALE
+    return _to_signed16(raw_value) / ANGLE_SCALE
 
 
 def _to_signed16(raw: int) -> int:

@@ -8,7 +8,8 @@ import java.util.UUID
  * firmware (`firmware/src/BleServer.cpp`), para os transportes ficarem
  * consistentes:
  * - Serviço [SERVICE_UUID], característica [ANGLE_CHARACTERISTIC_UUID] com
- *   notify/read de 2 bytes little-endian igual a `angulo * ANGLE_SCALE`.
+ *   notify/read de 2 bytes little-endian (int16, com sinal, faixa -60° a
+ *   +60°) igual a `angulo * ANGLE_SCALE`.
  * - Calibração: escrever o byte `0x01` em [CALIBRATE_CHARACTERISTIC_UUID]
  *   zera o eixo de tilt na posição atual.
  * - Captura de vibração: escrever 4 bytes little-endian (duração em

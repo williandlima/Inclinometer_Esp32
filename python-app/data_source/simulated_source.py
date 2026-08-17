@@ -1,8 +1,8 @@
 """Fonte de dados simulada: gera ângulos sintéticos sem hardware real.
 
 Usada para desenvolver e testar o app antes do firmware/hardware do ESP32
-estarem prontos. Gera uma oscilação senoidal dentro da faixa 0-120°, somada
-a ruído gaussiano, para se aproximar de uma leitura real de sensor.
+estarem prontos. Gera uma oscilação senoidal dentro da faixa -60° a +60°,
+somada a ruído gaussiano, para se aproximar de uma leitura real de sensor.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from data_source.base import ANGLE_MAX_DEG, ANGLE_MIN_DEG, AngleReading, ErrorCa
 class SimulatedAngleSource(IAngleDataSource):
     def __init__(
         self,
-        center_deg: float = 60.0,
+        center_deg: float = 0.0,
         amplitude_deg: float = 12.0,
         period_s: float = 45.0,
         noise_std_deg: float = 0.08,

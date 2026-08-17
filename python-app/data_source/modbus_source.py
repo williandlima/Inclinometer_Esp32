@@ -1,10 +1,10 @@
 """Fonte de dados real: leitura do ângulo via Modbus RTU, pela porta serial
 USB do ESP32 (conectado direto por cabo — sem RS485).
 
-Contrato assumido com o firmware do ESP32 (ainda não implementado nesta
-fase): o ângulo atual é exposto no registrador de entrada (input register)
-`ANGLE_INPUT_REGISTER`, como inteiro de 16 bits igual a `angulo * SCALE`
-(duas casas decimais de resolução). O rastreamento de mínimo/máximo é feito
+Contrato com o firmware do ESP32: o ângulo atual é exposto no registrador
+de entrada (input register) `ANGLE_INPUT_REGISTER`, como inteiro de 16 bits
+**com sinal** igual a `angulo * SCALE` (duas casas decimais de resolução,
+faixa -60.00° a +60.00°). O rastreamento de mínimo/máximo é feito
 no próprio app (`limits.limit_tracker`), não depende de registradores extras
 no escravo — assim o contrato Modbus fica mínimo e estável mesmo antes do
 firmware existir.
@@ -85,7 +85,7 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
         result = client.read_input_registers(address=ANGLE_INPUT_REGISTER, count=1, slave=slave_id)
         if result.isError():
             raise IOError(str(result))
-        angle_deg = result.registers[0] / ANGLE_SCALE
+        angle_deg = _to_signed16(result.registers[0]) / ANGLE_SCALE
 
         version_result = client.read_input_registers(address=FIRMWARE_VERSION_REGISTER, count=1, slave=slave_id)
         firmware_version = (
@@ -265,8 +265,7 @@ class ModbusAngleSource(IAngleDataSource):
                         )
                     if result.isError():
                         raise IOError(str(result))
-                    raw = result.registers[0]
-                    angle = raw / ANGLE_SCALE
+                    angle = _to_signed16(result.registers[0]) / ANGLE_SCALE
                     on_reading(AngleReading(angle_deg=angle, timestamp=time.time()))
                 except Exception as exc:  # noqa: BLE001 - reporta e segue tentando
                     if on_error:
