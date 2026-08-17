@@ -1,6 +1,11 @@
 """Fonte de dados real: leitura do ângulo via Modbus RTU, pela porta serial
 USB do ESP32 (conectado direto por cabo — sem RS485).
 
+Usa o kwarg `device_id=` do pymodbus (renomeado de `slave=` nas versões mais
+recentes da lib) — por isso `requirements.txt` trava `pymodbus==3.14.0`
+exatamente: sem essa trava, um `pip install` puxando uma versão diferente
+pode voltar a quebrar com `unexpected keyword argument`.
+
 Contrato com o firmware do ESP32: o ângulo atual é exposto no registrador
 de entrada (input register) `ANGLE_INPUT_REGISTER`, como inteiro de 16 bits
 **com sinal** igual a `angulo * SCALE` (duas casas decimais de resolução,
@@ -82,12 +87,12 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
     try:
         if not client.connect():
             raise IOError(f"Não foi possível abrir a porta serial {port}.")
-        result = client.read_input_registers(address=ANGLE_INPUT_REGISTER, count=1, slave=slave_id)
+        result = client.read_input_registers(address=ANGLE_INPUT_REGISTER, count=1, device_id=slave_id)
         if result.isError():
             raise IOError(str(result))
         angle_deg = _to_signed16(result.registers[0]) / ANGLE_SCALE
 
-        version_result = client.read_input_registers(address=FIRMWARE_VERSION_REGISTER, count=1, slave=slave_id)
+        version_result = client.read_input_registers(address=FIRMWARE_VERSION_REGISTER, count=1, device_id=slave_id)
         firmware_version = (
             _decode_firmware_version(version_result.registers[0]) if not version_result.isError() else "?"
         )
@@ -138,7 +143,7 @@ class ModbusAngleSource(IAngleDataSource):
         with self._client_lock:
             if self._client is None:
                 raise RuntimeError("Não conectado ao dispositivo.")
-            result = self._client.write_coil(address=CALIBRATE_COIL, value=True, slave=self._slave_id)
+            result = self._client.write_coil(address=CALIBRATE_COIL, value=True, device_id=self._slave_id)
             if result.isError():
                 raise IOError(str(result))
 
@@ -169,9 +174,9 @@ class ModbusAngleSource(IAngleDataSource):
                 if self._client is None:
                     raise RuntimeError("Não conectado ao dispositivo.")
                 client = self._client
-                r1 = client.write_register(address=VIBRATION_DURATION_REG, value=int(duration_s), slave=self._slave_id)
-                r2 = client.write_register(address=VIBRATION_RATE_REG, value=int(rate_hz), slave=self._slave_id)
-                r3 = client.write_coil(address=VIBRATION_START_COIL, value=True, slave=self._slave_id)
+                r1 = client.write_register(address=VIBRATION_DURATION_REG, value=int(duration_s), device_id=self._slave_id)
+                r2 = client.write_register(address=VIBRATION_RATE_REG, value=int(rate_hz), device_id=self._slave_id)
+                r3 = client.write_coil(address=VIBRATION_START_COIL, value=True, device_id=self._slave_id)
                 if r1.isError() or r2.isError() or r3.isError():
                     raise IOError("Falha ao configurar/iniciar a captura de vibração no dispositivo.")
 
@@ -182,7 +187,7 @@ class ModbusAngleSource(IAngleDataSource):
                     return
                 with self._client_lock:
                     status_result = client.read_input_registers(
-                        address=VIBRATION_STATUS_REG, count=3, slave=self._slave_id
+                        address=VIBRATION_STATUS_REG, count=3, device_id=self._slave_id
                     )
                 if status_result.isError():
                     raise IOError(str(status_result))
@@ -204,12 +209,12 @@ class ModbusAngleSource(IAngleDataSource):
                 block_size = min(VIBRATION_BLOCK_SIZE, sample_count - index)
                 with self._client_lock:
                     cursor_result = client.write_register(
-                        address=VIBRATION_CURSOR_REG, value=index, slave=self._slave_id
+                        address=VIBRATION_CURSOR_REG, value=index, device_id=self._slave_id
                     )
                     if cursor_result.isError():
                         raise IOError(str(cursor_result))
                     block_result = client.read_input_registers(
-                        address=VIBRATION_BLOCK_START_REG, count=block_size, slave=self._slave_id
+                        address=VIBRATION_BLOCK_START_REG, count=block_size, device_id=self._slave_id
                     )
                 if block_result.isError():
                     raise IOError(str(block_result))
@@ -261,7 +266,7 @@ class ModbusAngleSource(IAngleDataSource):
                 try:
                     with self._client_lock:
                         result = client.read_input_registers(
-                            address=ANGLE_INPUT_REGISTER, count=1, slave=self._slave_id
+                            address=ANGLE_INPUT_REGISTER, count=1, device_id=self._slave_id
                         )
                     if result.isError():
                         raise IOError(str(result))
