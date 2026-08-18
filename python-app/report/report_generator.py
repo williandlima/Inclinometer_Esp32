@@ -12,6 +12,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # backend sem display, seguro para gerar imagens em background
 import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -138,6 +139,19 @@ def generate_report(
     doc.build(story)
 
 
+def _apply_reference_grid(ax) -> None:
+    """Grade densa (maior + menor) nos dois eixos, com valores de escala
+    legíveis — para servir de referência de amplitude/tempo ao olhar o
+    gráfico, já que as variações do Modo Vibração costumam ser pequenas."""
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=12))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=10))
+    ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.grid(True, which="major", linestyle="--", linewidth=0.7, alpha=0.5)
+    ax.grid(True, which="minor", linestyle=":", linewidth=0.5, alpha=0.25)
+    ax.tick_params(axis="both", which="major", labelsize=8)
+
+
 def _build_vibration_time_chart_image(readings: list["AngleReading"]) -> Image:
     fig, ax = plt.subplots(figsize=(16, 6))
     t0 = readings[0].timestamp
@@ -146,7 +160,7 @@ def _build_vibration_time_chart_image(readings: list["AngleReading"]) -> Image:
     ax.plot(xs, ys, color="#1f77b4", linewidth=0.8)
     ax.set_xlabel("Tempo (s)")
     ax.set_ylabel("Variação angular em relação à calibração (°)")
-    ax.grid(True, linestyle="--", alpha=0.4)
+    _apply_reference_grid(ax)
     fig.tight_layout()
 
     buf = io.BytesIO()
@@ -161,7 +175,7 @@ def _build_vibration_spectrum_chart_image(freqs: "np.ndarray", magnitudes: "np.n
     ax.plot(freqs, magnitudes, color="#d62728", linewidth=1)
     ax.set_xlabel("Frequência (Hz)")
     ax.set_ylabel("Amplitude (°)")
-    ax.grid(True, linestyle="--", alpha=0.4)
+    _apply_reference_grid(ax)
     fig.tight_layout()
 
     buf = io.BytesIO()
