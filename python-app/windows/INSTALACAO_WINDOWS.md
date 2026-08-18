@@ -51,6 +51,34 @@ Passos (em um Windows com Python instalado):
    destino (pendrive, rede, etc.) e rode `Inclinometro.exe` diretamente
    — não precisa instalar nada nesse computador.
 
+## Opção 3 — Gerar um instalador (Setup.exe) com atalhos e desinstalador
+
+A forma mais próxima de um "programa instalado de verdade": um único
+arquivo `Inclinometro-Setup-1.0.0.exe` que, ao ser executado no computador
+de destino, instala o programa em `Arquivos de Programas`, cria atalho no
+Menu Iniciar (e, opcionalmente, na Área de Trabalho) e registra um
+desinstalador em "Adicionar ou remover programas" — sem precisar de Python
+em nenhum dos dois computadores (o de geração nem o de destino).
+
+**Requisito extra** (só na máquina onde o instalador é **gerado**, uma
+única vez): instalar o [Inno Setup](https://jrsoftware.org/isdl.php)
+(gratuito) — instalação padrão, sem opções especiais.
+
+Passos (em um Windows com Python **e** Inno Setup instalados):
+
+1. Rode `windows\install.bat` (Opção 1, passo 2) se ainda não rodou.
+2. Dê duplo clique em `windows\build_installer.bat`.
+   - Gera o executável autônomo (mesmo processo da Opção 2).
+   - Compila o instalador com o Inno Setup.
+   - Ao final, gera `windows\installer_output\Inclinometro-Setup-1.0.0.exe`.
+3. Copie esse único arquivo `.exe` para o(s) computador(es) de destino e
+   execute — o assistente de instalação cuida do resto. Não precisa
+   instalar Python nem Inno Setup nesses computadores.
+
+Esse arquivo é o mais indicado para distribuir para os usuários finais do
+software (ex: equipe de chão de fábrica); as Opções 1 e 2 continuam úteis
+para desenvolvimento/testes.
+
 ## Observações
 
 - **Antivírus/SmartScreen:** executáveis gerados com PyInstaller às
@@ -59,9 +87,11 @@ Passos (em um Windows com Python instalado):
   isso acontecer, use "Mais informações → Executar assim mesmo" ou
   adicione uma exceção no antivírus. Assinar digitalmente o `.exe` é uma
   opção futura se isso incomodar no ambiente corporativo.
-- **Logo:** a logo da Avibras Aeroco já está versionada em `assets/logo.jpg`
-  e é empacotada automaticamente ao gerar o executável (ver seção
-  "Identidade visual" no `README.md` principal).
+- **Logo/ícone:** a logo da Avibras Aeroco já está versionada em
+  `assets/logo.png` (empacotada automaticamente ao gerar o executável — ver
+  seção "Identidade visual" no `README.md` principal) e um ícone derivado
+  dela em `assets/logo.ico` é usado no `.exe`, no instalador e nos atalhos
+  gerados.
 - **Bluetooth (BLE):** o modo de leitura via Bluetooth usa o adaptador
   Bluetooth nativo do próprio computador (via `bleak`); não precisa de
   dongle extra, mas o computador precisa ter Bluetooth.

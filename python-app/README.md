@@ -15,8 +15,9 @@ pip install -r requirements.txt
 **Windows:** use o pacote de instalação pronto em
 [`windows/`](windows/INSTALACAO_WINDOWS.md) — instala tudo com um duplo
 clique (`windows\install.bat`) e também permite gerar um executável
-autônomo que roda em qualquer computador Windows sem precisar instalar
-Python.
+autônomo, ou um instalador completo (`Setup.exe` com atalhos e
+desinstalador) via `windows\build_installer.bat`, que roda em qualquer
+computador Windows sem precisar instalar Python.
 
 ## Uso
 
