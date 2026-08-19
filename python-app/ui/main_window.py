@@ -2,6 +2,7 @@
 limites (mín/máx), e ações de reset/relatório."""
 from __future__ import annotations
 
+import dataclasses
 import datetime as _dt
 import os
 import threading
@@ -27,7 +28,7 @@ from data_source.modbus_source import ModbusAngleSource
 from data_source.simulated_source import SimulatedAngleSource
 from limits.history_store import HistoryStore
 from limits.limit_tracker import LimitTracker
-from limits.vibration_stats import compute_fft, compute_stats
+from limits.vibration_stats import compute_fft, compute_stats, find_dominant_peak
 from report.report_generator import generate_report, generate_vibration_report
 from ui.settings_dialog import AppSettings, SettingsDialog
 from ui.vibration_dialog import VibrationConfigDialog, VibrationResultDialog
@@ -499,6 +500,14 @@ class MainWindow(QMainWindow):
         capture_id = self._history.save_vibration_capture(self._settings.mode, duration_s, rate_hz, readings)
         stats = compute_stats(readings)
         freqs, magnitudes = compute_fft(readings, rate_hz)
+        peak = find_dominant_peak(freqs, magnitudes)
+        if peak is not None:
+            stats = dataclasses.replace(
+                stats,
+                dominant_freq_hz=peak.freq_hz,
+                dominant_amplitude_deg=peak.amplitude_deg,
+                dominant_snr_db=peak.snr_db,
+            )
         self.statusBar().showMessage("Captura de vibração concluída.", 5000)
 
         result_dialog = VibrationResultDialog(stats, self)

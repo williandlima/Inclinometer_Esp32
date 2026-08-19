@@ -170,12 +170,25 @@ def _build_vibration_time_chart_image(readings: list["AngleReading"]) -> Image:
     return Image(buf, width=17 * cm, height=6.5 * cm)
 
 
-def _build_vibration_spectrum_chart_image(freqs: "np.ndarray", magnitudes: "np.ndarray") -> Image:
+def _build_vibration_spectrum_chart_image(
+    freqs: "np.ndarray", magnitudes: "np.ndarray", stats: "VibrationStats"
+) -> Image:
     fig, ax = plt.subplots(figsize=(16, 6))
     ax.plot(freqs, magnitudes, color="#d62728", linewidth=1)
     ax.set_xlabel("Frequência (Hz)")
     ax.set_ylabel("Amplitude (°)")
     _apply_reference_grid(ax)
+    if stats.dominant_freq_hz is not None:
+        ax.axvline(stats.dominant_freq_hz, color="#2ca02c", linestyle="--", linewidth=1.2, alpha=0.8)
+        ax.annotate(
+            f"{stats.dominant_freq_hz:.2f} Hz\n{stats.dominant_amplitude_deg:.3f}°",
+            xy=(stats.dominant_freq_hz, stats.dominant_amplitude_deg),
+            xytext=(8, 8),
+            textcoords="offset points",
+            color="#2ca02c",
+            fontsize=9,
+            fontweight="bold",
+        )
     fig.tight_layout()
 
     buf = io.BytesIO()
@@ -221,6 +234,15 @@ def generate_vibration_report(
         ["RMS", f"{stats.rms_deg:.3f}°"],
         ["Pico a pico", f"{stats.peak_to_peak_deg:.3f}°"],
         ["Mínimo / Máximo", f"{stats.min_deg:.3f}° / {stats.max_deg:.3f}°"],
+        [
+            "Frequência dominante",
+            (
+                f"{stats.dominant_freq_hz:.2f} Hz  "
+                f"(amplitude {stats.dominant_amplitude_deg:.3f}°, SNR {stats.dominant_snr_db:.1f} dB)"
+                if stats.dominant_freq_hz is not None
+                else "nenhum pico confiável identificado (sinal compatível com ruído)"
+            ),
+        ],
     ]
     summary_table = Table(summary_rows, colWidths=[7 * cm, 9 * cm])
     summary_table.setStyle(
@@ -241,6 +263,6 @@ def generate_vibration_report(
     story.append(Spacer(1, 0.8 * cm))
 
     story.append(Paragraph("Espectro de frequência (FFT)", styles["Heading2"]))
-    story.append(_build_vibration_spectrum_chart_image(freqs, magnitudes))
+    story.append(_build_vibration_spectrum_chart_image(freqs, magnitudes, stats))
 
     doc.build(story)

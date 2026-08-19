@@ -66,13 +66,23 @@ class VibrationResultDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
+        if stats.dominant_freq_hz is not None:
+            peak_line = (
+                f"Frequência dominante: {stats.dominant_freq_hz:.2f} Hz "
+                f"(amplitude {stats.dominant_amplitude_deg:.3f}°, "
+                f"SNR {stats.dominant_snr_db:.1f} dB)"
+            )
+        else:
+            peak_line = "Frequência dominante: nenhum pico confiável identificado (sinal compatível com ruído)."
+
         summary = (
             f"Amostras: {stats.n_samples}  (duração efetiva: {stats.duration_s:.2f} s)\n\n"
             f"Média: {stats.mean_deg:.3f}°\n"
             f"Desvio padrão: {stats.std_dev_deg:.3f}°\n"
             f"RMS: {stats.rms_deg:.3f}°\n"
             f"Pico a pico: {stats.peak_to_peak_deg:.3f}°\n"
-            f"Mínimo / Máximo: {stats.min_deg:.3f}° / {stats.max_deg:.3f}°"
+            f"Mínimo / Máximo: {stats.min_deg:.3f}° / {stats.max_deg:.3f}°\n\n"
+            f"{peak_line}"
         )
         label = QLabel(summary)
         layout.addWidget(label)

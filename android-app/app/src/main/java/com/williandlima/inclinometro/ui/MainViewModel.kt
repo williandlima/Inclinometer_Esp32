@@ -378,8 +378,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val captureId = repository.saveVibrationCapture(mode, durationS, rateHz, readings)
-                val stats = VibrationStatsCalculator.computeStats(readings)
+                val baseStats = VibrationStatsCalculator.computeStats(readings)
                 val (freqs, magnitudes) = VibrationStatsCalculator.computeFft(readings, rateHz)
+                val stats = VibrationStatsCalculator.withDominantPeak(baseStats, freqs, magnitudes)
 
                 lastVibrationCaptureId = captureId
                 lastVibrationReadings = readings
@@ -412,7 +413,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val readings = lastVibrationReadings
         if (readings.isEmpty()) return null
         val captureInfo = repository.listVibrationCaptures().firstOrNull { it.id == captureId } ?: return null
-        val stats = VibrationStatsCalculator.computeStats(readings)
+        val baseStats = VibrationStatsCalculator.computeStats(readings)
+        val stats = VibrationStatsCalculator.withDominantPeak(baseStats, lastVibrationFreqsHz, lastVibrationMagnitudes)
         return PdfReportGenerator.generateVibrationReport(
             getApplication(),
             captureInfo,

@@ -70,11 +70,22 @@ execução (habilite calibrando a posição de referência antes, com o botão
    50Hz) da captura.
 2. O app mostra o progresso enquanto a captura acontece (pode ser cancelada).
 3. Ao final, mostra um resumo estatístico: **desvio padrão, RMS, pico a
-   pico, mínimo e máximo**.
+   pico, mínimo, máximo e a frequência dominante** (com amplitude e SNR —
+   ou "nenhum pico confiável" se o sinal for compatível com ruído).
 4. Opcionalmente, gera um **relatório em PDF** próprio, com o gráfico da
    variação angular no tempo e o **espectro de frequência (FFT)** — útil
    para identificar uma eventual frequência de ressonância dominante (ex:
-   balanço do mastro sob vento).
+   balanço do mastro sob vento), com a frequência dominante marcada no
+   gráfico.
+
+A análise espectral (`limits/vibration_stats.py`) segue um pipeline padrão
+de processamento de sinais para o resultado ser confiável e fácil de ler:
+remoção de tendência linear, janela de Hann (reduz vazamento espectral),
+amplitude de um lado só corrigida (valor em graus bate com a amplitude
+física real da oscilação) e detecção do pico dominante com interpolação
+parabólica (sub-bin) e um limiar de SNR que se ajusta ao número de bins do
+espectro (evita falso positivo em sinais só com ruído). O app Android usa
+exatamente o mesmo pipeline (`limits/Fft.kt`).
 
 Cada captura é salva separada das sessões de monitoramento contínuo no
 histórico (`limits/history_store.py`), para não misturar os dois tipos de

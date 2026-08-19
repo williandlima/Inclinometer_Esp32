@@ -14,6 +14,9 @@ data class VibrationStats(
     val peakToPeakDeg: Double,
     val minDeg: Double,
     val maxDeg: Double,
+    val dominantFreqHz: Double? = null,
+    val dominantAmplitudeDeg: Double? = null,
+    val dominantSnrDb: Double? = null,
 )
 
 object VibrationStatsCalculator {
@@ -38,10 +41,23 @@ object VibrationStatsCalculator {
         )
     }
 
-    /** Retorna `(frequências_hz, magnitude)` do espectro da variação angular. */
+    /** Retorna `(frequências_hz, amplitude_graus)` do espectro da variação angular. */
     fun computeFft(readings: List<AngleReading>, rateHz: Int): Pair<DoubleArray, DoubleArray> {
         require(readings.isNotEmpty()) { "Nenhuma amostra na captura." }
         val values = readings.map { it.angleDeg }.toDoubleArray()
         return Fft.computeSpectrum(values, rateHz.toDouble())
+    }
+
+    /** Retorna [stats] com os campos de pico dominante preenchidos a partir
+     * do espectro já calculado (ou zerados, se nenhum pico for confiável).
+     * A frequência dominante em si é interna a [Fft] — só os campos
+     * (públicos, tipos primitivos) chegam a [VibrationStats]. */
+    fun withDominantPeak(stats: VibrationStats, freqsHz: DoubleArray, magnitudes: DoubleArray): VibrationStats {
+        val peak = Fft.findDominantPeak(freqsHz, magnitudes)
+        return stats.copy(
+            dominantFreqHz = peak?.freqHz,
+            dominantAmplitudeDeg = peak?.amplitudeDeg,
+            dominantSnrDb = peak?.snrDb,
+        )
     }
 }

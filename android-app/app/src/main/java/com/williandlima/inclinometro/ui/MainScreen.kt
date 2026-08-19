@@ -338,6 +338,19 @@ private fun VibrationResultDialog(
                 Text("RMS: %.3f°".format(stats.rmsDeg))
                 Text("Pico a pico: %.3f°".format(stats.peakToPeakDeg))
                 Text("Mínimo / Máximo: %.3f° / %.3f°".format(stats.minDeg, stats.maxDeg))
+                Spacer(modifier = Modifier.height(8.dp))
+                val dominantFreq = stats.dominantFreqHz
+                if (dominantFreq != null) {
+                    Text(
+                        "Frequência dominante: %.2f Hz (amplitude %.3f°, SNR %.1f dB)".format(
+                            dominantFreq,
+                            stats.dominantAmplitudeDeg ?: 0.0,
+                            stats.dominantSnrDb ?: 0.0,
+                        )
+                    )
+                } else {
+                    Text("Frequência dominante: nenhum pico confiável identificado (sinal compatível com ruído).")
+                }
             }
         },
         confirmButton = { TextButton(onClick = onSaveReport) { Text("Salvar relatório PDF") } },

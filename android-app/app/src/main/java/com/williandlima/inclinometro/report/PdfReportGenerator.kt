@@ -235,6 +235,11 @@ object PdfReportGenerator {
             "RMS" to "%.3f°".format(stats.rmsDeg),
             "Pico a pico" to "%.3f°".format(stats.peakToPeakDeg),
             "Mínimo / Máximo" to "%.3f° / %.3f°".format(stats.minDeg, stats.maxDeg),
+            "Frequência dominante" to (
+                stats.dominantFreqHz?.let {
+                    "%.2f Hz (amplitude %.3f°, SNR %.1f dB)".format(it, stats.dominantAmplitudeDeg ?: 0.0, stats.dominantSnrDb ?: 0.0)
+                } ?: "nenhum pico confiável (sinal compatível com ruído)"
+            ),
         )
         for ((label, value) in summaryRows) {
             canvas.drawText("$label:", MARGIN, y, labelPaint)
@@ -250,7 +255,7 @@ object PdfReportGenerator {
 
         canvas.drawText("Espectro de frequência (FFT)", MARGIN, y, headingPaint)
         y += 12f
-        drawSpectrumChart(canvas, freqsHz, magnitudes, top = y, bottom = y + 200f)
+        drawSpectrumChart(canvas, freqsHz, magnitudes, stats, top = y, bottom = y + 200f)
 
         document.finishPage(page)
 
@@ -301,6 +306,7 @@ object PdfReportGenerator {
         canvas: android.graphics.Canvas,
         freqsHz: DoubleArray,
         magnitudes: DoubleArray,
+        stats: VibrationStats,
         top: Float,
         bottom: Float,
     ) {
@@ -326,6 +332,28 @@ object PdfReportGenerator {
             if (prevX != null && prevY != null) canvas.drawLine(prevX, prevY, x, y, linePaint)
             prevX = x
             prevY = y
+        }
+
+        val peakFreq = stats.dominantFreqHz
+        if (peakFreq != null && peakFreq <= maxFreq) {
+            val peakX = xFor(peakFreq)
+            val peakPaint = Paint().apply {
+                color = Color.rgb(44, 160, 44)
+                strokeWidth = 1.2f
+                pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f, 4f), 0f)
+            }
+            canvas.drawLine(peakX, top, peakX, bottom, peakPaint)
+            val labelPaint = Paint().apply {
+                color = Color.rgb(44, 160, 44)
+                textSize = 10f
+                isFakeBoldText = true
+            }
+            canvas.drawText(
+                "%.2f Hz / %.3f°".format(peakFreq, stats.dominantAmplitudeDeg ?: 0.0),
+                (peakX + 4f).coerceAtMost(right - 90f),
+                top + 12f,
+                labelPaint,
+            )
         }
     }
 }

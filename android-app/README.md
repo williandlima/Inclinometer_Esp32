@@ -52,10 +52,15 @@ equivalente em modo simulação).
 
 O botão **Modo Vibração** faz uma captura em alta taxa configurável
 (duração + taxa de amostragem), útil para caracterizar variação angular por
-vento/vibração — ao final, mostra desvio padrão/RMS/pico-a-pico e permite
-salvar um relatório em PDF com o gráfico no tempo e o espectro de frequência
-(FFT). Cada captura fica salva separada das sessões de monitoramento
-contínuo no histórico.
+vento/vibração — ao final, mostra desvio padrão/RMS/pico-a-pico e a
+**frequência dominante** (amplitude + SNR, com detecção sub-bin por
+interpolação parabólica; "nenhum pico confiável" se o sinal for compatível
+com ruído), e permite salvar um relatório em PDF com o gráfico no tempo e o
+espectro de frequência (FFT), com o pico marcado. Cada captura fica salva
+separada das sessões de monitoramento contínuo no histórico. Pipeline da
+FFT (`limits/Fft.kt`) equivalente ao do app desktop
+(`limits/vibration_stats.py`): tendência linear removida, janela de Hann,
+amplitude corrigida e SNR adaptativo ao número de bins.
 
 O modo real (BLE) segue o mesmo contrato implementado no firmware do ESP32
 (`firmware/`), mas ainda não foi validado contra hardware físico.
