@@ -19,6 +19,8 @@ from reportlab.lib.units import cm
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
 
+from limits.limit_tracker import PAN_AXIS, TILT_AXIS
+
 if TYPE_CHECKING:
     from data_source.base import AngleReading
     from limits.history_store import SessionInfo, VibrationCaptureInfo
@@ -32,29 +34,49 @@ _MODE_LABELS = {
     "ble": "Real (Bluetooth BLE)",
 }
 
+# Cada eixo tem seu próprio rótulo e escala fixa no gráfico. A escala é fixa
+# de propósito: deixar o matplotlib autoescalar faria uma variação de décimos
+# de grau ocupar o gráfico inteiro e parecer enorme.
+_AXIS_CHART_CONFIG = {
+    TILT_AXIS: ("Inclinação", "Inclinação (°)", "#1f77b4", (-65, 65)),
+    PAN_AXIS: ("Azimute", "Azimute (°)", "#9467bd", (-95, 95)),
+}
+
 
 def _fmt_dt(ts: float) -> str:
     return _dt.datetime.fromtimestamp(ts).strftime("%d/%m/%Y %H:%M:%S")
 
 
-def _build_chart_image(readings: list["AngleReading"], events: list["LimitEvent"]) -> Image:
-    fig, ax = plt.subplots(figsize=(16, 8))
-    if readings:
-        t0 = readings[0].timestamp
-        xs = [(r.timestamp - t0) for r in readings]
-        ys = [r.angle_deg for r in readings]
-        ax.plot(xs, ys, color="#1f77b4", linewidth=1, label="Ângulo")
+def _axis_value(reading: "AngleReading", axis: str) -> float | None:
+    return reading.pan_deg if axis == PAN_AXIS else reading.angle_deg
 
-        mins_x = [(e.reading.timestamp - t0) for e in events if e.kind == "min"]
-        mins_y = [e.reading.angle_deg for e in events if e.kind == "min"]
-        maxs_x = [(e.reading.timestamp - t0) for e in events if e.kind == "max"]
-        maxs_y = [e.reading.angle_deg for e in events if e.kind == "max"]
+
+def _build_chart_image(
+    readings: list["AngleReading"], events: list["LimitEvent"], axis: str = TILT_AXIS
+) -> Image:
+    series_label, y_label, color, y_limits = _AXIS_CHART_CONFIG[axis]
+    fig, ax = plt.subplots(figsize=(16, 8))
+
+    # Leituras sem valor neste eixo são puladas (não viram zero na curva).
+    points = [(r, _axis_value(r, axis)) for r in readings]
+    points = [(r, v) for r, v in points if v is not None]
+    if points:
+        t0 = readings[0].timestamp
+        xs = [(r.timestamp - t0) for r, _ in points]
+        ys = [v for _, v in points]
+        ax.plot(xs, ys, color=color, linewidth=1, label=series_label)
+
+        axis_events = [e for e in events if e.axis == axis]
+        mins_x = [(e.reading.timestamp - t0) for e in axis_events if e.kind == "min"]
+        mins_y = [e.value_deg for e in axis_events if e.kind == "min"]
+        maxs_x = [(e.reading.timestamp - t0) for e in axis_events if e.kind == "max"]
+        maxs_y = [e.value_deg for e in axis_events if e.kind == "max"]
         ax.scatter(mins_x, mins_y, color="#d62728", marker="v", zorder=3, label="Novo mínimo")
         ax.scatter(maxs_x, maxs_y, color="#2ca02c", marker="^", zorder=3, label="Novo máximo")
 
     ax.set_xlabel("Tempo (s)")
-    ax.set_ylabel("Ângulo (°)")
-    ax.set_ylim(-65, 65)
+    ax.set_ylabel(y_label)
+    ax.set_ylim(*y_limits)
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend(loc="upper right")
     fig.tight_layout()
@@ -87,14 +109,27 @@ def generate_report(
     n_readings = len(readings)
     angle_min = min((r.angle_deg for r in readings), default=None)
     angle_max = max((r.angle_deg for r in readings), default=None)
+    pan_values = [r.pan_deg for r in readings if r.pan_deg is not None]
+    pan_min = min(pan_values, default=None)
+    pan_max = max(pan_values, default=None)
+
+    def _fmt_range(low: float | None, high: float | None) -> str:
+        if low is None or high is None:
+            return "-"
+        return f"{low:.2f}°  /  {high:.2f}°"
 
     summary_rows = [
         ["Modo", mode_label],
         ["Início", started],
         ["Fim", ended],
         ["Leituras registradas", str(n_readings)],
-        ["Ângulo mínimo observado", f"{angle_min:.2f}°" if angle_min is not None else "-"],
-        ["Ângulo máximo observado", f"{angle_max:.2f}°" if angle_max is not None else "-"],
+        ["Inclinação mín. / máx. observada", _fmt_range(angle_min, angle_max)],
+        [
+            "Azimute mín. / máx. observado",
+            _fmt_range(pan_min, pan_max)
+            if pan_values
+            else "não registrado (firmware sem eixo de azimute)",
+        ],
     ]
     summary_table = Table(summary_rows, colWidths=[6 * cm, 10 * cm])
     summary_table.setStyle(
@@ -110,17 +145,33 @@ def generate_report(
     story.append(summary_table)
     story.append(Spacer(1, 0.8 * cm))
 
-    story.append(Paragraph("Ângulo ao longo do tempo", styles["Heading2"]))
-    story.append(_build_chart_image(readings, events))
+    story.append(Paragraph("Inclinação (tilt) ao longo do tempo", styles["Heading2"]))
+    story.append(_build_chart_image(readings, events, TILT_AXIS))
+    story.append(Spacer(1, 0.8 * cm))
+
+    story.append(Paragraph("Azimute (pan) ao longo do tempo", styles["Heading2"]))
+    if pan_values:
+        story.append(_build_chart_image(readings, events, PAN_AXIS))
+    else:
+        story.append(
+            Paragraph(
+                "Nenhum valor de azimute foi registrado nesta sessão — o ESP32 conectado"
+                " estava com firmware anterior à v1.2.0, que mede apenas a inclinação.",
+                styles["Normal"],
+            )
+        )
     story.append(Spacer(1, 0.8 * cm))
 
     story.append(Paragraph("Histórico de limites atingidos", styles["Heading2"]))
     if events:
-        event_rows = [["#", "Tipo", "Ângulo", "Data/Hora"]]
+        event_rows = [["#", "Eixo", "Tipo", "Valor", "Data/Hora"]]
         for i, e in enumerate(events, start=1):
             tipo = "Novo mínimo" if e.kind == "min" else "Novo máximo"
-            event_rows.append([str(i), tipo, f"{e.reading.angle_deg:.2f}°", _fmt_dt(e.reading.timestamp)])
-        events_table = Table(event_rows, colWidths=[1.5 * cm, 4 * cm, 3 * cm, 6 * cm])
+            eixo = "Azimute" if e.axis == PAN_AXIS else "Inclinação"
+            event_rows.append(
+                [str(i), eixo, tipo, f"{e.value_deg:.2f}°", _fmt_dt(e.reading.timestamp)]
+            )
+        events_table = Table(event_rows, colWidths=[1.2 * cm, 3 * cm, 3.5 * cm, 2.8 * cm, 5 * cm])
         events_table.setStyle(
             TableStyle(
                 [

@@ -6,6 +6,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,7 +44,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
-import com.williandlima.inclinometro.datasource.AngleReading
 import com.williandlima.inclinometro.datasource.BleScanner
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.limits.VibrationStats
@@ -74,10 +75,21 @@ fun MainScreen(viewModel: MainViewModel) {
         targetValue = if (state.maxFlash) AmberFlash else MaterialTheme.colorScheme.surfaceVariant,
         label = "maxCardColor",
     )
+    val panMinCardColor by animateColorAsState(
+        targetValue = if (state.panMinFlash) AmberFlash else MaterialTheme.colorScheme.surfaceVariant,
+        label = "panMinCardColor",
+    )
+    val panMaxCardColor by animateColorAsState(
+        targetValue = if (state.panMaxFlash) AmberFlash else MaterialTheme.colorScheme.surfaceVariant,
+        label = "panMaxCardColor",
+    )
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            // Rolável: com os dois eixos empilhados, o conteúdo passa da
+            // altura da tela em celulares menores.
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -93,31 +105,33 @@ fun MainScreen(viewModel: MainViewModel) {
 
         Spacer(Modifier.height(16.dp))
 
-        Text(
-            text = state.displayAngle?.let { "%.2f°".format(it) } ?: "--.--°",
-            style = MaterialTheme.typography.displayLarge,
-            fontWeight = FontWeight.Bold,
+        AxisPanel(
+            title = "Inclinação (tilt)",
+            displayValue = state.displayAngle,
+            note = null,
+            minValue = state.minReading?.angleDeg,
+            minTimestamp = state.minReading?.timestamp,
+            maxValue = state.maxReading?.angleDeg,
+            maxTimestamp = state.maxReading?.timestamp,
+            minCardColor = minCardColor,
+            maxCardColor = maxCardColor,
         )
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            LimitCard(
-                title = "Mínimo",
-                reading = state.minReading,
-                containerColor = minCardColor,
-                modifier = Modifier.weight(1f),
-            )
-            LimitCard(
-                title = "Máximo",
-                reading = state.maxReading,
-                containerColor = maxCardColor,
-                modifier = Modifier.weight(1f),
-            )
-        }
+        AxisPanel(
+            title = "Azimute (pan)",
+            displayValue = state.displayPan,
+            // Deixa explícito que o eixo está sem dado, em vez de o usuário
+            // achar que o azimute está travado em zero.
+            note = if (state.running && !state.panAvailable) "firmware sem este eixo" else null,
+            minValue = state.panMinReading?.panDeg,
+            minTimestamp = state.panMinReading?.timestamp,
+            maxValue = state.panMaxReading?.panDeg,
+            maxTimestamp = state.panMaxReading?.timestamp,
+            minCardColor = panMinCardColor,
+            maxCardColor = panMaxCardColor,
+        )
 
         Spacer(Modifier.height(24.dp))
 
@@ -358,10 +372,61 @@ private fun VibrationResultDialog(
     )
 }
 
+/**
+ * Painel de um eixo: título, valor grande em tempo real e o par de caixas de
+ * mínimo/máximo. Os dois eixos usam o mesmo composable, empilhados — lado a
+ * lado não caberia com legibilidade na largura de um celular.
+ */
+@Composable
+private fun AxisPanel(
+    title: String,
+    displayValue: Double?,
+    note: String?,
+    minValue: Double?,
+    minTimestamp: Long?,
+    maxValue: Double?,
+    maxTimestamp: Long?,
+    minCardColor: Color,
+    maxCardColor: Color,
+) {
+    Text(title, style = MaterialTheme.typography.titleMedium, color = Orange, fontWeight = FontWeight.Bold)
+    Text(
+        text = displayValue?.let { "%.2f°".format(it) } ?: "--.--°",
+        style = MaterialTheme.typography.displayMedium,
+        fontWeight = FontWeight.Bold,
+    )
+    if (note != null) {
+        Text(note, style = MaterialTheme.typography.bodySmall)
+    }
+
+    Spacer(Modifier.height(8.dp))
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        LimitCard(
+            title = "Mínimo",
+            valueDeg = minValue,
+            timestamp = minTimestamp,
+            containerColor = minCardColor,
+            modifier = Modifier.weight(1f),
+        )
+        LimitCard(
+            title = "Máximo",
+            valueDeg = maxValue,
+            timestamp = maxTimestamp,
+            containerColor = maxCardColor,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
 @Composable
 private fun LimitCard(
     title: String,
-    reading: AngleReading?,
+    valueDeg: Double?,
+    timestamp: Long?,
     containerColor: Color,
     modifier: Modifier = Modifier,
 ) {
@@ -375,10 +440,10 @@ private fun LimitCard(
         ) {
             Text(title, fontWeight = FontWeight.Bold)
             Text(
-                reading?.let { "%.2f°".format(it.angleDeg) } ?: "--.--°",
+                valueDeg?.let { "%.2f°".format(it) } ?: "--.--°",
                 style = MaterialTheme.typography.titleLarge,
             )
-            Text(reading?.let { timeFormatter.format(Date(it.timestamp)) } ?: "")
+            Text(timestamp?.let { timeFormatter.format(Date(it)) } ?: "")
         }
     }
 }

@@ -148,8 +148,13 @@ class SettingsDialog(QDialog):
             else:
                 return
 
+            pan_text = (
+                f", azimute {result.pan_deg:.2f}°"
+                if result.pan_deg is not None
+                else ", sem eixo de azimute"
+            )
             self.test_result_label.setText(
-                f"✓ ESP32 respondeu — ângulo atual: {result.angle_deg:.2f}° "
+                f"✓ ESP32 respondeu — inclinação {result.angle_deg:.2f}°{pan_text} "
                 f"(firmware v{result.firmware_version})"
             )
             self.test_result_label.setStyleSheet("color: #2e7d32; font-weight: bold;")

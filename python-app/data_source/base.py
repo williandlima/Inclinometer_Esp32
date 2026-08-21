@@ -10,15 +10,32 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable
 
-# Faixa física do inclinômetro (-60 a +60 graus), usada para clamping/validação.
+# Faixa física do eixo de inclinação (-60 a +60 graus), usada para
+# clamping/validação.
 ANGLE_MIN_DEG = -60.0
 ANGLE_MAX_DEG = 60.0
+
+# Faixa do eixo de azimute (pan). Espelha PAN_MIN_DEG/PAN_MAX_DEG de
+# firmware/src/Config.h — ainda é um placeholder ali, a ajustar quando a
+# mecânica do pan estiver definida.
+PAN_MIN_DEG = -90.0
+PAN_MAX_DEG = 90.0
 
 
 @dataclass(frozen=True)
 class AngleReading:
+    """Uma leitura dos eixos do inclinômetro.
+
+    `pan_deg` é opcional: fica `None` quando a fonte não fornece azimute —
+    caso de um ESP32 com firmware anterior à v1.2.0, que não expõe o
+    registrador/characteristic de pan. Todo o resto do app (limites,
+    histórico, relatório) trata `None` como "este eixo não foi medido" e
+    simplesmente o ignora, em vez de assumir zero.
+    """
+
     angle_deg: float
     timestamp: float  # segundos desde epoch (time.time())
+    pan_deg: float | None = None
 
 
 ReadingCallback = Callable[[AngleReading], None]
@@ -49,7 +66,11 @@ class IAngleDataSource(ABC):
         return False
 
     def calibrate(self) -> None:
-        """Zera o eixo de tilt do acelerômetro na posição atual.
+        """Zera os dois eixos (tilt e pan) na posição atual.
+
+        É uma ação só, de propósito: o firmware zera tilt e pan juntos no
+        mesmo comando (`COIL_CALIBRATE`/`CHAR_CALIBRATE_UUID`), então a UI
+        expõe um único botão "Calibrar".
 
         Chamada de forma síncrona (bloqueante) pelo chamador; fontes que
         suportam calibração devem sobrescrever este método. Levanta

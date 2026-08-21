@@ -46,6 +46,11 @@ class BleAngleDataSource(
     private var calibrateCharacteristic: BluetoothGattCharacteristic? = null
     private var vibrationConfigCharacteristic: BluetoothGattCharacteristic? = null
 
+    // Último azimute notificado, anexado à próxima leitura de tilt. Fica
+    // `null` até a primeira notificação de pan chegar — e para sempre, se o
+    // firmware for anterior à v1.2.0 e não tiver esse eixo.
+    @Volatile private var lastPanDeg: Double? = null
+
     private var pendingWriteContinuation: CancellableContinuation<Unit>? = null
     private var vibrationStatusListener: ((status: Int, progress: Int, totalSamples: Int) -> Unit)? = null
     private var vibrationDataListener: ((startIndex: Int, samples: ShortArray) -> Unit)? = null
@@ -99,10 +104,14 @@ class BleAngleDataSource(
                     service.getCharacteristic(BleContract.VIBRATION_CONFIG_CHARACTERISTIC_UUID)
                 val vibrationStatusChar = service.getCharacteristic(BleContract.VIBRATION_STATUS_CHARACTERISTIC_UUID)
                 val vibrationDataChar = service.getCharacteristic(BleContract.VIBRATION_DATA_CHARACTERISTIC_UUID)
+                // Ausente em firmware anterior à v1.2.0: nesse caso o app
+                // segue só com a inclinação, em vez de derrubar a conexão.
+                val panChar = service.getCharacteristic(BleContract.PAN_CHARACTERISTIC_UUID)
 
                 // Enfileiradas: ver nota da classe sobre operações GATT
                 // seriais no Android.
                 enqueueGattOperation { enableNotify(g, angleCharacteristic) }
+                panChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
                 vibrationStatusChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
                 vibrationDataChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
             }
@@ -132,6 +141,9 @@ class BleAngleDataSource(
                 val raw = characteristic.value ?: return
                 when (characteristic.uuid) {
                     BleContract.ANGLE_CHARACTERISTIC_UUID -> emitAngleFromBytes(raw)
+                    // Só sobrescreve com um valor válido: uma notificação
+                    // malformada não deve apagar o último azimute conhecido.
+                    BleContract.PAN_CHARACTERISTIC_UUID -> decodeAngle(raw)?.let { lastPanDeg = it }
                     BleContract.VIBRATION_STATUS_CHARACTERISTIC_UUID -> handleVibrationStatus(raw)
                     BleContract.VIBRATION_DATA_CHARACTERISTIC_UUID -> handleVibrationData(raw)
                 }
@@ -152,11 +164,23 @@ class BleAngleDataSource(
                 processNextGattOperation()
             }
 
-            private fun emitAngleFromBytes(raw: ByteArray) {
-                if (raw.size < 2) return
+            private fun decodeAngle(raw: ByteArray): Double? {
+                if (raw.size < 2) return null
                 val rawValue = ((raw[1].toInt() and 0xFF) shl 8) or (raw[0].toInt() and 0xFF)
-                val angle = rawValue.toShort() / BleContract.ANGLE_SCALE
-                trySend(AngleReading(angleDeg = angle, timestamp = System.currentTimeMillis()))
+                return rawValue.toShort() / BleContract.ANGLE_SCALE
+            }
+
+            private fun emitAngleFromBytes(raw: ByteArray) {
+                val angle = decodeAngle(raw) ?: return
+                // A notificação de tilt é o gatilho da leitura; o pan entra
+                // com o último valor recebido — ver [BleContract].
+                trySend(
+                    AngleReading(
+                        angleDeg = angle,
+                        timestamp = System.currentTimeMillis(),
+                        panDeg = lastPanDeg,
+                    )
+                )
             }
 
             private fun handleVibrationStatus(raw: ByteArray) {
@@ -193,6 +217,7 @@ class BleAngleDataSource(
             gatt = null
             calibrateCharacteristic = null
             vibrationConfigCharacteristic = null
+            lastPanDeg = null
             gattOperationQueue.clear()
             gattOperationInFlight = false
         }

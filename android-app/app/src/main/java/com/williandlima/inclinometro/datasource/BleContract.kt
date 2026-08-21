@@ -10,8 +10,17 @@ import java.util.UUID
  * - Serviço [SERVICE_UUID], característica [ANGLE_CHARACTERISTIC_UUID] com
  *   notify/read de 2 bytes little-endian (int16, com sinal, faixa -60° a
  *   +60°) igual a `angulo * ANGLE_SCALE`.
+ * - Azimute (pan): [PAN_CHARACTERISTIC_UUID], mesmo formato de 2 bytes da
+ *   característica de ângulo, notificada na mesma cadência. É separada da de
+ *   tilt de propósito — assim um app antigo, que só conhece a de tilt,
+ *   continua funcionando contra o firmware novo. Como são duas notificações
+ *   distintas, o app usa a de tilt como gatilho e junta o último valor de pan
+ *   recebido: as duas saem na mesma iteração do firmware, então a defasagem é
+ *   de no máximo um ciclo de notify (~200ms), e só se um pacote se perder.
+ *   Firmware anterior à v1.2.0 não tem essa característica — o app segue só
+ *   com o tilt e `panDeg` fica `null`.
  * - Calibração: escrever o byte `0x01` em [CALIBRATE_CHARACTERISTIC_UUID]
- *   zera o eixo de tilt na posição atual.
+ *   zera **os dois eixos** na posição atual.
  * - Captura de vibração: escrever 4 bytes little-endian (duração em
  *   segundos + taxa em Hz, cada um uint16) em
  *   [VIBRATION_CONFIG_CHARACTERISTIC_UUID] inicia uma captura em alta taxa;
@@ -35,6 +44,7 @@ object BleContract {
     val VIBRATION_STATUS_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0005-3c17-4a2e-8f4b-1a2b3c4d5e6f")
     val VIBRATION_DATA_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f")
     val FIRMWARE_VERSION_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f")
+    val PAN_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0008-3c17-4a2e-8f4b-1a2b3c4d5e6f")
     val CLIENT_CHARACTERISTIC_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     const val ANGLE_SCALE = 100.0

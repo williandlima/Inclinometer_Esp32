@@ -1,8 +1,9 @@
 # Inclinômetro — Software Desktop (PyQt5)
 
-Software desktop para leitura em tempo real da inclinação do inclinômetro ESP32,
-via Modbus RTU (cabo USB direto) ou Bluetooth Low Energy (BLE), com registro
-de limites (mínimo/máximo) e geração de relatório em PDF.
+Software desktop para leitura em tempo real dos **dois eixos** do inclinômetro
+ESP32 — inclinação (tilt) e azimute (pan) — via Modbus RTU (cabo USB direto)
+ou Bluetooth Low Energy (BLE), com registro de limites (mínimo/máximo) por
+eixo e geração de relatório em PDF.
 
 ## Instalação
 
@@ -48,10 +49,32 @@ BLE segue o contrato de serviço/característica documentado em
 `data_source/ble_source.py` (o mesmo usado pelo app Android, para os dois
 transportes ficarem consistentes).
 
-Também é possível **calibrar** (zerar o eixo de tilt do acelerômetro na posição
-atual) pelo botão **Calibrar**, disponível com a leitura em execução — em modo
-real (USB ou BLE), envia um comando ao ESP32; em modo simulação, aplica um
-deslocamento equivalente aos dados sintéticos.
+Também é possível **calibrar** (zerar os dois eixos na posição atual) pelo
+botão **Calibrar**, disponível com a leitura em execução — em modo real (USB
+ou BLE), envia um comando ao ESP32; em modo simulação, aplica um deslocamento
+equivalente aos dados sintéticos. É uma ação só de propósito: o firmware zera
+tilt e pan no mesmo comando.
+
+## Os dois eixos
+
+A tela mostra os dois eixos lado a lado, cada um com seu valor em tempo real e
+seu par de mínimo/máximo independente:
+
+- **Inclinação (tilt)**, do acelerômetro, faixa -60° a +60°.
+- **Azimute (pan)**, do giroscópio integrado com ZUPT no firmware (ver
+  "Azimute (pan) pelo giroscópio" em `firmware/README.md`).
+
+Compatibilidade: um ESP32 com firmware anterior à v1.2.0 não mede azimute. O
+app detecta isso sozinho e segue funcionando só com a inclinação — o painel de
+azimute mostra `--.--°` com a nota "firmware sem este eixo", e o eixo fica de
+fora do histórico e do relatório em vez de registrar zeros falsos. No modo
+USB/Modbus isso é detectado pela exceção de endereço inválido que o firmware
+antigo devolve; no BLE, pela ausência da characteristic de pan.
+
+No modo simulação os dois eixos têm comportamentos diferentes de propósito,
+imitando o real: o tilt oscila continuamente com ruído, e o pan fica parado a
+maior parte do tempo e se desloca em rajadas — que é justamente o padrão de
+uso que torna a medição por giroscópio confiável.
 
 O indicador abaixo do modo mostra o estado da conexão com o ESP32
 (conectando/conectado/falha), atualizado a cada leitura ou erro, seja via

@@ -13,13 +13,23 @@ import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 
-data class BleConnectionTestResult(val angleDeg: Double, val firmwareVersion: String)
+data class BleConnectionTestResult(
+    val angleDeg: Double,
+    val firmwareVersion: String,
+    /** `null` se o firmware não expõe o eixo de azimute (anterior à v1.2.0). */
+    val panDeg: Double? = null,
+)
 
 /**
- * Testa a conexão BLE com o ESP32: conecta, lê o ângulo e a versão do
+ * Testa a conexão BLE com o ESP32: conecta, lê os dois eixos e a versão do
  * firmware uma única vez, e desconecta — sem iniciar uma sessão de leitura
  * contínua. Equivalente ao "Testar conexão com ESP32" do app desktop
  * (`python-app/data_source/ble_source.py`, `test_connection`).
+ *
+ * As leituras são encadeadas (ângulo → azimute → versão) porque no Android só
+ * pode haver uma operação GATT em andamento por vez. Azimute e versão são
+ * diagnósticos secundários: se qualquer um falhar ou não existir, o teste
+ * ainda é considerado bem-sucedido, só sem aquele dado.
  */
 @SuppressLint("MissingPermission")
 object BleConnectionTester {
@@ -38,6 +48,7 @@ object BleConnectionTester {
 
                 var gatt: BluetoothGatt? = null
                 var angleDeg: Double? = null
+                var panDeg: Double? = null
 
                 fun finish(result: Result<BleConnectionTestResult>) {
                     gatt?.disconnect()
@@ -47,6 +58,24 @@ object BleConnectionTester {
                             onSuccess = { continuation.resume(it) },
                             onFailure = { continuation.resumeWithException(it) },
                         )
+                    }
+                }
+
+                fun readVersionOrFinish(g: BluetoothGatt) {
+                    val versionChar = g.getService(BleContract.SERVICE_UUID)
+                        ?.getCharacteristic(BleContract.FIRMWARE_VERSION_CHARACTERISTIC_UUID)
+                    if (versionChar == null || !g.readCharacteristic(versionChar)) {
+                        // Versão é só diagnóstico secundário — não falha o teste sem ela.
+                        finish(Result.success(BleConnectionTestResult(angleDeg ?: 0.0, "?", panDeg)))
+                    }
+                }
+
+                fun readPanOrVersion(g: BluetoothGatt) {
+                    val panChar = g.getService(BleContract.SERVICE_UUID)
+                        ?.getCharacteristic(BleContract.PAN_CHARACTERISTIC_UUID)
+                    // Ausente em firmware anterior à v1.2.0: segue pra versão.
+                    if (panChar == null || !g.readCharacteristic(panChar)) {
+                        readVersionOrFinish(g)
                     }
                 }
 
@@ -83,30 +112,36 @@ object BleConnectionTester {
                         characteristic: BluetoothGattCharacteristic,
                         status: Int,
                     ) {
-                        if (status != BluetoothGatt.GATT_SUCCESS) {
-                            finish(Result.failure(IOException("Falha ao ler característica BLE (status=$status).")))
-                            return
-                        }
+                        // O status é avaliado por característica: só a de
+                        // ângulo é obrigatória, as outras duas são opcionais.
+                        val ok = status == BluetoothGatt.GATT_SUCCESS
                         when (characteristic.uuid) {
                             BleContract.ANGLE_CHARACTERISTIC_UUID -> {
-                                val raw = characteristic.value
-                                if (raw == null || raw.size < 2) {
+                                if (!ok) {
+                                    finish(
+                                        Result.failure(
+                                            IOException("Falha ao ler característica BLE (status=$status).")
+                                        )
+                                    )
+                                    return
+                                }
+                                val angle = decodeAngle(characteristic.value)
+                                if (angle == null) {
                                     finish(Result.failure(IOException("Resposta BLE inválida para o ângulo.")))
                                     return
                                 }
-                                val rawValue = ((raw[1].toInt() and 0xFF) shl 8) or (raw[0].toInt() and 0xFF)
-                                angleDeg = rawValue.toShort() / BleContract.ANGLE_SCALE
-
-                                val versionChar = g.getService(BleContract.SERVICE_UUID)
-                                    ?.getCharacteristic(BleContract.FIRMWARE_VERSION_CHARACTERISTIC_UUID)
-                                if (versionChar == null || !g.readCharacteristic(versionChar)) {
-                                    // Versão é só diagnóstico secundário — não falha o teste sem ela.
-                                    finish(Result.success(BleConnectionTestResult(angleDeg ?: 0.0, "?")))
+                                angleDeg = angle
+                                readPanOrVersion(g)
+                            }
+                            BleContract.PAN_CHARACTERISTIC_UUID -> {
+                                if (ok) {
+                                    panDeg = decodeAngle(characteristic.value)
                                 }
+                                readVersionOrFinish(g)
                             }
                             BleContract.FIRMWARE_VERSION_CHARACTERISTIC_UUID -> {
-                                val version = decodeFirmwareVersion(characteristic.value)
-                                finish(Result.success(BleConnectionTestResult(angleDeg ?: 0.0, version)))
+                                val version = if (ok) decodeFirmwareVersion(characteristic.value) else "?"
+                                finish(Result.success(BleConnectionTestResult(angleDeg ?: 0.0, version, panDeg)))
                             }
                         }
                     }
@@ -120,6 +155,12 @@ object BleConnectionTester {
                 gatt = device.connectGatt(context, false, callback)
             }
         }
+
+    private fun decodeAngle(raw: ByteArray?): Double? {
+        if (raw == null || raw.size < 2) return null
+        val rawValue = ((raw[1].toInt() and 0xFF) shl 8) or (raw[0].toInt() and 0xFF)
+        return rawValue.toShort() / BleContract.ANGLE_SCALE
+    }
 
     private fun decodeFirmwareVersion(raw: ByteArray?): String {
         if (raw == null || raw.size < 2) return "?"

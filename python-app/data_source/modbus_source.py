@@ -6,17 +6,26 @@ recentes da lib) — por isso `requirements.txt` trava `pymodbus==3.14.0`
 exatamente: sem essa trava, um `pip install` puxando uma versão diferente
 pode voltar a quebrar com `unexpected keyword argument`.
 
-Contrato com o firmware do ESP32: o ângulo atual é exposto no registrador
-de entrada (input register) `ANGLE_INPUT_REGISTER`, como inteiro de 16 bits
-**com sinal** igual a `angulo * SCALE` (duas casas decimais de resolução,
-faixa -60.00° a +60.00°). O rastreamento de mínimo/máximo é feito
-no próprio app (`limits.limit_tracker`), não depende de registradores extras
-no escravo — assim o contrato Modbus fica mínimo e estável mesmo antes do
-firmware existir.
+Contrato com o firmware do ESP32: a inclinação (tilt) é exposta no
+registrador de entrada (input register) `ANGLE_INPUT_REGISTER` e o azimute
+(pan) em `PAN_INPUT_REGISTER`, ambos como inteiro de 16 bits **com sinal**
+igual a `angulo * SCALE` (duas casas decimais de resolução). Por serem
+registradores contíguos, os dois eixos são lidos numa única transação. O
+rastreamento de mínimo/máximo é feito no próprio app
+(`limits.limit_tracker`), não depende de registradores extras no escravo —
+assim o contrato Modbus fica mínimo e estável.
+
+Compatibilidade com firmware anterior à v1.2.0 (que não tem o eixo de pan):
+aquele firmware responde com exceção de "endereço inválido" ao ver o
+registrador 1, derrubando a leitura dos dois eixos junto. Por isso a leitura
+começa pedindo os dois registradores e, se o escravo responder com uma
+*exceção Modbus*, passa a pedir só o de tilt dali em diante, com `pan_deg`
+ficando `None`. A degradação é só para exceção do escravo — erro de
+transporte (timeout, CRC) não desabilita o pan, senão uma falha passageira
+de cabo deixaria o eixo desligado pelo resto da sessão.
 
 Calibração: escrever `True` na coil `CALIBRATE_COIL` sinaliza ao firmware
-para zerar o eixo de tilt do acelerômetro na posição atual (novo "zero"
-mecânico). Contrato assumido, a confirmar quando o firmware existir.
+para zerar **os dois eixos** na posição atual (novo "zero" mecânico).
 
 Captura de vibração (leitura em alta taxa, usada para caracterizar variação
 angular por vento/vibração — o poll normal de ~250ms é lento demais para
@@ -53,6 +62,7 @@ from data_source.base import AngleReading, ErrorCallback, IAngleDataSource, Read
 BOARD_RESET_GRACE_S = 2.5
 
 ANGLE_INPUT_REGISTER = 0
+PAN_INPUT_REGISTER = 1  # contíguo ao de tilt de propósito: os dois saem numa leitura só
 ANGLE_SCALE = 100.0  # registrador = ângulo * 100 (int16, resolução de 0.01°)
 CALIBRATE_COIL = 0
 FIRMWARE_VERSION_REGISTER = 40  # registrador = major*10000 + minor*100 + patch (ex: "1.0.0" -> 10000)
@@ -80,9 +90,48 @@ def _decode_firmware_version(code: int) -> str:
     return f"{major}.{minor}.{patch}"
 
 
+def _is_slave_exception(result) -> bool:
+    """True se o escravo respondeu com uma exceção Modbus (ex: endereço
+    inválido), em vez de a transação ter falhado no transporte (timeout, CRC).
+
+    Checa o atributo em vez de importar `ExceptionResponse` porque o caminho
+    de import dessa classe já mudou entre versões do pymodbus.
+    """
+    return getattr(result, "exception_code", None) is not None
+
+
+def _read_axes(client, slave_id: int, pan_supported: bool) -> tuple[float, float | None, bool]:
+    """Lê tilt (e pan, quando disponível) do escravo.
+
+    Retorna `(angle_deg, pan_deg | None, pan_supported)` — o terceiro item é
+    o valor atualizado da flag, que fica `False` depois que o escravo rejeita
+    o registrador de pan (firmware anterior à v1.2.0). Levanta `IOError` em
+    falha de transporte.
+    """
+    if pan_supported:
+        result = client.read_input_registers(
+            address=ANGLE_INPUT_REGISTER, count=2, device_id=slave_id
+        )
+        if not result.isError():
+            return (
+                _to_signed16(result.registers[0]) / ANGLE_SCALE,
+                _to_signed16(result.registers[1]) / ANGLE_SCALE,
+                True,
+            )
+        if not _is_slave_exception(result):
+            raise IOError(str(result))
+        pan_supported = False  # firmware sem eixo de pan: segue só com o tilt
+
+    result = client.read_input_registers(address=ANGLE_INPUT_REGISTER, count=1, device_id=slave_id)
+    if result.isError():
+        raise IOError(str(result))
+    return _to_signed16(result.registers[0]) / ANGLE_SCALE, None, pan_supported
+
+
 class ConnectionTestResult(NamedTuple):
     angle_deg: float
     firmware_version: str
+    pan_deg: float | None = None
 
 
 def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 1.0) -> ConnectionTestResult:
@@ -98,17 +147,14 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
         if not client.connect():
             raise IOError(f"Não foi possível abrir a porta serial {port}.")
         time.sleep(BOARD_RESET_GRACE_S)  # ver BOARD_RESET_GRACE_S: a porta abrir já reseta o ESP32
-        result = client.read_input_registers(address=ANGLE_INPUT_REGISTER, count=1, device_id=slave_id)
-        if result.isError():
-            raise IOError(str(result))
-        angle_deg = _to_signed16(result.registers[0]) / ANGLE_SCALE
+        angle_deg, pan_deg, _ = _read_axes(client, slave_id, pan_supported=True)
 
         version_result = client.read_input_registers(address=FIRMWARE_VERSION_REGISTER, count=1, device_id=slave_id)
         firmware_version = (
             _decode_firmware_version(version_result.registers[0]) if not version_result.isError() else "?"
         )
 
-        return ConnectionTestResult(angle_deg, firmware_version)
+        return ConnectionTestResult(angle_deg, firmware_version, pan_deg)
     finally:
         client.close()
 
@@ -137,6 +183,10 @@ class ModbusAngleSource(IAngleDataSource):
         self._vibration_thread: threading.Thread | None = None
         self._vibration_stop_event = threading.Event()
 
+        # Vira False se o escravo rejeitar o registrador de pan (firmware
+        # anterior à v1.2.0) — ver o cabeçalho do módulo.
+        self._pan_supported = True
+
     @property
     def label(self) -> str:
         return f"USB/Modbus RTU ({self._port}@{self._baudrate}, id={self._slave_id})"
@@ -146,7 +196,7 @@ class ModbusAngleSource(IAngleDataSource):
         return True
 
     def calibrate(self) -> None:
-        """Envia o comando de calibração (zerar tilt) ao escravo Modbus.
+        """Envia o comando de calibração (zera tilt e pan) ao escravo Modbus.
 
         Bloqueante — deve ser chamado fora da thread da UI. Levanta
         `RuntimeError`/`IOError` se não estiver conectado ou se a escrita falhar.
@@ -282,13 +332,10 @@ class ModbusAngleSource(IAngleDataSource):
             while not self._stop_event.is_set():
                 try:
                     with self._client_lock:
-                        result = client.read_input_registers(
-                            address=ANGLE_INPUT_REGISTER, count=1, device_id=self._slave_id
+                        angle, pan, self._pan_supported = _read_axes(
+                            client, self._slave_id, self._pan_supported
                         )
-                    if result.isError():
-                        raise IOError(str(result))
-                    angle = _to_signed16(result.registers[0]) / ANGLE_SCALE
-                    on_reading(AngleReading(angle_deg=angle, timestamp=time.time()))
+                    on_reading(AngleReading(angle_deg=angle, pan_deg=pan, timestamp=time.time()))
                 except Exception as exc:  # noqa: BLE001 - reporta e segue tentando
                     if on_error:
                         on_error(f"Erro de leitura Modbus: {exc}")

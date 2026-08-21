@@ -17,6 +17,8 @@ data class ReadingEntity(
     val sessionId: Long,
     val timestamp: Long,
     val angleDeg: Double,
+    // Nulo quando o firmware conectado não media azimute (anterior à v1.2.0).
+    val panDeg: Double? = null,
 )
 
 @Entity(tableName = "limit_events")
@@ -26,6 +28,10 @@ data class LimitEventEntity(
     val kind: String,
     val angleDeg: Double,
     val timestamp: Long,
+    // Guarda os dois eixos da leitura (e não só o valor do eixo do evento)
+    // para a releitura reconstruir o AngleReading inteiro.
+    val axis: String = "TILT",
+    val panDeg: Double? = null,
 )
 
 @Entity(tableName = "vibration_captures")

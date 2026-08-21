@@ -1,8 +1,16 @@
 """Fonte de dados simulada: gera ângulos sintéticos sem hardware real.
 
-Usada para desenvolver e testar o app antes do firmware/hardware do ESP32
-estarem prontos. Gera uma oscilação senoidal dentro da faixa -60° a +60°,
-somada a ruído gaussiano, para se aproximar de uma leitura real de sensor.
+Usada para desenvolver e testar o app sem o ESP32 conectado. Os dois eixos
+são simulados com comportamentos deliberadamente diferentes, imitando o que
+cada um faz de verdade:
+
+- **Tilt**: oscilação senoidal contínua dentro da faixa -60° a +60°, somada a
+  ruído gaussiano — é um eixo que se move o tempo todo (vento no mastro).
+- **Pan**: fica parado a maior parte do tempo e se desloca em rajadas até uma
+  nova posição, que é exatamente o padrão de uso real do azimute (e a razão
+  de o firmware conseguir medi-lo por giroscópio + ZUPT). Sem ruído entre os
+  movimentos, porque o ZUPT do firmware justamente congela a leitura
+  enquanto o eixo está parado.
 """
 from __future__ import annotations
 
@@ -11,7 +19,25 @@ import random
 import threading
 import time
 
-from data_source.base import ANGLE_MAX_DEG, ANGLE_MIN_DEG, AngleReading, ErrorCallback, IAngleDataSource, ReadingCallback
+from data_source.base import (
+    ANGLE_MAX_DEG,
+    ANGLE_MIN_DEG,
+    PAN_MAX_DEG,
+    PAN_MIN_DEG,
+    AngleReading,
+    ErrorCallback,
+    IAngleDataSource,
+    ReadingCallback,
+)
+
+# Velocidade e cadência do pan simulado — na mesma ordem de grandeza do motor
+# real (~20-30°/s em rajadas de poucos segundos).
+PAN_MOVE_RATE_DPS = 20.0
+PAN_HOLD_S = 12.0
+# A primeira rajada sai bem antes do intervalo normal: com PAN_HOLD_S inteiro
+# aqui, quem inicia a leitura ficaria 12s olhando um eixo cravado, com cara de
+# app quebrado, antes de ver qualquer movimento.
+PAN_FIRST_MOVE_S = 2.0
 
 
 class SimulatedAngleSource(IAngleDataSource):
@@ -42,6 +68,14 @@ class SimulatedAngleSource(IAngleDataSource):
         self._offset_deg = 0.0
         self._last_raw_deg = center_deg
 
+        # Estado do eixo de pan: posição atual, alvo do movimento em curso e
+        # quando o próximo movimento começa.
+        self._pan_raw_deg = 0.0
+        self._pan_target_deg = 0.0
+        self._pan_offset_deg = 0.0
+        self._pan_next_move_at = 0.0
+        self._pan_last_tick = 0.0
+
         self._vibration_thread: threading.Thread | None = None
         self._vibration_stop_event = threading.Event()
 
@@ -54,16 +88,20 @@ class SimulatedAngleSource(IAngleDataSource):
         return True
 
     def calibrate(self) -> None:
-        """Ajusta o offset para que o próximo ângulo lido seja ~0°,
-        simulando o zeramento do acelerômetro na posição atual."""
+        """Ajusta os offsets para que os próximos ângulos lidos sejam ~0°,
+        simulando o zeramento dos dois eixos na posição atual — o firmware
+        real também zera tilt e pan no mesmo comando."""
         with self._lock:
             self._offset_deg = self._last_raw_deg
+            self._pan_offset_deg = self._pan_raw_deg
 
     def start(self, on_reading: ReadingCallback, on_error: ErrorCallback | None = None) -> None:
         if self._thread is not None:
             return
         self._stop_event.clear()
         self._t0 = time.time()
+        self._pan_last_tick = self._t0
+        self._pan_next_move_at = self._t0 + PAN_FIRST_MOVE_S
         self._thread = threading.Thread(target=self._run, args=(on_reading,), daemon=True)
         self._thread.start()
 
@@ -72,6 +110,26 @@ class SimulatedAngleSource(IAngleDataSource):
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+
+    def _advance_pan(self, now: float) -> float:
+        """Avança o eixo de pan simulado e devolve o valor relativo ao zero
+        calibrado. Move em direção ao alvo a PAN_MOVE_RATE_DPS; ao chegar,
+        fica parado até a próxima rajada."""
+        dt = max(0.0, now - self._pan_last_tick)
+        self._pan_last_tick = now
+
+        remaining = self._pan_target_deg - self._pan_raw_deg
+        if abs(remaining) > 1e-6:
+            step = PAN_MOVE_RATE_DPS * dt
+            if step >= abs(remaining):
+                self._pan_raw_deg = self._pan_target_deg
+                self._pan_next_move_at = now + PAN_HOLD_S
+            else:
+                self._pan_raw_deg += math.copysign(step, remaining)
+        elif now >= self._pan_next_move_at:
+            self._pan_target_deg = random.uniform(PAN_MIN_DEG * 0.7, PAN_MAX_DEG * 0.7)
+
+        return self._pan_raw_deg - self._pan_offset_deg
 
     def _run(self, on_reading: ReadingCallback) -> None:
         while not self._stop_event.is_set():
@@ -83,9 +141,11 @@ class SimulatedAngleSource(IAngleDataSource):
             with self._lock:
                 self._last_raw_deg = raw_angle
                 angle = raw_angle - self._offset_deg
+                pan = self._advance_pan(now)
 
             angle = max(ANGLE_MIN_DEG, min(ANGLE_MAX_DEG, angle))
-            on_reading(AngleReading(angle_deg=angle, timestamp=now))
+            pan = max(PAN_MIN_DEG, min(PAN_MAX_DEG, pan))
+            on_reading(AngleReading(angle_deg=angle, pan_deg=pan, timestamp=now))
             self._stop_event.wait(self._poll_interval)
 
     @property

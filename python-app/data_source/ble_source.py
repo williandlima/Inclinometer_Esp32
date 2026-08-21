@@ -8,9 +8,18 @@ consistentes:
 - Serviço `SERVICE_UUID`, característica `ANGLE_CHARACTERISTIC_UUID` com
   notify (e read) de 2 bytes little-endian (int16, **com sinal**, faixa
   -60.00° a +60.00°) igual a `angulo * ANGLE_SCALE`.
+- Azimute (pan): característica `PAN_CHARACTERISTIC_UUID`, mesmo formato de
+  2 bytes, notificada na mesma cadência. É uma característica separada da de
+  tilt de propósito — assim um app antigo, que só conhece a de tilt, continua
+  funcionando contra o firmware novo. Como são duas notificações distintas, o
+  app usa a de tilt como gatilho e junta o último valor de pan recebido: as
+  duas chegam na mesma iteração do firmware, então a defasagem é de no
+  máximo um ciclo de notify (~200ms) e só em caso de pacote perdido.
+  Firmware anterior à v1.2.0 não tem essa característica — o `start_notify`
+  falha, o app segue só com o tilt e `pan_deg` fica `None`.
 - Calibração: escrever o byte `0x01` na característica
-  `CALIBRATE_CHARACTERISTIC_UUID` sinaliza ao firmware para zerar o eixo de
-  tilt na posição atual (equivalente à coil Modbus usada no modo USB/Modbus RTU).
+  `CALIBRATE_CHARACTERISTIC_UUID` sinaliza ao firmware para zerar **os dois
+  eixos** na posição atual (equivalente à coil Modbus usada no modo USB).
 - Captura de vibração (leitura em alta taxa, para caracterizar variação
   angular por vento/vibração — o notify normal já é "tempo real", mas numa
   taxa que depende do firmware; este modo pede uma taxa/duração explícitas):
@@ -50,6 +59,7 @@ VIBRATION_CONFIG_CHARACTERISTIC_UUID = "6e6e0004-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_STATUS_CHARACTERISTIC_UUID = "6e6e0005-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_DATA_CHARACTERISTIC_UUID = "6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 FIRMWARE_VERSION_CHARACTERISTIC_UUID = "6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f"
+PAN_CHARACTERISTIC_UUID = "6e6e0008-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 ANGLE_SCALE = 100.0
 CONNECT_TIMEOUT_S = 10.0
 VIBRATION_TIMEOUT_MARGIN_S = 30.0
@@ -79,11 +89,12 @@ def _decode_firmware_version(raw: bytearray | bytes) -> str:
 class ConnectionTestResult(NamedTuple):
     angle_deg: float
     firmware_version: str
+    pan_deg: float | None = None
 
 
 def test_connection(device_address: str, timeout_s: float = 8.0) -> ConnectionTestResult:
-    """Testa a conexão BLE com o ESP32: conecta, lê o ângulo e a versão do
-    firmware uma única vez, e desconecta. Retorna ambos em caso de sucesso;
+    """Testa a conexão BLE com o ESP32: conecta, lê os ângulos e a versão do
+    firmware uma única vez, e desconecta. Retorna tudo em caso de sucesso;
     levanta exceção em caso de falha."""
     from bleak import BleakClient
 
@@ -96,7 +107,11 @@ def test_connection(device_address: str, timeout_s: float = 8.0) -> ConnectionTe
                 firmware_version = _decode_firmware_version(version_raw)
             except Exception:  # noqa: BLE001 - diagnóstico secundário, não deve derrubar o teste
                 firmware_version = "?"
-            return ConnectionTestResult(angle_deg, firmware_version)
+            try:
+                pan_deg = _decode_angle(await client.read_gatt_char(PAN_CHARACTERISTIC_UUID))
+            except Exception:  # noqa: BLE001 - firmware anterior à v1.2.0 não tem o eixo de pan
+                pan_deg = None
+            return ConnectionTestResult(angle_deg, firmware_version, pan_deg)
 
     return asyncio.run(_test())
 
@@ -252,19 +267,44 @@ class BleAngleSource(IAngleDataSource):
     async def _run_async(self, on_reading: ReadingCallback, on_error: ErrorCallback | None) -> None:
         from bleak import BleakClient
 
+        # Último pan recebido, para ser anexado à próxima notificação de tilt
+        # (ver o cabeçalho do módulo). Fica em lista para poder ser escrito de
+        # dentro dos callbacks aninhados sem `nonlocal`.
+        last_pan: list[float | None] = [None]
+
+        def _handle_pan_notify(_characteristic, raw: bytearray) -> None:
+            try:
+                last_pan[0] = _decode_angle(raw)
+            except Exception:  # noqa: BLE001 - notificação malformada, ignora
+                return
+
         def _handle_notify(_characteristic, raw: bytearray) -> None:
             try:
                 angle = _decode_angle(raw)
             except Exception:  # noqa: BLE001 - notificação malformada, ignora
                 return
-            on_reading(AngleReading(angle_deg=angle, timestamp=time.time()))
+            on_reading(AngleReading(angle_deg=angle, pan_deg=last_pan[0], timestamp=time.time()))
 
         try:
             async with BleakClient(self._device_address, timeout=CONNECT_TIMEOUT_S) as client:
                 self._client = client
                 await client.start_notify(ANGLE_CHARACTERISTIC_UUID, _handle_notify)
+
+                # Firmware anterior à v1.2.0 não expõe o eixo de pan: seguir
+                # só com o tilt é melhor que derrubar a sessão inteira.
+                pan_subscribed = False
+                try:
+                    await client.start_notify(PAN_CHARACTERISTIC_UUID, _handle_pan_notify)
+                    pan_subscribed = True
+                except Exception:  # noqa: BLE001
+                    if on_error:
+                        on_error("Firmware sem eixo de azimute (pan) — seguindo só com a inclinação.")
+
                 while not self._stop_event.is_set():
                     await asyncio.sleep(0.2)
+
+                if pan_subscribed:
+                    await client.stop_notify(PAN_CHARACTERISTIC_UUID)
                 await client.stop_notify(ANGLE_CHARACTERISTIC_UUID)
         except Exception as exc:  # noqa: BLE001
             if on_error:

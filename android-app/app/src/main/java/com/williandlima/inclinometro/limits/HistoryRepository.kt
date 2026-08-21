@@ -37,7 +37,12 @@ class HistoryRepository(private val dao: InclinometerDao) {
 
     suspend fun addReading(sessionId: Long, reading: AngleReading) {
         dao.insertReading(
-            ReadingEntity(sessionId = sessionId, timestamp = reading.timestamp, angleDeg = reading.angleDeg)
+            ReadingEntity(
+                sessionId = sessionId,
+                timestamp = reading.timestamp,
+                angleDeg = reading.angleDeg,
+                panDeg = reading.panDeg,
+            )
         )
     }
 
@@ -48,6 +53,8 @@ class HistoryRepository(private val dao: InclinometerDao) {
                 kind = event.kind.name,
                 angleDeg = event.reading.angleDeg,
                 timestamp = event.reading.timestamp,
+                axis = event.axis.name,
+                panDeg = event.reading.panDeg,
             )
         )
     }
@@ -57,13 +64,16 @@ class HistoryRepository(private val dao: InclinometerDao) {
     suspend fun listSessions(): List<SessionInfo> = dao.listSessions().map { it.toSessionInfo() }
 
     suspend fun getReadings(sessionId: Long): List<AngleReading> =
-        dao.getReadings(sessionId).map { AngleReading(angleDeg = it.angleDeg, timestamp = it.timestamp) }
+        dao.getReadings(sessionId).map {
+            AngleReading(angleDeg = it.angleDeg, timestamp = it.timestamp, panDeg = it.panDeg)
+        }
 
     suspend fun getLimitEvents(sessionId: Long): List<LimitEvent> =
         dao.getLimitEvents(sessionId).map {
             LimitEvent(
                 kind = LimitKind.valueOf(it.kind),
-                reading = AngleReading(angleDeg = it.angleDeg, timestamp = it.timestamp),
+                reading = AngleReading(angleDeg = it.angleDeg, timestamp = it.timestamp, panDeg = it.panDeg),
+                axis = LimitAxis.valueOf(it.axis),
             )
         }
 

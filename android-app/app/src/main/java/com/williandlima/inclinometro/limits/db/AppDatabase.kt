@@ -13,7 +13,8 @@ import androidx.room.RoomDatabase
         VibrationCaptureEntity::class,
         VibrationSampleEntity::class,
     ],
-    version = 2,
+    // v3: colunas do eixo de azimute (pan) em readings e limit_events.
+    version = 3,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): InclinometerDao

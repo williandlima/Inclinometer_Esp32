@@ -269,10 +269,10 @@ real — ver as duas confirmações de bancada nas limitações abaixo.
   em vez de integrar no tempo: assim o bias cai no bin 0 e é excluído por
   construção pelo `MIN_PEAK_FREQ_HZ` que o pipeline de FFT já tem. Exige
   dobrar o buffer de captura e estender o protocolo de streaming.
-- **[1.2.0] Os apps ainda não consomem o pan.** O firmware já publica
-  (Modbus reg. 1 e BLE `6e6e0008-...`), mas `python-app`/`android-app`
-  seguem lendo só o tilt. Como a mudança é aditiva, os apps atuais
-  continuam funcionando sem alteração.
+- **[1.2.0] Os dois apps já consomem o pan** (Modbus reg. 1 e BLE
+  `6e6e0008-...`), com segundo display, segundo par de mín/máx e segundo
+  gráfico no relatório. Ambos detectam sozinhos um ESP32 com firmware
+  anterior à v1.2.0 e seguem só com a inclinação, sem gravar zeros falsos.
 - **[1.0.2]** Faixa de medição mudou de 0°~120° para -60°~+60° (0° agora é
   a posição calibrada, não mais um extremo mecânico). Isso muda a
   codificação do ângulo em `REG_ANGLE_INPUT` (Modbus) e na characteristic

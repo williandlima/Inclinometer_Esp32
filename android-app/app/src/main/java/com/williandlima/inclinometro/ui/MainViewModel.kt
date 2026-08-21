@@ -11,6 +11,7 @@ import com.williandlima.inclinometro.datasource.BleScanner
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.datasource.SimulatedAngleDataSource
 import com.williandlima.inclinometro.limits.HistoryRepository
+import com.williandlima.inclinometro.limits.LimitAxis
 import com.williandlima.inclinometro.limits.LimitKind
 import com.williandlima.inclinometro.limits.LimitTracker
 import com.williandlima.inclinometro.limits.VibrationStats
@@ -51,12 +52,22 @@ private const val DISPLAY_ANGLE_HYSTERESIS_DEG = 0.05
 data class UiState(
     val mode: ConnectionMode = ConnectionMode.SIMULATED,
     val running: Boolean = false,
-    val currentAngle: Double? = null,   // valor bruto da leitura
+    val currentAngle: Double? = null,   // valor bruto da leitura (tilt)
     val displayAngle: Double? = null,   // valor exibido (degrau de 0,25° com histerese)
     val minReading: AngleReading? = null,
     val maxReading: AngleReading? = null,
     val minFlash: Boolean = false,
     val maxFlash: Boolean = false,
+    // Eixo de azimute (pan) — mesma estrutura do tilt. `panAvailable` fica
+    // false quando o ESP32 conectado tem firmware anterior à v1.2.0 e não
+    // mede azimute; a UI então mostra o eixo como sem dado em vez de zero.
+    val currentPan: Double? = null,
+    val displayPan: Double? = null,
+    val panMinReading: AngleReading? = null,
+    val panMaxReading: AngleReading? = null,
+    val panMinFlash: Boolean = false,
+    val panMaxFlash: Boolean = false,
+    val panAvailable: Boolean = true,
     val statusMessage: String = "Pronto.",
     val bleDeviceAddress: String = "",
     val connectionStatus: ConnectionStatus = ConnectionStatus.PARADO,
@@ -74,7 +85,9 @@ data class UiState(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = HistoryRepository(AppDatabase.getInstance(application).dao())
-    private val tracker = LimitTracker()
+    // Um rastreador de mín/máx por eixo: os extremos são independentes.
+    private val tracker = LimitTracker(LimitAxis.TILT)
+    private val panTracker = LimitTracker(LimitAxis.PAN)
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -153,10 +166,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         testJob = viewModelScope.launch {
             try {
                 val result = BleConnectionTester.test(getApplication(), address)
+                val panText = result.panDeg
+                    ?.let { pan -> ", azimute %.2f°".format(pan) }
+                    ?: ", sem eixo de azimute"
                 _uiState.update {
                     it.copy(
-                        bleTestResult = "✓ ESP32 respondeu — ângulo atual: %.2f° (firmware v%s)".format(
+                        bleTestResult = "✓ ESP32 respondeu — inclinação %.2f°%s (firmware v%s)".format(
                             result.angleDeg,
+                            panText,
                             result.firmwareVersion,
                         ),
                         bleTestSuccess = true,
@@ -191,6 +208,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentSource = source
 
         tracker.reset()
+        panTracker.reset()
         viewModelScope.launch {
             currentSessionId = repository.startSession(mode)
             _uiState.update {
@@ -199,6 +217,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     minReading = null,
                     maxReading = null,
                     displayAngle = null,
+                    panMinReading = null,
+                    panMaxReading = null,
+                    displayPan = null,
+                    panAvailable = true,
                     statusMessage = "Conectado: ${source.label}",
                     connectionStatus = if (mode == ConnectionMode.SIMULATED) {
                         ConnectionStatus.SIMULACAO
@@ -234,10 +256,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun onReading(reading: AngleReading) {
         val sessionId = currentSessionId ?: return
         repository.addReading(sessionId, reading)
+        val pan = reading.panDeg
         _uiState.update {
             it.copy(
                 currentAngle = reading.angleDeg,
                 displayAngle = angleForDisplay(reading.angleDeg, it.displayAngle),
+                currentPan = pan,
+                displayPan = if (pan == null) null else angleForDisplay(pan, it.displayPan),
+                panAvailable = pan != null,
                 connectionStatus = if (it.mode == ConnectionMode.REAL) ConnectionStatus.CONECTADO else it.connectionStatus,
             )
         }
@@ -247,20 +273,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             when (event.kind) {
                 LimitKind.MIN -> {
                     _uiState.update { it.copy(minReading = event.reading, minFlash = true) }
-                    scheduleFlashReset(isMin = true)
+                    scheduleFlashReset(LimitAxis.TILT, isMin = true)
                 }
                 LimitKind.MAX -> {
                     _uiState.update { it.copy(maxReading = event.reading, maxFlash = true) }
-                    scheduleFlashReset(isMin = false)
+                    scheduleFlashReset(LimitAxis.TILT, isMin = false)
+                }
+            }
+        }
+
+        // Devolve lista vazia quando a leitura não traz azimute, então este
+        // laço simplesmente não roda com firmware anterior à v1.2.0.
+        for (event in panTracker.process(reading)) {
+            repository.addLimitEvent(sessionId, event)
+            when (event.kind) {
+                LimitKind.MIN -> {
+                    _uiState.update { it.copy(panMinReading = event.reading, panMinFlash = true) }
+                    scheduleFlashReset(LimitAxis.PAN, isMin = true)
+                }
+                LimitKind.MAX -> {
+                    _uiState.update { it.copy(panMaxReading = event.reading, panMaxFlash = true) }
+                    scheduleFlashReset(LimitAxis.PAN, isMin = false)
                 }
             }
         }
     }
 
-    private fun scheduleFlashReset(isMin: Boolean) {
+    private fun scheduleFlashReset(axis: LimitAxis, isMin: Boolean) {
         viewModelScope.launch {
             delay(1500)
-            _uiState.update { if (isMin) it.copy(minFlash = false) else it.copy(maxFlash = false) }
+            _uiState.update {
+                when {
+                    axis == LimitAxis.PAN && isMin -> it.copy(panMinFlash = false)
+                    axis == LimitAxis.PAN -> it.copy(panMaxFlash = false)
+                    isMin -> it.copy(minFlash = false)
+                    else -> it.copy(maxFlash = false)
+                }
+            }
         }
     }
 
@@ -277,6 +326,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     running = false,
                     displayAngle = null,
+                    displayPan = null,
                     statusMessage = "Parado.",
                     connectionStatus = ConnectionStatus.PARADO,
                 )
@@ -288,6 +338,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val wasRunning = _uiState.value.running
         val mode = _uiState.value.mode
         tracker.reset()
+        panTracker.reset()
         viewModelScope.launch {
             if (wasRunning) {
                 currentSessionId?.let { repository.endSession(it) }
@@ -297,6 +348,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     minReading = null,
                     maxReading = null,
+                    panMinReading = null,
+                    panMaxReading = null,
                     statusMessage = if (wasRunning) {
                         "Limites resetados (histórico anterior preservado)."
                     } else {
