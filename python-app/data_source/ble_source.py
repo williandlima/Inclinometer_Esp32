@@ -34,6 +34,13 @@ consistentes:
     pacotes de notify: bytes 0-1 = índice inicial do pacote (uint16 LE),
     restante = amostras sequenciais (int16 LE, **com sinal**, ângulo * 100),
     quantas couberem no MTU — repete até cobrir o total informado.
+  - O eixo de **pan** vem em `VIBRATION_PAN_DATA_CHARACTERISTIC_UUID`, com o
+    mesmo formato de pacote, mas carregando **velocidade angular em graus/s**
+    * `PAN_RATE_SCALE`, e não ângulo (ver `firmware/src/VibrationCapture.h`
+    para o porquê); `limits.vibration_stats.pan_rates_to_angles` faz a
+    conversão. O firmware envia todos os pacotes de tilt, depois todos os de
+    pan, e só então notifica "pronto". Firmware anterior à v1.3.0 não tem
+    essa característica — a captura sai só com o tilt.
 - Versão do firmware: `FIRMWARE_VERSION_CHARACTERISTIC_UUID`, read-only,
   2 bytes little-endian = `major*10000 + minor*100 + patch` (ex: "1.0.0" ->
   10000). Valor fixo (não muda em runtime, sem notify).
@@ -50,7 +57,13 @@ import threading
 import time
 from typing import NamedTuple
 
-from data_source.base import AngleReading, ErrorCallback, IAngleDataSource, ReadingCallback
+from data_source.base import (
+    AngleReading,
+    ErrorCallback,
+    IAngleDataSource,
+    ReadingCallback,
+    build_vibration_readings,
+)
 
 SERVICE_UUID = "6e6e0001-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 ANGLE_CHARACTERISTIC_UUID = "6e6e0002-3c17-4a2e-8f4b-1a2b3c4d5e6f"
@@ -60,7 +73,9 @@ VIBRATION_STATUS_CHARACTERISTIC_UUID = "6e6e0005-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_DATA_CHARACTERISTIC_UUID = "6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 FIRMWARE_VERSION_CHARACTERISTIC_UUID = "6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 PAN_CHARACTERISTIC_UUID = "6e6e0008-3c17-4a2e-8f4b-1a2b3c4d5e6f"
+VIBRATION_PAN_DATA_CHARACTERISTIC_UUID = "6e6e0009-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 ANGLE_SCALE = 100.0
+PAN_RATE_SCALE = 100.0  # amostra = graus/s * 100 (int16, faixa +-327°/s)
 CONNECT_TIMEOUT_S = 10.0
 VIBRATION_TIMEOUT_MARGIN_S = 30.0
 
@@ -180,6 +195,7 @@ class BleAngleSource(IAngleDataSource):
 
     async def _run_vibration_capture_async(self, duration_s: float, rate_hz: float, on_progress, on_done) -> None:
         samples: dict[int, int] = {}
+        pan_samples: dict[int, int] = {}
         total_expected: list[int] = []
         error_holder: list[str] = []
         done_event = asyncio.Event()
@@ -198,19 +214,31 @@ class BleAngleSource(IAngleDataSource):
                 error_holder.append("Firmware reportou erro durante a captura de vibração.")
                 done_event.set()
 
-        def _on_data(_characteristic, raw: bytearray) -> None:
+        def _decode_packet_into(target: dict[int, int], raw: bytearray) -> None:
             if len(raw) < 4:
                 return
             start_index = raw[0] | (raw[1] << 8)
             payload = raw[2:]
             for i in range(0, len(payload) - 1, 2):
                 raw_value = payload[i] | (payload[i + 1] << 8)
-                samples[start_index + i // 2] = _to_signed16(raw_value)
+                target[start_index + i // 2] = _to_signed16(raw_value)
+
+        def _on_data(_characteristic, raw: bytearray) -> None:
+            _decode_packet_into(samples, raw)
+
+        def _on_pan_data(_characteristic, raw: bytearray) -> None:
+            _decode_packet_into(pan_samples, raw)
 
         client = self._client
+        pan_subscribed = False
         try:
             await client.start_notify(VIBRATION_STATUS_CHARACTERISTIC_UUID, _on_status)
             await client.start_notify(VIBRATION_DATA_CHARACTERISTIC_UUID, _on_data)
+            try:
+                await client.start_notify(VIBRATION_PAN_DATA_CHARACTERISTIC_UUID, _on_pan_data)
+                pan_subscribed = True
+            except Exception:  # noqa: BLE001 - firmware anterior à v1.3.0: segue só com o tilt
+                pan_subscribed = False
 
             config = struct.pack("<HH", int(duration_s), int(rate_hz))
             await client.write_gatt_char(VIBRATION_CONFIG_CHARACTERISTIC_UUID, config, response=True)
@@ -227,17 +255,19 @@ class BleAngleSource(IAngleDataSource):
 
             sample_count = total_expected[0] if total_expected else len(samples)
             t_start = time.time() - sample_count / rate_hz
-            readings = [
-                AngleReading(angle_deg=samples[i] / ANGLE_SCALE, timestamp=t_start + i / rate_hz)
-                for i in sorted(samples)
-            ]
-            on_done(readings, None)
+            angles = [samples[i] / ANGLE_SCALE for i in sorted(samples)]
+            pan_rates = (
+                [pan_samples[i] / PAN_RATE_SCALE for i in sorted(pan_samples)] if pan_samples else None
+            )
+            on_done(build_vibration_readings(angles, pan_rates, rate_hz, t_start), None)
         except Exception as exc:  # noqa: BLE001
             on_done(None, f"Erro BLE na captura de vibração: {exc}")
         finally:
             try:
                 await client.stop_notify(VIBRATION_STATUS_CHARACTERISTIC_UUID)
                 await client.stop_notify(VIBRATION_DATA_CHARACTERISTIC_UUID)
+                if pan_subscribed:
+                    await client.stop_notify(VIBRATION_PAN_DATA_CHARACTERISTIC_UUID)
             except Exception:  # noqa: BLE001 - já desconectado/encerrando
                 pass
 

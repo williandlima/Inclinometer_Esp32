@@ -53,7 +53,7 @@ class BleAngleDataSource(
 
     private var pendingWriteContinuation: CancellableContinuation<Unit>? = null
     private var vibrationStatusListener: ((status: Int, progress: Int, totalSamples: Int) -> Unit)? = null
-    private var vibrationDataListener: ((startIndex: Int, samples: ShortArray) -> Unit)? = null
+    private var vibrationDataListener: ((startIndex: Int, samples: ShortArray, pan: Boolean) -> Unit)? = null
 
     private val gattOperationQueue = ArrayDeque<() -> Unit>()
     private var gattOperationInFlight = false
@@ -107,6 +107,10 @@ class BleAngleDataSource(
                 // Ausente em firmware anterior à v1.2.0: nesse caso o app
                 // segue só com a inclinação, em vez de derrubar a conexão.
                 val panChar = service.getCharacteristic(BleContract.PAN_CHARACTERISTIC_UUID)
+                // Ausente em firmware anterior à v1.3.0: a captura sai só com
+                // o eixo de tilt, sem derrubar nada.
+                val vibrationPanDataChar =
+                    service.getCharacteristic(BleContract.VIBRATION_PAN_DATA_CHARACTERISTIC_UUID)
 
                 // Enfileiradas: ver nota da classe sobre operações GATT
                 // seriais no Android.
@@ -114,6 +118,7 @@ class BleAngleDataSource(
                 panChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
                 vibrationStatusChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
                 vibrationDataChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
+                vibrationPanDataChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
             }
 
             private fun enableNotify(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
@@ -145,7 +150,9 @@ class BleAngleDataSource(
                     // malformada não deve apagar o último azimute conhecido.
                     BleContract.PAN_CHARACTERISTIC_UUID -> decodeAngle(raw)?.let { lastPanDeg = it }
                     BleContract.VIBRATION_STATUS_CHARACTERISTIC_UUID -> handleVibrationStatus(raw)
-                    BleContract.VIBRATION_DATA_CHARACTERISTIC_UUID -> handleVibrationData(raw)
+                    BleContract.VIBRATION_DATA_CHARACTERISTIC_UUID -> handleVibrationData(raw, pan = false)
+                    BleContract.VIBRATION_PAN_DATA_CHARACTERISTIC_UUID ->
+                        handleVibrationData(raw, pan = true)
                 }
             }
 
@@ -195,7 +202,7 @@ class BleAngleDataSource(
                 vibrationStatusListener?.invoke(status, progress, total)
             }
 
-            private fun handleVibrationData(raw: ByteArray) {
+            private fun handleVibrationData(raw: ByteArray, pan: Boolean) {
                 if (raw.size < 2) return
                 val startIndex = (raw[0].toInt() and 0xFF) or ((raw[1].toInt() and 0xFF) shl 8)
                 val sampleCount = (raw.size - 2) / 2
@@ -205,7 +212,7 @@ class BleAngleDataSource(
                     val hi = raw[2 + i * 2 + 1].toInt() and 0xFF
                     samples[i] = ((hi shl 8) or lo).toShort()
                 }
-                vibrationDataListener?.invoke(startIndex, samples)
+                vibrationDataListener?.invoke(startIndex, samples, pan)
             }
         }
 
@@ -244,6 +251,7 @@ class BleAngleDataSource(
             ?: throw IOException("Característica de configuração de vibração não encontrada.")
 
         val samples = sortedMapOf<Int, Short>()
+        val panSamples = sortedMapOf<Int, Short>()
         var totalExpected: Int? = null
 
         val config = ByteArray(4)
@@ -263,9 +271,12 @@ class BleAngleDataSource(
                     when (status) {
                         1 -> onProgress(progress)
                         2 -> {
+                            // O firmware só notifica "pronto" depois de enviar
+                            // os dois eixos, então aqui o de pan (quando
+                            // existe) também já chegou.
                             totalExpected = total
                             if (samples.size >= total && continuation.isActive) {
-                                continuation.resume(finishVibrationCapture(samples, rateHz))
+                                continuation.resume(finishVibrationCapture(samples, panSamples, rateHz))
                             }
                         }
                         3 -> {
@@ -277,11 +288,12 @@ class BleAngleDataSource(
                         }
                     }
                 }
-                vibrationDataListener = { startIndex, chunk ->
-                    chunk.forEachIndexed { i, value -> samples[startIndex + i] = value }
+                vibrationDataListener = { startIndex, chunk, pan ->
+                    val target = if (pan) panSamples else samples
+                    chunk.forEachIndexed { i, value -> target[startIndex + i] = value }
                     val total = totalExpected
                     if (total != null && samples.size >= total && continuation.isActive) {
-                        continuation.resume(finishVibrationCapture(samples, rateHz))
+                        continuation.resume(finishVibrationCapture(samples, panSamples, rateHz))
                     }
                 }
                 continuation.invokeOnCancellation {
@@ -296,16 +308,27 @@ class BleAngleDataSource(
         return result
     }
 
-    private fun finishVibrationCapture(samples: Map<Int, Short>, rateHz: Int): List<AngleReading> {
+    private fun finishVibrationCapture(
+        samples: Map<Int, Short>,
+        panSamples: Map<Int, Short>,
+        rateHz: Int,
+    ): List<AngleReading> {
         val total = samples.size
         val now = System.currentTimeMillis()
         val startMillis = now - (total * 1000L) / rateHz
-        return samples.entries.sortedBy { it.key }.map { (index, value) ->
-            AngleReading(
-                angleDeg = value / BleContract.ANGLE_SCALE,
-                timestamp = startMillis + (index * 1000L) / rateHz,
-            )
+        val angles = samples.entries.sortedBy { it.key }
+            .map { it.value / BleContract.ANGLE_SCALE }
+            .toDoubleArray()
+        // Vazio com firmware anterior à v1.3.0: `build` devolve as amostras
+        // sem o eixo de azimute.
+        val panRates = if (panSamples.isEmpty()) {
+            null
+        } else {
+            panSamples.entries.sortedBy { it.key }
+                .map { it.value / BleContract.PAN_RATE_SCALE }
+                .toDoubleArray()
         }
+        return VibrationReadings.build(angles, panRates, rateHz, startMillis)
     }
 
     private suspend fun writeCharacteristic(

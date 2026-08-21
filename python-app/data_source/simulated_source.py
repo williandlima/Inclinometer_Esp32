@@ -28,6 +28,7 @@ from data_source.base import (
     ErrorCallback,
     IAngleDataSource,
     ReadingCallback,
+    build_vibration_readings,
 )
 
 # Velocidade e cadência do pan simulado — na mesma ordem de grandeza do motor
@@ -38,6 +39,13 @@ PAN_HOLD_S = 12.0
 # aqui, quem inicia a leitura ficaria 12s olhando um eixo cravado, com cara de
 # app quebrado, antes de ver qualquer movimento.
 PAN_FIRST_MOVE_S = 2.0
+
+# Vibração sintética do eixo de pan: frequência diferente da do tilt, para os
+# dois espectros do relatório não ficarem idênticos, e um bias de giroscópio
+# somado à taxa, para exercitar a remoção de tendência da conversão.
+PAN_VIB_FREQ_HZ = 2.1
+PAN_VIB_AMPLITUDE_DEG = 0.08
+PAN_VIB_BIAS_DPS = 0.3
 
 
 class SimulatedAngleSource(IAngleDataSource):
@@ -177,13 +185,24 @@ class SimulatedAngleSource(IAngleDataSource):
 
     def _run_vibration_capture(self, duration_s: float, rate_hz: float, on_progress, on_done) -> None:
         """Gera uma série sintética de "vibração" em torno de 0° (posição de
-        calibração): soma de duas oscilações de baixa amplitude, em
-        frequências plausíveis para balanço de mastro sob vento (~1.3Hz) e
-        vibração mecânica (~5Hz), mais ruído — só para exercitar todo o
-        fluxo de captura/estatística/relatório sem hardware real."""
+        calibração) nos dois eixos, só para exercitar todo o fluxo de
+        captura/estatística/relatório sem hardware real:
+
+        - **tilt**: soma de duas oscilações de baixa amplitude, em
+          frequências plausíveis para balanço de mastro sob vento (~1.3Hz) e
+          vibração mecânica (~5Hz), mais ruído;
+        - **pan**: gerado como **velocidade angular**, igual ao que o
+          firmware envia — a derivada de uma oscilação de
+          `PAN_VIB_AMPLITUDE_DEG` a `PAN_VIB_FREQ_HZ` tem amplitude
+          `A*2*pi*f` em graus/s. Vai somado a um bias constante, de
+          propósito: é ele que exercita a remoção de tendência linear da
+          conversão taxa→ângulo, que é a parte não trivial do caminho.
+        """
         interval = 1.0 / rate_hz
         n_samples = max(1, int(duration_s * rate_hz))
-        readings: list[AngleReading] = []
+        angles: list[float] = []
+        pan_rates: list[float] = []
+        pan_rate_amplitude = PAN_VIB_AMPLITUDE_DEG * 2 * math.pi * PAN_VIB_FREQ_HZ
         t0 = time.time()
         try:
             for i in range(n_samples):
@@ -192,15 +211,19 @@ class SimulatedAngleSource(IAngleDataSource):
                     return
                 now = time.time()
                 elapsed = now - t0
-                vib = (
+                angles.append(
                     0.15 * math.sin(2 * math.pi * 1.3 * elapsed)
                     + 0.05 * math.sin(2 * math.pi * 5.0 * elapsed + 0.7)
                     + random.gauss(0.0, 0.03)
                 )
-                readings.append(AngleReading(angle_deg=vib, timestamp=now))
+                pan_rates.append(
+                    pan_rate_amplitude * math.cos(2 * math.pi * PAN_VIB_FREQ_HZ * elapsed)
+                    + PAN_VIB_BIAS_DPS
+                    + random.gauss(0.0, 0.05)
+                )
                 on_progress(min(100.0, 100.0 * (i + 1) / n_samples))
                 self._vibration_stop_event.wait(interval)
-            on_done(readings, None)
+            on_done(build_vibration_readings(angles, pan_rates, rate_hz, t0), None)
         except Exception as exc:  # noqa: BLE001
             on_done(None, str(exc))
         finally:

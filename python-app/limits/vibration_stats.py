@@ -24,17 +24,36 @@ padrão de análise espectral para deixar o resultado mais confiável e claro:
 5. **Frequência dominante com interpolação parabólica**: em vez de só o bin
    de pico (limitado à resolução rate_hz/n), ajusta uma parábola nos 3
    pontos ao redor do pico pra estimar a frequência real entre bins.
-6. **SNR mínimo (piso de ruído)**: só reporta uma frequência dominante se o
-   pico for significativamente mais alto que o piso de ruído do espectro —
-   evita apontar "frequência dominante" num sinal que é só ruído aleatório.
+6. **SNR mínimo contra o piso de ruído LOCAL**: só reporta uma frequência
+   dominante se o pico for significativamente mais alto que o ruído à sua
+   volta — evita apontar "frequência dominante" num sinal que é só ruído
+   aleatório. O piso é medido numa janela em torno do pico, e não no
+   espectro inteiro, porque no eixo de azimute o ruído não é branco (ver
+   abaixo) e uma mediana global daria falso positivo garantido.
+
+O firmware manda o eixo de **azimute como velocidade angular** (graus/s),
+não como ângulo, porque o ângulo de pan é obtido por integração com ZUPT e o
+ZUPT apaga de propósito o que integra enquanto o eixo está parado — que é
+justamente a condição de um ensaio de vibração.
+
+Por isso o azimute guarda as DUAS séries: `pan_rates_to_angles` produz o
+ângulo, usado nos gráficos no tempo e nas estatísticas (desvio padrão, RMS,
+pico a pico), e a taxa original fica em `pan_rate_dps`, usada na detecção do
+pico dominante. Não é redundância: o passo 6 supõe piso de ruído plano, e o
+ruído do giroscópio só é branco na taxa — no ângulo integrado ele vira
+passeio aleatório (1/f²) e a detecção acusaria pico em ruído puro. Ver
+`analyze_axis`.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+from limits.limit_tracker import PAN_AXIS, TILT_AXIS
 
 if TYPE_CHECKING:
     from data_source.base import AngleReading
@@ -75,10 +94,58 @@ class DominantPeak:
     snr_db: float
 
 
-def compute_stats(readings: list["AngleReading"]) -> VibrationStats:
+def pan_rates_to_angles(rates_dps: list[float], rate_hz: float) -> list[float]:
+    """Converte a série de velocidade angular do pan (graus/s) na variação
+    angular correspondente (graus).
+
+    O firmware envia o eixo de pan como TAXA, não como ângulo — ver
+    `firmware/src/VibrationCapture.h`. Aqui ela é integrada (regra do
+    trapézio) e a tendência linear resultante é removida.
+
+    A remoção da tendência não é cosmética: o bias residual do giroscópio é
+    uma constante somada à taxa, e integrar uma constante dá exatamente uma
+    rampa linear. Tirar a reta ajustada elimina esse termo por construção, e
+    o que sobra é a oscilação em torno da posição média — que é o que o
+    ensaio de vibração quer medir. É também por isso que integrar no tempo
+    aqui é tão bom quanto integrar no domínio da frequência: o único termo
+    que a integração amplificaria de forma problemática é justamente o que a
+    reta remove.
+    """
+    n = len(rates_dps)
+    if n == 0:
+        return []
+    rates = np.asarray(rates_dps, dtype=float)
+    dt = 1.0 / rate_hz
+
+    # Trapézio cumulativo, começando em zero.
+    angles = np.concatenate(([0.0], np.cumsum((rates[:-1] + rates[1:]) * 0.5 * dt))) if n > 1 else np.zeros(1)
+
+    if n > 1:
+        x = np.arange(n, dtype=float)
+        slope, intercept = np.polyfit(x, angles, 1)
+        angles = angles - (slope * x + intercept)
+    return [float(v) for v in angles]
+
+
+def _axis_values(readings: list["AngleReading"], axis: str) -> np.ndarray:
+    """Série numérica do eixo pedido. Levanta erro se o eixo não foi medido —
+    quem chama deve checar antes (ver `has_pan_samples`)."""
+    if axis == PAN_AXIS:
+        if any(r.pan_deg is None for r in readings):
+            raise ValueError("Captura sem amostras do eixo de azimute.")
+        return np.array([r.pan_deg for r in readings], dtype=float)
+    return np.array([r.angle_deg for r in readings], dtype=float)
+
+
+def has_pan_samples(readings: list["AngleReading"]) -> bool:
+    """True se a captura tem o eixo de azimute em todas as amostras."""
+    return bool(readings) and all(r.pan_deg is not None for r in readings)
+
+
+def compute_stats(readings: list["AngleReading"], axis: str = TILT_AXIS) -> VibrationStats:
     if not readings:
         raise ValueError("Nenhuma amostra na captura.")
-    values = np.array([r.angle_deg for r in readings], dtype=float)
+    values = _axis_values(readings, axis)
     duration = readings[-1].timestamp - readings[0].timestamp
     return VibrationStats(
         n_samples=len(readings),
@@ -96,14 +163,10 @@ def _next_pow2(n: int) -> int:
     return 1 if n <= 1 else 1 << (n - 1).bit_length()
 
 
-def compute_fft(readings: list["AngleReading"], rate_hz: float) -> tuple[np.ndarray, np.ndarray]:
-    """Retorna `(frequências_hz, amplitude_graus)` do espectro da variação
-    angular — amplitude de um lado só, corrigida pela janela, já pronta pra
-    ler diretamente como a amplitude física da oscilação naquela frequência
-    (ver notas do módulo sobre o pipeline completo)."""
-    if not readings:
-        raise ValueError("Nenhuma amostra na captura.")
-    values = np.array([r.angle_deg for r in readings], dtype=float)
+def _spectrum(values: np.ndarray, rate_hz: float) -> tuple[np.ndarray, np.ndarray]:
+    """Espectro de amplitude de um lado só de uma série qualquer, com os
+    passos 1-4 do pipeline descrito no topo do módulo. A unidade da saída é a
+    mesma da entrada (graus, ou graus/s no caso da taxa do azimute)."""
     n = len(values)
 
     x = np.arange(n, dtype=float)
@@ -122,6 +185,43 @@ def compute_fft(readings: list["AngleReading"], rate_hz: float) -> tuple[np.ndar
     if len(magnitude) > 2:
         magnitude[1:-1] *= 2.0  # single-sided: dobra tudo, exceto DC e Nyquist
     return freqs, magnitude
+
+
+def _pan_rates(readings: list["AngleReading"]) -> np.ndarray:
+    if any(r.pan_rate_dps is None for r in readings):
+        raise ValueError("Captura sem a velocidade angular do eixo de azimute.")
+    return np.array([r.pan_rate_dps for r in readings], dtype=float)
+
+
+def _rate_spectrum_to_angle(freqs: np.ndarray, rate_magnitudes: np.ndarray) -> np.ndarray:
+    """Converte um espectro de velocidade angular (graus/s) no espectro de
+    amplitude angular correspondente (graus): uma oscilação de amplitude A em
+    `f` tem velocidade de amplitude `A*2*pi*f`, logo `A = R(f) / (2*pi*f)`.
+
+    O bin de 0 Hz vira zero — ali a divisão explodiria, e é justamente onde
+    mora o bias do giroscópio, que não é vibração."""
+    angle = np.zeros_like(rate_magnitudes)
+    nonzero = freqs > 0
+    angle[nonzero] = rate_magnitudes[nonzero] / (2.0 * np.pi * freqs[nonzero])
+    return angle
+
+
+def compute_fft(
+    readings: list["AngleReading"], rate_hz: float, axis: str = TILT_AXIS
+) -> tuple[np.ndarray, np.ndarray]:
+    """Retorna `(frequências_hz, amplitude_graus)` do espectro da variação
+    angular — amplitude de um lado só, corrigida pela janela, já pronta pra
+    ler diretamente como a amplitude física da oscilação naquela frequência
+    (ver notas do módulo sobre o pipeline completo).
+
+    No eixo de azimute o espectro é calculado a partir da VELOCIDADE angular
+    e depois convertido para amplitude angular — ver `analyze_axis`."""
+    if not readings:
+        raise ValueError("Nenhuma amostra na captura.")
+    if axis == PAN_AXIS:
+        freqs, rate_magnitudes = _spectrum(_pan_rates(readings), rate_hz)
+        return freqs, _rate_spectrum_to_angle(freqs, rate_magnitudes)
+    return _spectrum(_axis_values(readings, axis), rate_hz)
 
 
 def _min_snr_db_for_bins(num_bins: int) -> float:
@@ -178,6 +278,11 @@ def find_dominant_peak(
     # Piso de ruído: mediana do espectro na faixa de busca, excluindo os
     # bins do próprio pico (mediana é robusta a outliers, ou seja, ao
     # próprio pico e a eventuais harmônicos).
+    #
+    # Isso pressupõe um piso de ruído aproximadamente PLANO — por isso esta
+    # função é sempre alimentada com um espectro cujo ruído é branco: o do
+    # ângulo, no eixo de tilt, e o da VELOCIDADE ANGULAR, no eixo de azimute
+    # (ver `analyze_axis`).
     exclude_lo = max(start_idx, peak_idx - 2)
     exclude_hi = min(len(magnitudes) - 1, peak_idx + 2)
     noise_idx = [i for i in range(start_idx, len(magnitudes)) if i < exclude_lo or i > exclude_hi]
@@ -191,3 +296,61 @@ def find_dominant_peak(
     if snr_db < min_snr_db:
         return None
     return DominantPeak(freq_hz=peak_freq, amplitude_deg=peak_amp, snr_db=snr_db)
+
+
+@dataclass(frozen=True)
+class AxisAnalysis:
+    """Resultado completo da análise de vibração de um eixo."""
+
+    axis: str
+    stats: VibrationStats
+    freqs: np.ndarray
+    magnitudes: np.ndarray
+
+
+def analyze_axis(
+    readings: list["AngleReading"], rate_hz: float, axis: str = TILT_AXIS
+) -> AxisAnalysis:
+    """Roda o pipeline inteiro (estatísticas + espectro + pico dominante) num
+    eixo de uma captura.
+
+    A diferença entre os eixos está em QUAL espectro alimenta a detecção do
+    pico. `find_dominant_peak` compara o pico com a mediana do espectro, o
+    que só é justo se o piso de ruído for plano:
+
+    - **tilt**: o ruído do acelerômetro já é branco no ângulo, então o
+      espectro do ângulo serve direto;
+    - **azimute**: o ruído do giroscópio é branco na TAXA. O espectro do
+      ângulo (que é a integral) tem ruído de passeio aleatório, caindo com
+      1/f² — nele a mediana global fica dominada pelas frequências altas e
+      qualquer bin de baixa frequência vira um "pico" enorme. Medido em
+      teste: ruído puro era apontado como frequência dominante em 100% das
+      tentativas. Por isso a detecção roda no espectro da taxa, e só a
+      amplitude do pico encontrado é convertida para graus.
+
+    O espectro devolvido para os gráficos é sempre em graus, nos dois casos.
+    """
+    stats = compute_stats(readings, axis)
+
+    if axis == PAN_AXIS:
+        freqs, rate_magnitudes = _spectrum(_pan_rates(readings), rate_hz)
+        peak = find_dominant_peak(freqs, rate_magnitudes)
+        magnitudes = _rate_spectrum_to_angle(freqs, rate_magnitudes)
+        amplitude_deg = (
+            peak.amplitude_deg / (2.0 * math.pi * peak.freq_hz)
+            if peak is not None and peak.freq_hz > 0
+            else None
+        )
+    else:
+        freqs, magnitudes = _spectrum(_axis_values(readings, axis), rate_hz)
+        peak = find_dominant_peak(freqs, magnitudes)
+        amplitude_deg = peak.amplitude_deg if peak is not None else None
+
+    if peak is not None and amplitude_deg is not None:
+        stats = dataclasses.replace(
+            stats,
+            dominant_freq_hz=peak.freq_hz,
+            dominant_amplitude_deg=amplitude_deg,
+            dominant_snr_db=peak.snr_db,
+        )
+    return AxisAnalysis(axis=axis, stats=stats, freqs=freqs, magnitudes=magnitudes)

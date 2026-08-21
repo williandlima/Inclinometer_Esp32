@@ -52,7 +52,9 @@ CREATE TABLE IF NOT EXISTS vibration_captures (
 CREATE TABLE IF NOT EXISTS vibration_samples (
     capture_id INTEGER NOT NULL REFERENCES vibration_captures(id),
     timestamp REAL NOT NULL,
-    angle_deg REAL NOT NULL
+    angle_deg REAL NOT NULL,
+    pan_deg REAL,
+    pan_rate_dps REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_readings_session ON readings(session_id);
@@ -87,6 +89,12 @@ _MIGRATIONS = [
     ("readings", "pan_deg", "ALTER TABLE readings ADD COLUMN pan_deg REAL"),
     ("limit_events", "pan_deg", "ALTER TABLE limit_events ADD COLUMN pan_deg REAL"),
     ("limit_events", "axis", "ALTER TABLE limit_events ADD COLUMN axis TEXT NOT NULL DEFAULT 'tilt'"),
+    ("vibration_samples", "pan_deg", "ALTER TABLE vibration_samples ADD COLUMN pan_deg REAL"),
+    (
+        "vibration_samples",
+        "pan_rate_dps",
+        "ALTER TABLE vibration_samples ADD COLUMN pan_rate_dps REAL",
+    ),
 ]
 
 
@@ -196,8 +204,9 @@ class HistoryStore:
         )
         capture_id = cur.lastrowid
         self._conn.executemany(
-            "INSERT INTO vibration_samples (capture_id, timestamp, angle_deg) VALUES (?, ?, ?)",
-            [(capture_id, r.timestamp, r.angle_deg) for r in readings],
+            "INSERT INTO vibration_samples (capture_id, timestamp, angle_deg, pan_deg, pan_rate_dps)"
+            " VALUES (?, ?, ?, ?, ?)",
+            [(capture_id, r.timestamp, r.angle_deg, r.pan_deg, r.pan_rate_dps) for r in readings],
         )
         self._conn.commit()
         return capture_id
@@ -210,10 +219,14 @@ class HistoryStore:
 
     def get_vibration_samples(self, capture_id: int) -> list[AngleReading]:
         rows = self._conn.execute(
-            "SELECT angle_deg, timestamp FROM vibration_samples WHERE capture_id = ? ORDER BY timestamp",
+            "SELECT angle_deg, timestamp, pan_deg, pan_rate_dps FROM vibration_samples"
+            " WHERE capture_id = ? ORDER BY timestamp",
             (capture_id,),
         ).fetchall()
-        return [AngleReading(angle_deg=row[0], timestamp=row[1]) for row in rows]
+        return [
+            AngleReading(angle_deg=row[0], timestamp=row[1], pan_deg=row[2], pan_rate_dps=row[3])
+            for row in rows
+        ]
 
     def close(self) -> None:
         self._conn.close()

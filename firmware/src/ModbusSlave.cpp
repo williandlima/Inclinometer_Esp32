@@ -99,6 +99,9 @@ void ModbusSlave::handleReadInputRegisters(uint16_t startAddr, uint16_t count) {
         } else if (addr >= REG_VIBRATION_BLOCK_START && addr < REG_VIBRATION_BLOCK_START + VIBRATION_BLOCK_SIZE) {
             uint16_t sampleIndex = _vibrationCursor + (addr - REG_VIBRATION_BLOCK_START);
             values[i] = static_cast<uint16_t>(_vibration.sampleAt(sampleIndex));
+        } else if (addr >= REG_VIBRATION_PAN_BLOCK_START && addr < REG_VIBRATION_PAN_BLOCK_START + VIBRATION_BLOCK_SIZE) {
+            uint16_t sampleIndex = _vibrationCursor + (addr - REG_VIBRATION_PAN_BLOCK_START);
+            values[i] = static_cast<uint16_t>(_vibration.panSampleAt(sampleIndex));
         } else {
             sendException(0x04, 0x02);  // endereço inválido
             return;

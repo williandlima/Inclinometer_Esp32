@@ -2,7 +2,6 @@
 limites (mín/máx), e ações de reset/relatório."""
 from __future__ import annotations
 
-import dataclasses
 import datetime as _dt
 import os
 import threading
@@ -28,7 +27,7 @@ from data_source.modbus_source import ModbusAngleSource
 from data_source.simulated_source import SimulatedAngleSource
 from limits.history_store import HistoryStore
 from limits.limit_tracker import PAN_AXIS, TILT_AXIS, LimitTracker
-from limits.vibration_stats import compute_fft, compute_stats, find_dominant_peak
+from limits.vibration_stats import analyze_axis, has_pan_samples
 from report.report_generator import generate_report, generate_vibration_report
 from ui.settings_dialog import AppSettings, SettingsDialog
 from ui.vibration_dialog import VibrationConfigDialog, VibrationResultDialog
@@ -556,19 +555,12 @@ class MainWindow(QMainWindow):
             return
 
         capture_id = self._history.save_vibration_capture(self._settings.mode, duration_s, rate_hz, readings)
-        stats = compute_stats(readings)
-        freqs, magnitudes = compute_fft(readings, rate_hz)
-        peak = find_dominant_peak(freqs, magnitudes)
-        if peak is not None:
-            stats = dataclasses.replace(
-                stats,
-                dominant_freq_hz=peak.freq_hz,
-                dominant_amplitude_deg=peak.amplitude_deg,
-                dominant_snr_db=peak.snr_db,
-            )
+        tilt = analyze_axis(readings, rate_hz, TILT_AXIS)
+        # O eixo de azimute só existe na captura com firmware >= 1.3.0.
+        pan = analyze_axis(readings, rate_hz, PAN_AXIS) if has_pan_samples(readings) else None
         self.statusBar().showMessage("Captura de vibração concluída.", 5000)
 
-        result_dialog = VibrationResultDialog(stats, self)
+        result_dialog = VibrationResultDialog(tilt.stats, pan.stats if pan else None, self)
         result_dialog.exec_()
         if not result_dialog.save_requested:
             return
@@ -582,7 +574,7 @@ class MainWindow(QMainWindow):
         captures_by_id = {c.id: c for c in self._history.list_vibration_captures()}
         capture_info = captures_by_id.get(capture_id)
         try:
-            generate_vibration_report(path, capture_info, readings, stats, freqs, magnitudes)
+            generate_vibration_report(path, capture_info, readings, tilt, pan)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Erro ao gerar relatório", str(exc))
             return

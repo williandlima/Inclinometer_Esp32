@@ -49,4 +49,10 @@ data class VibrationSampleEntity(
     val captureId: Long,
     val timestamp: Long,
     val angleDeg: Double,
+    // Nulos quando o firmware conectado não amostrava azimute no Modo
+    // Vibração (anterior à v1.3.0). São dois campos porque a análise
+    // espectral precisa da taxa e os gráficos precisam do ângulo — ver
+    // AngleReading.panRateDps.
+    val panDeg: Double? = null,
+    val panRateDps: Double? = null,
 )

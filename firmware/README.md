@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.2.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.3.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -92,8 +92,9 @@ ponto de vista do `pyserial`).
 | Holding reg. 10 | escrita | Duração da captura (s) |
 | Holding reg. 11 | escrita | Taxa de amostragem (Hz) |
 | Input reg. 20-22 | leitura | Status / progresso (%) / total de amostras da captura |
-| Holding reg. 30 | escrita | Cursor (índice inicial do bloco a ler) |
-| Input reg. 31-62 | leitura | Bloco de até 32 amostras (int16, ângulo relativo * 100) |
+| Holding reg. 30 | escrita | Cursor (índice inicial do bloco a ler) — vale para os dois eixos |
+| Input reg. 31-62 | leitura | Bloco de até 32 amostras de **tilt** (int16, ângulo relativo * 100) |
+| Input reg. 70-101 | leitura | Bloco de até 32 amostras de **pan** (int16, **velocidade angular** em °/s * 100) |
 | Input reg. 40 | leitura | Versão do firmware (`FIRMWARE_VERSION_CODE`, ver acima) |
 
 ### BLE (serviço `6e6e0001-...`)
@@ -107,6 +108,7 @@ ponto de vista do `pyserial`).
 | `6e6e0006-...` (dados vibração) | notify | Amostras em pacotes (índice + até 8 amostras int16 LE) |
 | `6e6e0007-...` (versão firmware) | read | `FIRMWARE_VERSION_CODE` (uint16 LE, ver acima) — valor fixo, sem notify |
 | `6e6e0008-...` (pan) | read/notify | Ângulo de pan * 100 (int16 LE, com sinal), na mesma cadência do tilt |
+| `6e6e0009-...` (dados vibração pan) | notify | Amostras de pan em pacotes (índice + até 8 int16 LE), em **velocidade angular** °/s * 100 |
 
 O pan entrou numa characteristic própria, e não anexado à de tilt, de
 propósito: os apps já instalados esperam exatamente 2 bytes em
@@ -233,6 +235,45 @@ preservados integralmente.
 **Isso valida a matemática, não o hardware.** Falta rodar contra o MPU6050
 real — ver as duas confirmações de bancada nas limitações abaixo.
 
+## Modo Vibração no eixo de pan (v1.3.0)
+
+A captura de vibração agora amostra os dois eixos. Mas eles carregam
+**grandezas diferentes**, e a razão é o próprio ZUPT:
+
+- **tilt**: o ângulo relativo à calibração, em graus;
+- **pan**: a **velocidade angular**, em graus/s.
+
+Guardar o ângulo de pan integrado não funcionaria. O ângulo de pan sai da
+integração com ZUPT, e o mecanismo 3 acima *cancela de propósito* o que foi
+integrado enquanto o eixo está parado — que é exatamente a condição de um
+ensaio de vibração. O firmware apagaria o sinal que se quer medir. A
+velocidade angular não passa por integração nem por cancelamento, e ainda
+deixa o bias residual concentrado em 0 Hz, onde a análise espectral já o
+descarta por construção.
+
+Os apps integram (regra do trapézio) e removem a tendência linear — o bias é
+uma constante somada à taxa, e integrar constante dá exatamente uma rampa,
+que a reta ajustada elimina.
+
+### Um detalhe que quase virou bug
+
+A detecção de frequência dominante compara o pico com a **mediana** do
+espectro, o que só é justo se o piso de ruído for plano. No tilt é: o ruído
+do acelerômetro é branco no ângulo. No pan **não é**: o ruído do giroscópio é
+branco na *taxa*, e integrar ruído branco dá um passeio aleatório, cujo
+espectro cai com 1/f². Nessa forma a mediana global fica dominada pelas
+frequências altas, e qualquer bin de baixa frequência vira um "pico" enorme.
+
+Em teste, com a primeira versão do código, **ruído puro era apontado como
+frequência dominante em 100% das tentativas** (0,37 Hz, com folga de SNR).
+A correção foi rodar a detecção do pico no espectro da *taxa* — onde o ruído
+é branco de verdade — e converter só a amplitude do pico para graus, por
+`A = R(f) / (2·pi·f)`. Por isso as amostras de pan guardam as duas séries: a
+taxa (para a detecção) e o ângulo integrado (para os gráficos no tempo e as
+estatísticas). Depois da correção: 0 falsos positivos em 48 capturas de
+ruído puro em 4 durações diferentes, mantendo 30/30 de detecção de sinal
+real, inclusive com amplitude de 0,02°.
+
 ## Limitações conhecidas / próximos passos
 
 - **[1.2.0] Faixa do pan é placeholder.** `PAN_MIN_DEG`/`PAN_MAX_DEG` estão
@@ -264,11 +305,18 @@ real — ver as duas confirmações de bancada nas limitações abaixo.
   projetado (o bias é estimado sobre a taxa já projetada, que depende de
   `θ`). Irrelevante no uso normal, em que o tilt fica aproximadamente fixo
   enquanto se mede pan; a janela de ZUPT seguinte reabsorve a diferença.
-- **[1.2.0] Modo Vibração ainda não cobre o eixo de pan.** Quando cobrir,
-  deve usar **integração no domínio da frequência** (`Θ(f) = R(f)/(2πf)`)
-  em vez de integrar no tempo: assim o bias cai no bin 0 e é excluído por
-  construção pelo `MIN_PEAK_FREQ_HZ` que o pipeline de FFT já tem. Exige
-  dobrar o buffer de captura e estender o protocolo de streaming.
+- **[1.3.0] Memória do buffer de captura dobrou** para ~24KB (dois buffers
+  de `VIBRATION_MAX_SAMPLES` int16, em `VibrationCapture.h`). Cabe com folga
+  no ESP32 mesmo com o stack BLE ativo, mas é o maior consumo de RAM do
+  firmware — é aqui que o limite aperta se um dia precisar de capturas mais
+  longas.
+- **[1.3.0] Carga do barramento I2C subiu**: durante uma captura de vibração
+  são duas transações por amostra (tilt e pan), somadas às do loop contínuo.
+  Na taxa padrão de 50Hz a ocupação fica em torno de 40% a 100kHz, com folga
+  confortável. Em taxas de amostragem bem mais altas isso pode apertar — a
+  saída é subir o barramento para 400kHz (`Wire.setClock`), que o MPU6050
+  suporta. Não foi feito de propósito: mexeria numa temporização já validada
+  em hardware sem necessidade comprovada.
 - **[1.2.0] Os dois apps já consomem o pan** (Modbus reg. 1 e BLE
   `6e6e0008-...`), com segundo display, segundo par de mín/máx e segundo
   gráfico no relatório. Ambos detectam sozinhos um ESP32 com firmware

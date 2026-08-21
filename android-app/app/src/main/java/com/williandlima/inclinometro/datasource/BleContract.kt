@@ -30,6 +30,12 @@ import java.util.UUID
  *   pronto, bytes 2-3 = total de amostras uint16 LE) e envia os dados em
  *   [VIBRATION_DATA_CHARACTERISTIC_UUID] em pacotes (bytes 0-1 = índice
  *   inicial uint16 LE, restante = amostras int16 LE com sinal).
+ * - Vibração do eixo de **azimute**: [VIBRATION_PAN_DATA_CHARACTERISTIC_UUID],
+ *   mesmo formato de pacote, mas carregando **velocidade angular em graus/s**
+ *   * [PAN_RATE_SCALE], e não ângulo (ver `firmware/src/VibrationCapture.h`
+ *   para o porquê). O firmware envia todos os pacotes de tilt, depois todos
+ *   os de pan, e só então notifica "pronto". Firmware anterior à v1.3.0 não
+ *   tem essa característica — a captura sai só com o tilt.
  * - Versão do firmware: [FIRMWARE_VERSION_CHARACTERISTIC_UUID], read-only,
  *   2 bytes little-endian = `major*10000 + minor*100 + patch` (ex: "1.0.0"
  *   -> 10000). Valor fixo (não muda em runtime, sem notify) — ainda não
@@ -45,8 +51,13 @@ object BleContract {
     val VIBRATION_DATA_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f")
     val FIRMWARE_VERSION_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f")
     val PAN_CHARACTERISTIC_UUID: UUID = UUID.fromString("6e6e0008-3c17-4a2e-8f4b-1a2b3c4d5e6f")
+    val VIBRATION_PAN_DATA_CHARACTERISTIC_UUID: UUID =
+        UUID.fromString("6e6e0009-3c17-4a2e-8f4b-1a2b3c4d5e6f")
     val CLIENT_CHARACTERISTIC_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     const val ANGLE_SCALE = 100.0
+
+    /** Amostra de vibração do azimute = graus/s * 100 (int16, +-327°/s). */
+    const val PAN_RATE_SCALE = 100.0
     const val VIBRATION_CAPTURE_TIMEOUT_MARGIN_S = 30L
 }

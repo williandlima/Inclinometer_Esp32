@@ -42,6 +42,13 @@ isso): contrato assumido, a confirmar quando o firmware existir.
   partir de `VIBRATION_BLOCK_START_REG` (cada um = ângulo relativo ao "zero"
   calibrado * `ANGLE_SCALE`, inteiro **com sinal** de 16 bits, já que a
   variação pode ser negativa) — repete até completar `VIBRATION_SAMPLE_COUNT_REG`.
+- O eixo de **pan** vem no mesmo esquema, a partir de
+  `VIBRATION_PAN_BLOCK_START_REG`, com o mesmo cursor. A grandeza ali é
+  diferente: **velocidade angular em graus/s** * `PAN_RATE_SCALE`, e não
+  ângulo (ver `firmware/src/VibrationCapture.h` para o porquê). A conversão
+  para ângulo é feita por `limits.vibration_stats.pan_rates_to_angles`.
+  Firmware anterior à v1.3.0 rejeita esses registradores com exceção de
+  endereço inválido — nesse caso a captura sai só com o tilt.
 """
 from __future__ import annotations
 
@@ -49,7 +56,13 @@ import threading
 import time
 from typing import NamedTuple
 
-from data_source.base import AngleReading, ErrorCallback, IAngleDataSource, ReadingCallback
+from data_source.base import (
+    AngleReading,
+    ErrorCallback,
+    IAngleDataSource,
+    ReadingCallback,
+    build_vibration_readings,
+)
 
 # Muitas placas ESP32 (incluindo a usada neste projeto, com chip CH9102)
 # resetam a placa via DTR/RTS toda vez que a porta serial é aberta — é o
@@ -73,9 +86,11 @@ VIBRATION_RATE_REG = 11  # amostras/s (uint16)
 VIBRATION_STATUS_REG = 20  # 0=ocioso, 1=capturando, 2=pronto, 3=erro
 VIBRATION_PROGRESS_REG = 21  # percentual 0-100
 VIBRATION_SAMPLE_COUNT_REG = 22  # total de amostras capturadas (válido quando status=pronto)
-VIBRATION_CURSOR_REG = 30  # índice inicial do próximo bloco a ler (escrita)
-VIBRATION_BLOCK_START_REG = 31  # início do bloco de amostras (leitura)
+VIBRATION_CURSOR_REG = 30  # índice inicial do próximo bloco a ler (escrita) — vale para os dois eixos
+VIBRATION_BLOCK_START_REG = 31  # início do bloco de amostras de TILT (leitura)
 VIBRATION_BLOCK_SIZE = 32  # amostras por bloco de leitura
+VIBRATION_PAN_BLOCK_START_REG = 70  # início do bloco de amostras de PAN (taxa em graus/s * PAN_RATE_SCALE)
+PAN_RATE_SCALE = 100.0  # registrador = graus/s * 100 (int16, faixa +-327°/s)
 VIBRATION_STATUS_POLL_INTERVAL_S = 0.5
 
 
@@ -264,7 +279,9 @@ class ModbusAngleSource(IAngleDataSource):
             capture_finished_at = time.time()
             t_start = capture_finished_at - sample_count / rate_hz
 
-            readings: list[AngleReading] = []
+            angles: list[float] = []
+            pan_rates: list[float] = []
+            pan_supported = True
             index = 0
             while index < sample_count:
                 block_size = min(VIBRATION_BLOCK_SIZE, sample_count - index)
@@ -277,14 +294,38 @@ class ModbusAngleSource(IAngleDataSource):
                     block_result = client.read_input_registers(
                         address=VIBRATION_BLOCK_START_REG, count=block_size, device_id=self._slave_id
                     )
+                    pan_result = (
+                        client.read_input_registers(
+                            address=VIBRATION_PAN_BLOCK_START_REG, count=block_size, device_id=self._slave_id
+                        )
+                        if pan_supported
+                        else None
+                    )
                 if block_result.isError():
                     raise IOError(str(block_result))
-                for i, raw in enumerate(block_result.registers):
-                    angle = _to_signed16(raw) / ANGLE_SCALE
-                    readings.append(AngleReading(angle_deg=angle, timestamp=t_start + (index + i) / rate_hz))
+                angles.extend(_to_signed16(raw) / ANGLE_SCALE for raw in block_result.registers)
+
+                if pan_result is not None:
+                    if pan_result.isError():
+                        # Só desiste do eixo de pan se o escravo rejeitou o
+                        # endereço (firmware anterior à v1.3.0); falha de
+                        # transporte é erro de verdade e derruba a captura.
+                        if not _is_slave_exception(pan_result):
+                            raise IOError(str(pan_result))
+                        pan_supported = False
+                        pan_rates = []
+                    else:
+                        pan_rates.extend(
+                            _to_signed16(raw) / PAN_RATE_SCALE for raw in pan_result.registers
+                        )
                 index += block_size
 
-            on_done(readings, None)
+            on_done(
+                build_vibration_readings(
+                    angles, pan_rates if pan_supported else None, rate_hz, t_start
+                ),
+                None,
+            )
         except Exception as exc:  # noqa: BLE001
             on_done(None, str(exc))
         finally:

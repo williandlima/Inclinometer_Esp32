@@ -37,6 +37,48 @@ class AngleReading:
     timestamp: float  # segundos desde epoch (time.time())
     pan_deg: float | None = None
 
+    # Só preenchido em capturas do Modo Vibração: a velocidade angular bruta
+    # do eixo de azimute, como o firmware a envia (`pan_deg` é a integral
+    # dela). Guardar as duas não é redundância — a análise espectral do
+    # azimute precisa da taxa, cujo ruído é branco, enquanto os gráficos e as
+    # estatísticas no tempo precisam do ângulo. Ver `limits.vibration_stats`.
+    pan_rate_dps: float | None = None
+
+
+def build_vibration_readings(
+    angles_deg: list[float],
+    pan_rates_dps: list[float] | None,
+    rate_hz: float,
+    t_start: float,
+) -> list[AngleReading]:
+    """Monta as amostras de uma captura de vibração a partir das séries
+    brutas de cada eixo, usada pelas três fontes de dados.
+
+    `pan_rates_dps` são **velocidades angulares** (graus/s), como o firmware
+    as envia, e são convertidas aqui para variação angular — ver
+    `limits.vibration_stats.pan_rates_to_angles`. Passe `None` (ou uma lista
+    de tamanho diferente do eixo de tilt) quando o firmware conectado não
+    fornecer o eixo de azimute: as amostras saem com `pan_deg` nulo.
+    """
+    # Import local para `data_source` não depender de numpy quando só as
+    # leituras contínuas forem usadas, e para não amarrar a ordem de import
+    # entre os pacotes `data_source` e `limits`.
+    from limits.vibration_stats import pan_rates_to_angles
+
+    pan_angles: list[float] | None = None
+    if pan_rates_dps is not None and len(pan_rates_dps) == len(angles_deg):
+        pan_angles = pan_rates_to_angles(pan_rates_dps, rate_hz)
+
+    return [
+        AngleReading(
+            angle_deg=angle,
+            timestamp=t_start + i / rate_hz,
+            pan_deg=pan_angles[i] if pan_angles is not None else None,
+            pan_rate_dps=pan_rates_dps[i] if pan_angles is not None else None,
+        )
+        for i, angle in enumerate(angles_deg)
+    ]
+
 
 ReadingCallback = Callable[[AngleReading], None]
 ErrorCallback = Callable[[str], None]

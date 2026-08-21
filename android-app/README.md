@@ -73,16 +73,24 @@ maior parte do tempo e se desloca em rajadas — que é justamente o padrão de
 uso que torna a medição por giroscópio confiável.
 
 O botão **Modo Vibração** faz uma captura em alta taxa configurável
-(duração + taxa de amostragem), útil para caracterizar variação angular por
-vento/vibração — ao final, mostra desvio padrão/RMS/pico-a-pico e a
-**frequência dominante** (amplitude + SNR, com detecção sub-bin por
-interpolação parabólica; "nenhum pico confiável" se o sinal for compatível
-com ruído), e permite salvar um relatório em PDF com o gráfico no tempo e o
-espectro de frequência (FFT), com o pico marcado. Cada captura fica salva
-separada das sessões de monitoramento contínuo no histórico. Pipeline da
-FFT (`limits/Fft.kt`) equivalente ao do app desktop
-(`limits/vibration_stats.py`): tendência linear removida, janela de Hann,
-amplitude corrigida e SNR adaptativo ao número de bins.
+(duração + taxa de amostragem) **nos dois eixos**, útil para caracterizar
+variação angular por vento/vibração — ao final, mostra desvio padrão/RMS/
+pico-a-pico e a **frequência dominante** de cada eixo (amplitude + SNR, com
+detecção sub-bin por interpolação parabólica; "nenhum pico confiável" se o
+sinal for compatível com ruído), e permite salvar um relatório em PDF com
+uma página por eixo (gráfico no tempo + espectro de frequência, com o pico
+marcado). Cada captura fica salva separada das sessões de monitoramento
+contínuo no histórico. Pipeline da FFT (`limits/Fft.kt`) equivalente ao do
+app desktop (`limits/vibration_stats.py`): tendência linear removida, janela
+de Hann, amplitude corrigida e SNR adaptativo ao número de bins.
+
+O eixo de azimute chega do firmware como **velocidade angular** (°/s), não
+como ângulo — o ZUPT que produz o ângulo de pan cancela de propósito o que
+integra enquanto o eixo está parado, que é justamente a condição de um ensaio
+de vibração. O app integra e remove a tendência linear
+(`datasource/VibrationReadings.kt`), e roda a detecção do pico no espectro da
+taxa, onde o ruído do giroscópio é branco. Detalhes em "Modo Vibração no eixo
+de pan" no `firmware/README.md`.
 
 O modo real (BLE) segue o mesmo contrato implementado no firmware do ESP32
 (`firmware/`), mas ainda não foi validado contra hardware físico.

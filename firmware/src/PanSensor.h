@@ -82,6 +82,19 @@ public:
     // fica congelado em zero, ~1s após o boot).
     bool biasReady() const { return _biasReady; }
 
+    // Velocidade angular instantânea do eixo de pan, em graus/s, já
+    // compensada por tilt, com o bias estimado subtraído e o fator de escala
+    // aplicado. Faz uma leitura I2C na hora.
+    //
+    // É ESTA a grandeza usada pelo Modo Vibração do pan — e não o ângulo
+    // integrado de readPanDeg(). O motivo é o mecanismo 3 do cabeçalho
+    // acima: um ensaio de vibração acontece justamente com o eixo parado,
+    // então o cancelamento de janela parada apagaria de propósito toda a
+    // oscilação que se quer medir. A taxa não passa por integração nem por
+    // cancelamento, e ainda deixa o bias residual concentrado em 0 Hz, onde
+    // a análise espectral já o descarta por construção.
+    float readInstantRateDps();
+
 private:
     Mpu6050 &_mpu;
 
@@ -92,6 +105,7 @@ private:
 
     uint32_t _lastSampleMs = 0;
     bool _hasLastSample = false;  // primeira amostra não tem dt confiável
+    float _lastRateDps = 0.0f;    // última taxa válida (repetida em falha de I2C)
 
     // Estado da janela de ZUPT em andamento.
     uint32_t _windowStartMs = 0;
@@ -104,4 +118,8 @@ private:
     void closeWindow(uint32_t now);
 
     void resetWindow(uint32_t now);
+
+    // Lê o sensor e devolve a taxa de pan bruta (compensada por tilt, sem
+    // subtrair bias). false em falha de I2C.
+    bool sampleRateDps(float &rateDps);
 };

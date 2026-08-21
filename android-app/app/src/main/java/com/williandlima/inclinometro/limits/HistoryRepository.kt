@@ -95,7 +95,15 @@ class HistoryRepository(private val dao: InclinometerDao) {
             )
         )
         dao.insertVibrationSamples(
-            readings.map { VibrationSampleEntity(captureId = captureId, timestamp = it.timestamp, angleDeg = it.angleDeg) }
+            readings.map {
+                VibrationSampleEntity(
+                    captureId = captureId,
+                    timestamp = it.timestamp,
+                    angleDeg = it.angleDeg,
+                    panDeg = it.panDeg,
+                    panRateDps = it.panRateDps,
+                )
+            }
         )
         return captureId
     }
@@ -112,5 +120,12 @@ class HistoryRepository(private val dao: InclinometerDao) {
         }
 
     suspend fun getVibrationSamples(captureId: Long): List<AngleReading> =
-        dao.getVibrationSamples(captureId).map { AngleReading(angleDeg = it.angleDeg, timestamp = it.timestamp) }
+        dao.getVibrationSamples(captureId).map {
+            AngleReading(
+                angleDeg = it.angleDeg,
+                timestamp = it.timestamp,
+                panDeg = it.panDeg,
+                panRateDps = it.panRateDps,
+            )
+        }
 }

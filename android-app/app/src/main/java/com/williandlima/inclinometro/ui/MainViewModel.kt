@@ -80,6 +80,9 @@ data class UiState(
     val vibrationCapturing: Boolean = false,
     val vibrationProgress: Int = 0,
     val vibrationResult: VibrationStats? = null,
+    // Nulo quando a captura veio de firmware anterior à v1.3.0, que não
+    // amostra azimute no Modo Vibração.
+    val vibrationPanResult: VibrationStats? = null,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -101,8 +104,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var lastVibrationCaptureId: Long? = null
     private var lastVibrationReadings: List<AngleReading> = emptyList()
-    private var lastVibrationFreqsHz: DoubleArray = DoubleArray(0)
-    private var lastVibrationMagnitudes: DoubleArray = DoubleArray(0)
+    private var lastVibrationRateHz: Int = 0
 
     fun setMode(mode: ConnectionMode) {
         if (!_uiState.value.running) {
@@ -431,16 +433,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val captureId = repository.saveVibrationCapture(mode, durationS, rateHz, readings)
-                val baseStats = VibrationStatsCalculator.computeStats(readings)
-                val (freqs, magnitudes) = VibrationStatsCalculator.computeFft(readings, rateHz)
-                val stats = VibrationStatsCalculator.withDominantPeak(baseStats, freqs, magnitudes)
+                val tilt = VibrationStatsCalculator.analyzeAxis(readings, rateHz, LimitAxis.TILT)
+                val pan = if (VibrationStatsCalculator.hasPanSamples(readings)) {
+                    VibrationStatsCalculator.analyzeAxis(readings, rateHz, LimitAxis.PAN)
+                } else {
+                    null
+                }
 
                 lastVibrationCaptureId = captureId
                 lastVibrationReadings = readings
-                lastVibrationFreqsHz = freqs
-                lastVibrationMagnitudes = magnitudes
+                lastVibrationRateHz = rateHz
 
-                _uiState.update { it.copy(vibrationResult = stats, statusMessage = "Captura de vibração concluída.") }
+                _uiState.update {
+                    it.copy(
+                        vibrationResult = tilt.stats,
+                        vibrationPanResult = pan?.stats,
+                        statusMessage = "Captura de vibração concluída.",
+                    )
+                }
             } catch (e: TimeoutCancellationException) {
                 _uiState.update { it.copy(statusMessage = "Tempo esgotado aguardando a captura de vibração.") }
             } catch (e: CancellationException) {
@@ -458,7 +468,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun dismissVibrationResult() {
-        _uiState.update { it.copy(vibrationResult = null) }
+        _uiState.update { it.copy(vibrationResult = null, vibrationPanResult = null) }
     }
 
     suspend fun generateVibrationReportFile(): File? {
@@ -466,15 +476,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val readings = lastVibrationReadings
         if (readings.isEmpty()) return null
         val captureInfo = repository.listVibrationCaptures().firstOrNull { it.id == captureId } ?: return null
-        val baseStats = VibrationStatsCalculator.computeStats(readings)
-        val stats = VibrationStatsCalculator.withDominantPeak(baseStats, lastVibrationFreqsHz, lastVibrationMagnitudes)
+        val rateHz = lastVibrationRateHz.coerceAtLeast(1)
+        val tilt = VibrationStatsCalculator.analyzeAxis(readings, rateHz, LimitAxis.TILT)
+        val pan = if (VibrationStatsCalculator.hasPanSamples(readings)) {
+            VibrationStatsCalculator.analyzeAxis(readings, rateHz, LimitAxis.PAN)
+        } else {
+            null
+        }
         return PdfReportGenerator.generateVibrationReport(
             getApplication(),
             captureInfo,
             readings,
-            stats,
-            lastVibrationFreqsHz,
-            lastVibrationMagnitudes,
+            tilt,
+            pan,
         )
     }
 

@@ -215,6 +215,7 @@ fun MainScreen(viewModel: MainViewModel) {
     state.vibrationResult?.let { stats ->
         VibrationResultDialog(
             stats = stats,
+            panStats = state.vibrationPanResult,
             onDismiss = viewModel::dismissVibrationResult,
             onSaveReport = {
                 scope.launch {
@@ -335,9 +336,31 @@ private fun VibrationProgressDialog(progress: Int, onCancel: () -> Unit) {
     )
 }
 
+/** Bloco de estatísticas de um eixo dentro do diálogo de resultado. */
+@Composable
+private fun VibrationAxisSummary(title: String, stats: VibrationStats) {
+    Text(title, fontWeight = FontWeight.Bold, color = Orange)
+    Text("Desvio padrão: %.3f°   RMS: %.3f°".format(stats.stdDevDeg, stats.rmsDeg))
+    Text("Pico a pico: %.3f°".format(stats.peakToPeakDeg))
+    Text("Mínimo / Máximo: %.3f° / %.3f°".format(stats.minDeg, stats.maxDeg))
+    val dominantFreq = stats.dominantFreqHz
+    if (dominantFreq != null) {
+        Text(
+            "Frequência dominante: %.2f Hz (amplitude %.3f°, SNR %.1f dB)".format(
+                dominantFreq,
+                stats.dominantAmplitudeDeg ?: 0.0,
+                stats.dominantSnrDb ?: 0.0,
+            )
+        )
+    } else {
+        Text("Frequência dominante: nenhum pico confiável (sinal compatível com ruído).")
+    }
+}
+
 @Composable
 private fun VibrationResultDialog(
     stats: VibrationStats,
+    panStats: VibrationStats?,
     onDismiss: () -> Unit,
     onSaveReport: () -> Unit,
 ) {
@@ -345,25 +368,18 @@ private fun VibrationResultDialog(
         onDismissRequest = onDismiss,
         title = { Text("Modo Vibração — Resultado da captura") },
         text = {
-            Column {
+            // Rolável: com os dois eixos, o resumo passa da altura útil de um
+            // AlertDialog em telas menores.
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text("Amostras: ${stats.nSamples} (duração efetiva: %.2f s)".format(stats.durationS))
-                Text("Média: %.3f°".format(stats.meanDeg))
-                Text("Desvio padrão: %.3f°".format(stats.stdDevDeg))
-                Text("RMS: %.3f°".format(stats.rmsDeg))
-                Text("Pico a pico: %.3f°".format(stats.peakToPeakDeg))
-                Text("Mínimo / Máximo: %.3f° / %.3f°".format(stats.minDeg, stats.maxDeg))
-                Spacer(modifier = Modifier.height(8.dp))
-                val dominantFreq = stats.dominantFreqHz
-                if (dominantFreq != null) {
-                    Text(
-                        "Frequência dominante: %.2f Hz (amplitude %.3f°, SNR %.1f dB)".format(
-                            dominantFreq,
-                            stats.dominantAmplitudeDeg ?: 0.0,
-                            stats.dominantSnrDb ?: 0.0,
-                        )
-                    )
+                Spacer(modifier = Modifier.height(12.dp))
+                VibrationAxisSummary("Inclinação (tilt)", stats)
+                Spacer(modifier = Modifier.height(12.dp))
+                if (panStats != null) {
+                    VibrationAxisSummary("Azimute (pan)", panStats)
                 } else {
-                    Text("Frequência dominante: nenhum pico confiável identificado (sinal compatível com ruído).")
+                    Text("Azimute (pan)", fontWeight = FontWeight.Bold, color = Orange)
+                    Text("não capturado — firmware anterior à v1.3.0.")
                 }
             }
         },

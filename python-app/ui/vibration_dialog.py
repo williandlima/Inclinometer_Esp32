@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -58,33 +59,49 @@ class VibrationConfigDialog(QDialog):
         return float(self.duration_spin.value()), float(self.rate_spin.value())
 
 
+def _format_axis_summary(title: str, stats: "VibrationStats") -> str:
+    if stats.dominant_freq_hz is not None:
+        peak_line = (
+            f"Frequência dominante: {stats.dominant_freq_hz:.2f} Hz "
+            f"(amplitude {stats.dominant_amplitude_deg:.3f}°, "
+            f"SNR {stats.dominant_snr_db:.1f} dB)"
+        )
+    else:
+        peak_line = "Frequência dominante: nenhum pico confiável (sinal compatível com ruído)."
+
+    return (
+        f"<b>{title}</b><br>"
+        f"Desvio padrão: {stats.std_dev_deg:.3f}° &nbsp;|&nbsp; "
+        f"RMS: {stats.rms_deg:.3f}° &nbsp;|&nbsp; "
+        f"Pico a pico: {stats.peak_to_peak_deg:.3f}°<br>"
+        f"Mínimo / Máximo: {stats.min_deg:.3f}° / {stats.max_deg:.3f}°<br>"
+        f"{peak_line}"
+    )
+
+
 class VibrationResultDialog(QDialog):
-    def __init__(self, stats: "VibrationStats", parent=None) -> None:
+    def __init__(
+        self, stats: "VibrationStats", pan_stats: "VibrationStats | None" = None, parent=None
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Modo Vibração — Resultado da captura")
         self._save_requested = False
 
         layout = QVBoxLayout(self)
 
-        if stats.dominant_freq_hz is not None:
-            peak_line = (
-                f"Frequência dominante: {stats.dominant_freq_hz:.2f} Hz "
-                f"(amplitude {stats.dominant_amplitude_deg:.3f}°, "
-                f"SNR {stats.dominant_snr_db:.1f} dB)"
-            )
+        blocks = [
+            f"Amostras: {stats.n_samples}  (duração efetiva: {stats.duration_s:.2f} s)",
+            _format_axis_summary("Inclinação (tilt)", stats),
+        ]
+        if pan_stats is not None:
+            blocks.append(_format_axis_summary("Azimute (pan)", pan_stats))
         else:
-            peak_line = "Frequência dominante: nenhum pico confiável identificado (sinal compatível com ruído)."
+            blocks.append(
+                "<b>Azimute (pan)</b><br>não capturado — firmware anterior à v1.3.0."
+            )
 
-        summary = (
-            f"Amostras: {stats.n_samples}  (duração efetiva: {stats.duration_s:.2f} s)\n\n"
-            f"Média: {stats.mean_deg:.3f}°\n"
-            f"Desvio padrão: {stats.std_dev_deg:.3f}°\n"
-            f"RMS: {stats.rms_deg:.3f}°\n"
-            f"Pico a pico: {stats.peak_to_peak_deg:.3f}°\n"
-            f"Mínimo / Máximo: {stats.min_deg:.3f}° / {stats.max_deg:.3f}°\n\n"
-            f"{peak_line}"
-        )
-        label = QLabel(summary)
+        label = QLabel("<br><br>".join(blocks))
+        label.setTextFormat(Qt.RichText)
         layout.addWidget(label)
 
         save_btn = QPushButton("Salvar relatório PDF...")

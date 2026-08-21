@@ -5,6 +5,30 @@
 
 #include "Config.h"
 
+bool PanSensor::sampleRateDps(float &rateDps) {
+    float ax, ay, az, gxDps, gyDps, gzDps;
+    if (!_mpu.readMotion(ax, ay, az, gxDps, gyDps, gzDps)) {
+        return false;
+    }
+
+    // Projeção da velocidade angular medida sobre a vertical, escrita em
+    // coordenadas do corpo — ver o item 1 do cabeçalho de PanSensor.h. O
+    // ângulo de tilt vem do MESMO burst, então não há defasagem entre o
+    // ângulo usado na projeção e as taxas projetadas.
+    float tiltRad = atan2f(ay, az);
+    rateDps = gzDps * cosf(tiltRad) - gyDps * sinf(tiltRad);
+    _lastRateDps = rateDps;
+    return true;
+}
+
+float PanSensor::readInstantRateDps() {
+    float rateDps;
+    if (!sampleRateDps(rateDps)) {
+        rateDps = _lastRateDps;  // amostra perdida: repete a última válida
+    }
+    return (rateDps - _biasDps) * PAN_SCALE_CORRECTION;
+}
+
 void PanSensor::update() {
     uint32_t now = millis();
     if (_hasLastSample && now - _lastSampleMs < ANGLE_SAMPLE_INTERVAL_MS) {
@@ -13,17 +37,10 @@ void PanSensor::update() {
     uint32_t elapsedMs = now - _lastSampleMs;
     _lastSampleMs = now;
 
-    float ax, ay, az, gxDps, gyDps, gzDps;
-    if (!_mpu.readMotion(ax, ay, az, gxDps, gyDps, gzDps)) {
+    float panRateDps;
+    if (!sampleRateDps(panRateDps)) {
         return;  // falha de I2C: preserva o estado em vez de corrompê-lo
     }
-
-    // Projeção da velocidade angular medida sobre a vertical, escrita em
-    // coordenadas do corpo — ver o item 1 do cabeçalho de PanSensor.h. O
-    // ângulo de tilt vem do MESMO burst, então não há defasagem entre o
-    // ângulo usado na projeção e as taxas projetadas.
-    float tiltRad = atan2f(ay, az);
-    float panRateDps = gzDps * cosf(tiltRad) - gyDps * sinf(tiltRad);
 
     if (!_hasLastSample) {
         // Primeira amostra: sem intervalo anterior, não há dt para integrar.

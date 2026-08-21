@@ -22,8 +22,8 @@ constexpr int PIN_I2C_SCL = 22;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.2.0";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10200;
+constexpr char FIRMWARE_VERSION[] = "1.3.0";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10300;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -44,9 +44,10 @@ constexpr uint16_t REG_VIBRATION_STATUS = 20;       // input register: 0=ocioso,
 constexpr uint16_t REG_VIBRATION_PROGRESS = 21;     // input register: percentual 0-100
 constexpr uint16_t REG_VIBRATION_SAMPLE_COUNT = 22; // input register: total de amostras (quando pronto)
 
-constexpr uint16_t REG_VIBRATION_CURSOR = 30;       // holding register: índice inicial do bloco a ler
-constexpr uint16_t REG_VIBRATION_BLOCK_START = 31;  // input register: início do bloco de amostras
+constexpr uint16_t REG_VIBRATION_CURSOR = 30;       // holding register: índice inicial do bloco a ler (vale para os dois eixos)
+constexpr uint16_t REG_VIBRATION_BLOCK_START = 31;  // input register: início do bloco de amostras de TILT
 constexpr uint16_t VIBRATION_BLOCK_SIZE = 32;       // amostras por bloco de leitura
+constexpr uint16_t REG_VIBRATION_PAN_BLOCK_START = 70;  // input register: início do bloco de amostras de PAN (taxa * PAN_RATE_SCALE)
 
 // ============================================================================
 // Parâmetros BLE — devem bater com python-app/data_source/ble_source.py e
@@ -66,6 +67,11 @@ constexpr char CHAR_FIRMWARE_VERSION_UUID[] = "6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5
 // puramente aditiva — quem não conhece a characteristic nova simplesmente a
 // ignora e continua funcionando.
 constexpr char CHAR_PAN_UUID[] = "6e6e0008-3c17-4a2e-8f4b-1a2b3c4d5e6f";
+// Dados de vibração do eixo de pan, em characteristic própria e com o mesmo
+// formato de pacote da de tilt (índice + amostras int16 LE) — de novo para a
+// mudança ser aditiva: um app que não a conhece continua recebendo a captura
+// de tilt exatamente como antes.
+constexpr char CHAR_VIBRATION_PAN_DATA_UUID[] = "6e6e0009-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 constexpr uint32_t BLE_NOTIFY_INTERVAL_MS = 200;  // taxa de notificação do ângulo em modo contínuo
 constexpr uint32_t BLE_VIBRATION_STATUS_NOTIFY_INTERVAL_MS = 300;  // limita notify() de status/progresso durante a captura
 constexpr uint32_t BLE_VIBRATION_CHUNK_INTERVAL_MS = 20;  // intervalo entre pacotes de dados da captura (evita congestionar o BLE)
@@ -142,3 +148,10 @@ constexpr float PAN_SCALE_CORRECTION = 1.0f;
 // Teto para o dt de uma única integração. Protege contra um loop que atrasou
 // muito (ou millis() dando a volta) virar um salto grande no ângulo.
 constexpr float PAN_MAX_INTEGRATION_DT_S = 0.1f;
+
+// Escala das amostras de vibração do eixo de pan no protocolo. Diferente do
+// tilt, o que trafega aqui é VELOCIDADE ANGULAR (graus/s), não ângulo — ver
+// "Modo Vibração no eixo de pan" em firmware/README.md. Com escala 100 e
+// int16, a faixa vai a +-327°/s, cobrindo com folga o fundo de escala de
+// +-250°/s do giroscópio: nenhum movimento fisicamente possível satura.
+constexpr float PAN_RATE_SCALE = 100.0f;

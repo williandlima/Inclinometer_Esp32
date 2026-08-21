@@ -1,6 +1,7 @@
 package com.williandlima.inclinometro.datasource
 
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -14,6 +15,13 @@ private const val PAN_HOLD_MS = 12_000L
 // inteiro aqui, quem inicia a leitura ficaria 12s olhando um eixo cravado,
 // com cara de app quebrado, antes de ver qualquer movimento.
 private const val PAN_FIRST_MOVE_MS = 2_000L
+
+// Vibração sintética do eixo de pan: frequência diferente da do tilt, para os
+// dois espectros do relatório não ficarem idênticos, e um bias de giroscópio
+// somado à taxa, para exercitar a remoção de tendência da conversão.
+private const val PAN_VIB_FREQ_HZ = 2.1
+private const val PAN_VIB_AMPLITUDE_DEG = 0.08
+private const val PAN_VIB_BIAS_DPS = 0.3
 
 /**
  * Fonte de dados simulada: gera ângulos sintéticos sem hardware real.
@@ -111,11 +119,18 @@ class SimulatedAngleDataSource(
 
     /**
      * Gera uma série sintética de "vibração" em torno de 0° (posição de
-     * calibração): soma de duas oscilações de baixa amplitude, em
-     * frequências plausíveis para balanço de mastro sob vento (~1.3Hz) e
-     * vibração mecânica (~5Hz), mais ruído — só para exercitar todo o fluxo
-     * de captura/estatística/relatório sem hardware real (mesmo gerador
-     * usado no app desktop).
+     * calibração) nos dois eixos, só para exercitar todo o fluxo de
+     * captura/estatística/relatório sem hardware real (mesmo gerador usado no
+     * app desktop):
+     *
+     * - **tilt**: soma de duas oscilações de baixa amplitude, em frequências
+     *   plausíveis para balanço de mastro sob vento (~1.3Hz) e vibração
+     *   mecânica (~5Hz), mais ruído;
+     * - **pan**: gerado como **velocidade angular**, igual ao que o firmware
+     *   envia — a derivada de uma oscilação de [PAN_VIB_AMPLITUDE_DEG] a
+     *   [PAN_VIB_FREQ_HZ] tem amplitude `A*2*PI*f` em graus/s. Vai somado a um
+     *   bias constante, de propósito: é ele que exercita a remoção de
+     *   tendência linear da conversão taxa→ângulo.
      */
     override suspend fun startVibrationCapture(
         durationS: Int,
@@ -126,17 +141,21 @@ class SimulatedAngleDataSource(
         val totalSamples = (durationS * rateHz).coerceAtLeast(1)
         val random = java.util.Random()
         val t0 = System.currentTimeMillis()
-        val readings = ArrayList<AngleReading>(totalSamples)
+        val angles = DoubleArray(totalSamples)
+        val panRates = DoubleArray(totalSamples)
+        val panRateAmplitude = PAN_VIB_AMPLITUDE_DEG * 2 * PI * PAN_VIB_FREQ_HZ
         for (i in 0 until totalSamples) {
             val now = System.currentTimeMillis()
             val elapsedS = (now - t0) / 1000.0
-            val vib = 0.15 * sin(2 * PI * 1.3 * elapsedS) +
+            angles[i] = 0.15 * sin(2 * PI * 1.3 * elapsedS) +
                 0.05 * sin(2 * PI * 5.0 * elapsedS + 0.7) +
                 random.nextGaussian() * 0.03
-            readings.add(AngleReading(angleDeg = vib, timestamp = now))
+            panRates[i] = panRateAmplitude * cos(2 * PI * PAN_VIB_FREQ_HZ * elapsedS) +
+                PAN_VIB_BIAS_DPS +
+                random.nextGaussian() * 0.05
             onProgress(((i + 1) * 100) / totalSamples)
             delay(intervalMs)
         }
-        return readings
+        return VibrationReadings.build(angles, panRates, rateHz, t0)
     }
 }

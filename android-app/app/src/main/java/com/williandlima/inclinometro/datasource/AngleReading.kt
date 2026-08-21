@@ -24,6 +24,15 @@ data class AngleReading(
     val angleDeg: Double,
     val timestamp: Long, // epoch millis
     val panDeg: Double? = null,
+    /**
+     * Só preenchido em capturas do Modo Vibração: a velocidade angular bruta
+     * do eixo de azimute, como o firmware a envia ([panDeg] é a integral
+     * dela). Guardar as duas não é redundância — a análise espectral do
+     * azimute precisa da taxa, cujo ruído é branco, enquanto os gráficos e as
+     * estatísticas no tempo precisam do ângulo. Ver
+     * [com.williandlima.inclinometro.limits.VibrationStatsCalculator.analyzeAxis].
+     */
+    val panRateDps: Double? = null,
 )
 
 enum class ConnectionMode {

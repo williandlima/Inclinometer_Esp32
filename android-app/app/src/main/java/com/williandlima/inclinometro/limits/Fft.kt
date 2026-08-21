@@ -1,5 +1,6 @@
 package com.williandlima.inclinometro.limits
 
+import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.ln
@@ -130,6 +131,23 @@ internal object Fft {
      * acaso — o valor esperado do máximo de M amostras Rayleigh i.i.d. fica
      * ~10*log10(ln(M)/ln(2)) dB acima da mediana.
      */
+    /**
+     * Converte um espectro de velocidade angular (graus/s) no espectro de
+     * amplitude angular correspondente (graus): uma oscilação de amplitude A
+     * em `f` tem velocidade de amplitude `A*2*pi*f`, logo `A = R(f)/(2*pi*f)`.
+     *
+     * O bin de 0 Hz vira zero — ali a divisão explodiria, e é justamente onde
+     * mora o bias do giroscópio, que não é vibração.
+     */
+    fun rateSpectrumToAngle(freqs: DoubleArray, rateMagnitudes: DoubleArray): DoubleArray =
+        DoubleArray(rateMagnitudes.size) { i ->
+            if (i < freqs.size && freqs[i] > 0.0) {
+                rateMagnitudes[i] / (2.0 * PI * freqs[i])
+            } else {
+                0.0
+            }
+        }
+
     private fun minSnrDbForBins(numBins: Int): Double {
         val m = max(numBins, 2)
         val theoreticalDb = 10.0 * log10(ln(m.toDouble()) / ln(2.0))

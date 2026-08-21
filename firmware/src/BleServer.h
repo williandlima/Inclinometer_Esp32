@@ -6,6 +6,10 @@
 #include "PanSensor.h"
 #include "VibrationCapture.h"
 
+// Declarada só como ponteiro aqui, para este header não arrastar o header da
+// lib BLE (e o tempo de compilação junto) para quem o inclui.
+class BLECharacteristic;
+
 // Servidor BLE (GATT) — contrato documentado em
 // python-app/data_source/ble_source.py e
 // android-app/.../datasource/BleContract.kt.
@@ -34,8 +38,13 @@ private:
     uint32_t _lastAngleNotifyMs = 0;
     VibrationCapture::Status _lastReportedVibrationStatus = VibrationCapture::Status::Idle;
     uint16_t _vibrationDataCursor = 0;
+    uint16_t _vibrationPanDataCursor = 0;
     uint32_t _lastVibrationStatusNotifyMs = 0;
     uint32_t _lastVibrationChunkMs = 0;
+
+    // Envia um pacote de amostras a partir de `cursor` (que é avançado) na
+    // characteristic indicada. `pan` escolhe de qual dos dois buffers ler.
+    void sendVibrationChunk(BLECharacteristic *characteristic, uint16_t &cursor, uint16_t total, bool pan);
 
     // Notifica tilt e pan na mesma cadência (BLE_NOTIFY_INTERVAL_MS), em
     // characteristics separadas — ver CHAR_PAN_UUID em Config.h.

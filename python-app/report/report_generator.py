@@ -16,7 +16,15 @@ from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import (
+    Image,
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 from reportlab.lib.styles import getSampleStyleSheet
 
 from limits.limit_tracker import PAN_AXIS, TILT_AXIS
@@ -25,7 +33,7 @@ if TYPE_CHECKING:
     from data_source.base import AngleReading
     from limits.history_store import SessionInfo, VibrationCaptureInfo
     from limits.limit_tracker import LimitEvent
-    from limits.vibration_stats import VibrationStats
+    from limits.vibration_stats import AxisAnalysis, VibrationStats
     import numpy as np
 
 _MODE_LABELS = {
@@ -203,12 +211,13 @@ def _apply_reference_grid(ax) -> None:
     ax.tick_params(axis="both", which="major", labelsize=8)
 
 
-def _build_vibration_time_chart_image(readings: list["AngleReading"]) -> Image:
+def _build_vibration_time_chart_image(readings: list["AngleReading"], axis: str = TILT_AXIS) -> Image:
     fig, ax = plt.subplots(figsize=(16, 6))
     t0 = readings[0].timestamp
     xs = [r.timestamp - t0 for r in readings]
-    ys = [r.angle_deg for r in readings]
-    ax.plot(xs, ys, color="#1f77b4", linewidth=0.8)
+    ys = [_axis_value(r, axis) for r in readings]
+    color = "#9467bd" if axis == PAN_AXIS else "#1f77b4"
+    ax.plot(xs, ys, color=color, linewidth=0.8)
     ax.set_xlabel("Tempo (s)")
     ax.set_ylabel("Variação angular em relação à calibração (°)")
     _apply_reference_grid(ax)
@@ -222,10 +231,10 @@ def _build_vibration_time_chart_image(readings: list["AngleReading"]) -> Image:
 
 
 def _build_vibration_spectrum_chart_image(
-    freqs: "np.ndarray", magnitudes: "np.ndarray", stats: "VibrationStats"
+    freqs: "np.ndarray", magnitudes: "np.ndarray", stats: "VibrationStats", axis: str = TILT_AXIS
 ) -> Image:
     fig, ax = plt.subplots(figsize=(16, 6))
-    ax.plot(freqs, magnitudes, color="#d62728", linewidth=1)
+    ax.plot(freqs, magnitudes, color="#8c564b" if axis == PAN_AXIS else "#d62728", linewidth=1)
     ax.set_xlabel("Frequência (Hz)")
     ax.set_ylabel("Amplitude (°)")
     _apply_reference_grid(ax)
@@ -249,37 +258,8 @@ def _build_vibration_spectrum_chart_image(
     return Image(buf, width=17 * cm, height=6.5 * cm)
 
 
-def generate_vibration_report(
-    path: str,
-    capture_info: "VibrationCaptureInfo | None",
-    readings: list["AngleReading"],
-    stats: "VibrationStats",
-    freqs: "np.ndarray",
-    magnitudes: "np.ndarray",
-) -> None:
-    """Relatório de uma captura de vibração (Modo Vibração): resumo
-    estatístico, gráfico da variação angular no tempo e espectro de
-    frequência (FFT), para identificar eventual frequência de ressonância
-    dominante (ex: balanço de mastro sob vento)."""
-    styles = getSampleStyleSheet()
-    doc = SimpleDocTemplate(path, pagesize=A4, title="Relatório de Captura de Vibração")
-    story = []
-
-    story.append(Paragraph("Relatório de Captura de Vibração", styles["Title"]))
-    story.append(Spacer(1, 0.5 * cm))
-
-    mode_label = _MODE_LABELS.get(capture_info.mode, capture_info.mode) if capture_info else "-"
-    started = _fmt_dt(capture_info.started_at) if capture_info else "-"
-    duration_cfg = f"{capture_info.duration_s:.0f} s" if capture_info else "-"
-    rate_cfg = f"{capture_info.rate_hz:.0f} Hz" if capture_info else "-"
-
-    summary_rows = [
-        ["Modo", mode_label],
-        ["Início", started],
-        ["Duração configurada", duration_cfg],
-        ["Taxa de amostragem configurada", rate_cfg],
-        ["Amostras capturadas", str(stats.n_samples)],
-        ["Duração efetiva", f"{stats.duration_s:.2f} s"],
+def _vibration_summary_rows(stats: "VibrationStats") -> list[list[str]]:
+    return [
         ["Média", f"{stats.mean_deg:.3f}°"],
         ["Desvio padrão", f"{stats.std_dev_deg:.3f}°"],
         ["RMS", f"{stats.rms_deg:.3f}°"],
@@ -295,8 +275,11 @@ def generate_vibration_report(
             ),
         ],
     ]
-    summary_table = Table(summary_rows, colWidths=[7 * cm, 9 * cm])
-    summary_table.setStyle(
+
+
+def _vibration_table(rows: list[list[str]]) -> Table:
+    table = Table(rows, colWidths=[7 * cm, 9 * cm])
+    table.setStyle(
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
@@ -306,14 +289,82 @@ def generate_vibration_report(
             ]
         )
     )
-    story.append(summary_table)
+    return table
+
+
+def _append_vibration_axis_section(
+    story: list, styles, title: str, readings: list["AngleReading"], analysis: "AxisAnalysis"
+) -> None:
+    """Bloco de um eixo no relatório: tabela de estatísticas, gráfico no
+    tempo e espectro. Os dois eixos usam exatamente o mesmo bloco."""
+    story.append(Paragraph(title, styles["Heading2"]))
+    story.append(_vibration_table(_vibration_summary_rows(analysis.stats)))
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph("Variação angular ao longo do tempo", styles["Heading3"]))
+    story.append(_build_vibration_time_chart_image(readings, analysis.axis))
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph("Espectro de frequência (FFT)", styles["Heading3"]))
+    story.append(
+        _build_vibration_spectrum_chart_image(
+            analysis.freqs, analysis.magnitudes, analysis.stats, analysis.axis
+        )
+    )
+
+
+def generate_vibration_report(
+    path: str,
+    capture_info: "VibrationCaptureInfo | None",
+    readings: list["AngleReading"],
+    tilt: "AxisAnalysis",
+    pan: "AxisAnalysis | None" = None,
+) -> None:
+    """Relatório de uma captura de vibração (Modo Vibração): resumo
+    estatístico, gráfico da variação angular no tempo e espectro de
+    frequência (FFT) para cada eixo, para identificar eventual frequência de
+    ressonância dominante (ex: balanço de mastro sob vento).
+
+    `pan` é `None` quando a captura veio de um firmware anterior à v1.3.0,
+    que não amostra o eixo de azimute."""
+    styles = getSampleStyleSheet()
+    doc = SimpleDocTemplate(path, pagesize=A4, title="Relatório de Captura de Vibração")
+    story = []
+
+    story.append(Paragraph("Relatório de Captura de Vibração", styles["Title"]))
+    story.append(Spacer(1, 0.5 * cm))
+
+    mode_label = _MODE_LABELS.get(capture_info.mode, capture_info.mode) if capture_info else "-"
+    started = _fmt_dt(capture_info.started_at) if capture_info else "-"
+    duration_cfg = f"{capture_info.duration_s:.0f} s" if capture_info else "-"
+    rate_cfg = f"{capture_info.rate_hz:.0f} Hz" if capture_info else "-"
+
+    story.append(
+        _vibration_table(
+            [
+                ["Modo", mode_label],
+                ["Início", started],
+                ["Duração configurada", duration_cfg],
+                ["Taxa de amostragem configurada", rate_cfg],
+                ["Amostras capturadas", str(tilt.stats.n_samples)],
+                ["Duração efetiva", f"{tilt.stats.duration_s:.2f} s"],
+            ]
+        )
+    )
     story.append(Spacer(1, 0.8 * cm))
 
-    story.append(Paragraph("Variação angular ao longo do tempo", styles["Heading2"]))
-    story.append(_build_vibration_time_chart_image(readings))
-    story.append(Spacer(1, 0.8 * cm))
+    _append_vibration_axis_section(story, styles, "Inclinação (tilt)", readings, tilt)
 
-    story.append(Paragraph("Espectro de frequência (FFT)", styles["Heading2"]))
-    story.append(_build_vibration_spectrum_chart_image(freqs, magnitudes, stats))
+    story.append(PageBreak())
+    if pan is not None:
+        _append_vibration_axis_section(story, styles, "Azimute (pan)", readings, pan)
+    else:
+        story.append(Paragraph("Azimute (pan)", styles["Heading2"]))
+        story.append(
+            Paragraph(
+                "O eixo de azimute não foi capturado: o ESP32 conectado estava com firmware"
+                " anterior à v1.2.0 (leitura contínua) ou v1.3.0 (Modo Vibração), que não"
+                " amostram esse eixo.",
+                styles["Normal"],
+            )
+        )
 
     doc.build(story)

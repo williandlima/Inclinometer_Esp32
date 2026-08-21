@@ -13,6 +13,7 @@ import com.williandlima.inclinometro.datasource.PAN_MIN_DEG
 import com.williandlima.inclinometro.limits.LimitAxis
 import com.williandlima.inclinometro.limits.LimitEvent
 import com.williandlima.inclinometro.limits.LimitKind
+import com.williandlima.inclinometro.limits.AxisAnalysis
 import com.williandlima.inclinometro.limits.SessionInfo
 import com.williandlima.inclinometro.limits.VibrationCaptureInfo
 import com.williandlima.inclinometro.limits.VibrationStats
@@ -259,20 +260,18 @@ object PdfReportGenerator {
         context: Context,
         capture: VibrationCaptureInfo,
         readings: List<AngleReading>,
-        stats: VibrationStats,
-        freqsHz: DoubleArray,
-        magnitudes: DoubleArray,
+        tilt: AxisAnalysis,
+        pan: AxisAnalysis? = null,
     ): File = withContext(Dispatchers.IO) {
         val document = PdfDocument()
-
-        val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, 1).create()
-        val page = document.startPage(pageInfo)
-        val canvas = page.canvas
 
         val titlePaint = Paint().apply { textSize = 20f; isFakeBoldText = true; color = Color.BLACK }
         val labelPaint = Paint().apply { textSize = 12f; isFakeBoldText = true; color = Color.DKGRAY }
         val valuePaint = Paint().apply { textSize = 12f; color = Color.BLACK }
-        val headingPaint = Paint().apply { textSize = 14f; isFakeBoldText = true; color = Color.BLACK }
+
+        val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, 1).create()
+        val page = document.startPage(pageInfo)
+        val canvas = page.canvas
 
         var y = MARGIN
         canvas.drawText("Relatório de Captura de Vibração", MARGIN, y, titlePaint)
@@ -284,18 +283,8 @@ object PdfReportGenerator {
             "Início" to timeFormat.format(Date(capture.startedAt)),
             "Duração configurada" to "${capture.durationS} s",
             "Taxa de amostragem" to "${capture.rateHz} Hz",
-            "Amostras capturadas" to stats.nSamples.toString(),
-            "Duração efetiva" to "%.2f s".format(stats.durationS),
-            "Média" to "%.3f°".format(stats.meanDeg),
-            "Desvio padrão" to "%.3f°".format(stats.stdDevDeg),
-            "RMS" to "%.3f°".format(stats.rmsDeg),
-            "Pico a pico" to "%.3f°".format(stats.peakToPeakDeg),
-            "Mínimo / Máximo" to "%.3f° / %.3f°".format(stats.minDeg, stats.maxDeg),
-            "Frequência dominante" to (
-                stats.dominantFreqHz?.let {
-                    "%.2f Hz (amplitude %.3f°, SNR %.1f dB)".format(it, stats.dominantAmplitudeDeg ?: 0.0, stats.dominantSnrDb ?: 0.0)
-                } ?: "nenhum pico confiável (sinal compatível com ruído)"
-            ),
+            "Amostras capturadas" to tilt.stats.nSamples.toString(),
+            "Duração efetiva" to "%.2f s".format(tilt.stats.durationS),
         )
         for ((label, value) in summaryRows) {
             canvas.drawText("$label:", MARGIN, y, labelPaint)
@@ -303,17 +292,31 @@ object PdfReportGenerator {
             y += 18f
         }
 
-        y += 16f
-        canvas.drawText("Variação angular ao longo do tempo", MARGIN, y, headingPaint)
-        y += 12f
-        drawVibrationTimeChart(canvas, readings, top = y, bottom = y + 200f)
-        y += 220f
-
-        canvas.drawText("Espectro de frequência (FFT)", MARGIN, y, headingPaint)
-        y += 12f
-        drawSpectrumChart(canvas, freqsHz, magnitudes, stats, top = y, bottom = y + 200f)
-
+        y += 10f
+        drawVibrationAxisSection(canvas, "Inclinação (tilt)", readings, tilt, y)
         document.finishPage(page)
+
+        // Um eixo por página: cada bloco leva tabela + dois gráficos, e os dois
+        // não caberiam legíveis na mesma folha.
+        val panPageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, 2).create()
+        val panPage = document.startPage(panPageInfo)
+        if (pan != null) {
+            drawVibrationAxisSection(panPage.canvas, "Azimute (pan)", readings, pan, MARGIN)
+        } else {
+            var py = MARGIN
+            panPage.canvas.drawText("Azimute (pan)", MARGIN, py, titlePaint)
+            py += 26f
+            panPage.canvas.drawText(
+                "O eixo de azimute não foi capturado: o ESP32 conectado estava com",
+                MARGIN, py, valuePaint,
+            )
+            py += 16f
+            panPage.canvas.drawText(
+                "firmware anterior à v1.3.0, que não amostra esse eixo no Modo Vibração.",
+                MARGIN, py, valuePaint,
+            )
+        }
+        document.finishPage(panPage)
 
         val dir = File(context.getExternalFilesDir(null), "relatorios").apply { mkdirs() }
         val fileName = "relatorio_vibracao_${System.currentTimeMillis()}.pdf"
@@ -323,9 +326,59 @@ object PdfReportGenerator {
         file
     }
 
+    /** Bloco de um eixo: título, estatísticas, gráfico no tempo e espectro. */
+    private fun drawVibrationAxisSection(
+        canvas: android.graphics.Canvas,
+        title: String,
+        readings: List<AngleReading>,
+        analysis: AxisAnalysis,
+        startY: Float,
+    ) {
+        val titlePaint = Paint().apply { textSize = 16f; isFakeBoldText = true; color = Color.BLACK }
+        val labelPaint = Paint().apply { textSize = 12f; isFakeBoldText = true; color = Color.DKGRAY }
+        val valuePaint = Paint().apply { textSize = 12f; color = Color.BLACK }
+        val headingPaint = Paint().apply { textSize = 14f; isFakeBoldText = true; color = Color.BLACK }
+        val stats = analysis.stats
+
+        var y = startY
+        canvas.drawText(title, MARGIN, y, titlePaint)
+        y += 22f
+
+        val rows = listOf(
+            "Média" to "%.3f°".format(stats.meanDeg),
+            "Desvio padrão" to "%.3f°".format(stats.stdDevDeg),
+            "RMS" to "%.3f°".format(stats.rmsDeg),
+            "Pico a pico" to "%.3f°".format(stats.peakToPeakDeg),
+            "Mínimo / Máximo" to "%.3f° / %.3f°".format(stats.minDeg, stats.maxDeg),
+            "Frequência dominante" to (
+                stats.dominantFreqHz?.let {
+                    "%.2f Hz (amplitude %.3f°, SNR %.1f dB)".format(
+                        it, stats.dominantAmplitudeDeg ?: 0.0, stats.dominantSnrDb ?: 0.0,
+                    )
+                } ?: "nenhum pico confiável (sinal compatível com ruído)"
+            ),
+        )
+        for ((label, value) in rows) {
+            canvas.drawText("$label:", MARGIN, y, labelPaint)
+            canvas.drawText(value, MARGIN + 190f, y, valuePaint)
+            y += 18f
+        }
+
+        y += 14f
+        canvas.drawText("Variação angular ao longo do tempo", MARGIN, y, headingPaint)
+        y += 12f
+        drawVibrationTimeChart(canvas, readings, analysis.axis, top = y, bottom = y + 190f)
+        y += 210f
+
+        canvas.drawText("Espectro de frequência (FFT)", MARGIN, y, headingPaint)
+        y += 12f
+        drawSpectrumChart(canvas, analysis.freqsHz, analysis.magnitudes, stats, top = y, bottom = y + 190f)
+    }
+
     private fun drawVibrationTimeChart(
         canvas: android.graphics.Canvas,
         readings: List<AngleReading>,
+        axis: LimitAxis,
         top: Float,
         bottom: Float,
     ) {
@@ -336,22 +389,33 @@ object PdfReportGenerator {
         canvas.drawLine(left, bottom, right, bottom, axisPaint)
         if (readings.isEmpty()) return
 
+        // Aqui a escala é automática (diferente do gráfico da sessão): a
+        // variação de uma captura de vibração é de frações de grau, e uma
+        // escala fixa deixaria a curva achatada numa linha reta.
+        val values = readings.mapNotNull { axisValue(it, axis) }
+        if (values.isEmpty()) return
         val t0 = readings.first().timestamp
         val tEnd = readings.last().timestamp
         val duration = (tEnd - t0).coerceAtLeast(1L)
-        val minAngle = readings.minOf { it.angleDeg }
-        val maxAngle = readings.maxOf { it.angleDeg }
-        val range = (maxAngle - minAngle).coerceAtLeast(0.01)
+        val minAngle = values.min()
+        val range = (values.max() - minAngle).coerceAtLeast(0.01)
 
         fun xFor(timestamp: Long): Float = left + (right - left) * (timestamp - t0).toFloat() / duration
         fun yFor(angle: Double): Float = bottom - (bottom - top) * ((angle - minAngle) / range).toFloat()
 
-        val linePaint = Paint().apply { color = Color.rgb(31, 119, 180); strokeWidth = 1.5f; isAntiAlias = true }
+        val lineColor = if (axis == LimitAxis.PAN) Color.rgb(148, 103, 189) else Color.rgb(31, 119, 180)
+        val linePaint = Paint().apply { color = lineColor; strokeWidth = 1.5f; isAntiAlias = true }
         var prevX: Float? = null
         var prevY: Float? = null
         for (reading in readings) {
+            val value = axisValue(reading, axis)
+            if (value == null) {
+                prevX = null
+                prevY = null
+                continue
+            }
             val x = xFor(reading.timestamp)
-            val y = yFor(reading.angleDeg)
+            val y = yFor(value)
             if (prevX != null && prevY != null) canvas.drawLine(prevX, prevY, x, y, linePaint)
             prevX = x
             prevY = y
