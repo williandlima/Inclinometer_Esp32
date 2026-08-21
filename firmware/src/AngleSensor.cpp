@@ -9,10 +9,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-bool AngleSensor::begin() {
-    return _mpu.begin();
-}
-
 bool AngleSensor::readRawAngleDeg(float &angleDeg) {
     float ax, ay, az;
     if (!_mpu.readAccelG(ax, ay, az)) {

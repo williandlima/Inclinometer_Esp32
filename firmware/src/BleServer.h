@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "AngleSensor.h"
+#include "PanSensor.h"
 #include "VibrationCapture.h"
 
 // Servidor BLE (GATT) — contrato documentado em
@@ -10,8 +11,8 @@
 // android-app/.../datasource/BleContract.kt.
 class BleServer {
 public:
-    BleServer(AngleSensor &sensor, VibrationCapture &vibration)
-        : _sensor(sensor), _vibration(vibration) {}
+    BleServer(AngleSensor &sensor, PanSensor &pan, VibrationCapture &vibration)
+        : _sensor(sensor), _pan(pan), _vibration(vibration) {}
 
     void begin();
 
@@ -27,6 +28,7 @@ public:
 
 private:
     AngleSensor &_sensor;
+    PanSensor &_pan;
     VibrationCapture &_vibration;
 
     uint32_t _lastAngleNotifyMs = 0;
@@ -35,6 +37,8 @@ private:
     uint32_t _lastVibrationStatusNotifyMs = 0;
     uint32_t _lastVibrationChunkMs = 0;
 
-    void notifyAngle();
+    // Notifica tilt e pan na mesma cadência (BLE_NOTIFY_INTERVAL_MS), em
+    // characteristics separadas — ver CHAR_PAN_UUID em Config.h.
+    void notifyAngles();
     void updateVibrationNotify();
 };

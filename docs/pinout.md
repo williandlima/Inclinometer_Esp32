@@ -18,6 +18,16 @@ na placa física em uso.
 | Endereço | **GND** | AD0 do MPU6050 | Fixa o endereço I2C em `0x68`, o que o driver (`firmware/src/Mpu6050.h`) assume |
 | Interrupção | *(não conectado)* | INT do MPU6050 | Não usado hoje (leitura por polling); ver "Próximos passos" |
 
+**Os dois eixos medidos saem deste mesmo módulo, sem fiação adicional.** A
+inclinação (*tilt*) vem do acelerômetro; o azimute (*pan*) vem do
+**giroscópio** do mesmo MPU6050, integrado com ZUPT (ver "Azimute (pan) pelo
+giroscópio" em `firmware/README.md`). Do ponto de vista elétrico não mudou
+nada em relação à v1.1.0 — o firmware só passou a ler 14 bytes em vez de 6 no
+burst I2C, trazendo acelerômetro, temperatura e giroscópio de uma vez. Foi
+justamente por isso que a alternativa de um encoder rotativo dedicado
+(AS5600, que exigiria módulo novo e um ímã diametral montado no eixo) acabou
+descartada.
+
 ## USB — comunicação com o PC
 
 Não usa nenhum GPIO adicional: a comunicação Modbus RTU trafega pela **porta
@@ -139,6 +149,20 @@ datasheet do módulo, não de uma placa específica.
     constante: esse é o X, o eixo
     de giro) e os sinais corretos para o `atan2()` bater com o sentido
     físico (crescente = subindo).
+- **Orientação do giroscópio para o pan**: a compensação de tilt em
+  `firmware/src/PanSensor.cpp` (`ω_pan = gz·cos θ − gy·sin θ`) assume a mesma
+  orientação de montagem acima — eixo X no eixo mecânico de tilt, rotação no
+  plano Y-Z. Duas coisas para confirmar na **mesma sessão de bancada**, já
+  que dependem da mesma montagem:
+  - **Sinal do termo `−gy·sin θ`**: depende da handedness real. Perto de
+    `θ=0` esse termo some (sobra só `gz·cos θ`), então um sinal trocado não
+    aparece com o tilt zerado. Medir o mesmo movimento de pan com o tilt em
+    0° e depois em ±45°/±60°: os dois têm que dar o mesmo ângulo. Se o valor
+    com tilt grande sair maior ou menor, é o sinal deste termo.
+  - **Fator de escala** (`PAN_SCALE_CORRECTION`, hoje em 1.0): girar o eixo
+    de pan entre duas posições de separação angular conhecida e usar
+    `(ângulo real / integrado)`. É o erro dominante depois que o ZUPT resolve
+    o bias — tolerância de fábrica do giro é de ~±3%.
 - **Variante de placa**: esta pinagem assume um ESP32 DevKit clássico
   (WROOM-32) — confirmado na placa física em uso, junto com o chip
   conversor USB-serial CH9102X (ver seção "USB" acima). Variantes

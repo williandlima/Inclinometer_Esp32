@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.1.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.2.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -8,8 +8,10 @@ quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 comportamento — sem isso os apps não têm como saber qual versão do firmware
 estão falando.
 
-Firmware do ESP32 que expõe o ângulo do MPU6050 tanto por **Modbus RTU via
-cabo USB direto** quanto por **Bluetooth LE**, simultaneamente, seguindo os
+Firmware do ESP32 que expõe os **dois eixos** medidos pelo MPU6050 — a
+inclinação (**tilt**, pelo acelerômetro) e o azimute (**pan**, pelo
+giroscópio; ver "Azimute (pan)" abaixo) — tanto por **Modbus RTU via cabo
+USB direto** quanto por **Bluetooth LE**, simultaneamente, seguindo os
 contratos já assumidos e documentados nos dois apps:
 
 - `python-app/data_source/modbus_source.py` (Modbus RTU / USB)
@@ -33,7 +35,8 @@ firmware/
     main.cpp             setup()/loop(), instancia e conecta os módulos abaixo
     Config.h              pinagem + constantes de protocolo (Modbus/BLE)
     Mpu6050.h/.cpp         driver I2C mínimo do MPU6050 (sem lib externa)
-    AngleSensor.h/.cpp     ângulo por atan2 + calibração (offset)
+    AngleSensor.h/.cpp     tilt por atan2 do acelerômetro + calibração (offset)
+    PanSensor.h/.cpp       pan por integração do giroscópio + ZUPT
     VibrationCapture.h/.cpp  motor de captura em alta taxa, compartilhado
                              pelos dois transportes
     ModbusSlave.h/.cpp    escravo Modbus RTU sobre a porta serial USB (UART0)
@@ -82,8 +85,9 @@ ponto de vista do `pyserial`).
 
 | Registrador | Tipo | Função |
 |---|---|---|
-| Input reg. 0 | leitura | Ângulo atual * 100 (int16, com sinal, faixa -60~+60°) |
-| Coil 0 | escrita | `true` → calibra (zera o eixo de tilt) |
+| Input reg. 0 | leitura | Ângulo de **tilt** * 100 (int16, com sinal, faixa -60~+60°) |
+| Input reg. 1 | leitura | Ângulo de **pan** * 100 (int16, com sinal, faixa `PAN_MIN_DEG`~`PAN_MAX_DEG`) |
+| Coil 0 | escrita | `true` → calibra (zera **os dois eixos**, tilt e pan) |
 | Coil 1 | escrita | `true` → inicia captura de vibração |
 | Holding reg. 10 | escrita | Duração da captura (s) |
 | Holding reg. 11 | escrita | Taxa de amostragem (Hz) |
@@ -96,12 +100,19 @@ ponto de vista do `pyserial`).
 
 | Characteristic | Propriedade | Função |
 |---|---|---|
-| `6e6e0002-...` (ângulo) | read/notify | Ângulo atual * 100 (int16 LE, com sinal, faixa -60~+60°), a cada ~200ms |
-| `6e6e0003-...` (calibrar) | write | Byte `0x01` → calibra |
+| `6e6e0002-...` (tilt) | read/notify | Ângulo de tilt * 100 (int16 LE, com sinal, faixa -60~+60°), a cada ~200ms |
+| `6e6e0003-...` (calibrar) | write | Byte `0x01` → calibra **os dois eixos** |
 | `6e6e0004-...` (config vibração) | write | 4 bytes LE: duração(s) + taxa(Hz) → inicia captura |
 | `6e6e0005-...` (status vibração) | notify | status/progresso/total de amostras |
 | `6e6e0006-...` (dados vibração) | notify | Amostras em pacotes (índice + até 8 amostras int16 LE) |
 | `6e6e0007-...` (versão firmware) | read | `FIRMWARE_VERSION_CODE` (uint16 LE, ver acima) — valor fixo, sem notify |
+| `6e6e0008-...` (pan) | read/notify | Ângulo de pan * 100 (int16 LE, com sinal), na mesma cadência do tilt |
+
+O pan entrou numa characteristic própria, e não anexado à de tilt, de
+propósito: os apps já instalados esperam exatamente 2 bytes em
+`6e6e0002-...`, então estender aquela mensagem os quebraria. Do jeito que
+está, a mudança é puramente aditiva — um app que não conhece
+`6e6e0008-...` simplesmente a ignora e continua funcionando como antes.
 
 Detalhes byte a byte de cada mensagem estão comentados no topo de
 `ModbusSlave.cpp`/`BleServer.cpp` e nos módulos Python/Kotlin equivalentes.
@@ -164,8 +175,104 @@ degraus de 0,25° com histerese (evita alternar entre dois degraus quando o
 valor fica na fronteira). Isso é só apresentação: histórico, mín/máx e
 relatórios continuam usando o ângulo bruto.
 
+## Azimute (pan) pelo giroscópio (v1.2.0)
+
+O acelerômetro mede a direção do vetor gravidade — e girar em torno da
+vertical **não muda esse vetor**. Ele é fisicamente cego ao pan; não é
+questão de código. Mas o MPU6050 é 6-DOF: o **giroscópio** que já estava na
+placa (e que o firmware não configurava nem lia até a v1.1.0) mede
+velocidade angular em torno de qualquer eixo, inclusive o vertical.
+Integrando essa taxa sai o ângulo de pan relativo ao zero calibrado — mesmo
+paradigma que o tilt já usa. **Nenhum hardware novo foi adicionado.**
+
+O problema clássico de integrar giro é o drift: um bias residual vira uma
+rampa de graus por minuto. O que torna a abordagem confiável aqui é o padrão
+de uso — o eixo de pan fica **parado a maior parte do tempo** e se move em
+rajadas de poucos segundos — combinado com **ZUPT**. Quatro mecanismos
+trabalham juntos em `PanSensor.h/.cpp` (cada um documentado em detalhe no
+cabeçalho do header):
+
+1. **Compensação de tilt.** O sensor está na parte que inclina, então o eixo
+   Z dele não aponta pra vertical. Pegar `gz` cru subestimaria a taxa por
+   `cos(tilt)` — a 60° de tilt a leitura sairia pela metade. A taxa correta é
+   a projeção sobre a vertical escrita em coordenadas do corpo:
+   `ω_pan = gz·cos(θ) − gy·sin(θ)`, com `θ` vindo do **mesmo burst I2C**.
+   Por ser uma projeção (produto escalar), e não a fórmula de taxa de Euler
+   `(gy·sinφ + gz·cosφ)/cosθ`, não há singularidade em nenhum tilt.
+2. **ZUPT.** A cada 1s, se a **média** da taxa na janela estiver perto do
+   bias corrente, a janela é dada como parada e o bias é refinado. Usar a
+   média (e não o pico) deixa o detector imune a vibração, que é de média
+   zero: o mastro pode estar balançando sob vento que a janela ainda é
+   corretamente reconhecida como parada.
+3. **Cancelamento de janela parada.** O que foi integrado dentro de uma
+   janela classificada como parada é subtraído de volta — parado, o ângulo
+   fica cravado, sem random walk.
+4. **Fator de escala** (`PAN_SCALE_CORRECTION`). Resolvido o bias, o erro
+   dominante vira a tolerância de sensibilidade do giro (~±3% de fábrica).
+   Ele é proporcional ao **deslocamento atual** em relação ao zero — não se
+   acumula com o tempo nem com o número de movimentos — e some quando o eixo
+   volta ao zero.
+
+### Validação feita até agora
+
+O `PanSensor.cpp` real foi compilado contra um MPU6050 falso e exercitado com
+sinais sintéticos (bias de fábrica de 5°/s, ruído, vibração, tilt fixo):
+
+| Cenário | Resultado |
+|---|---|
+| Parado 60s com bias de 5°/s | 0,003° de deriva |
+| Movimento de 60° e 30s parado depois | 60,003° |
+| Parado 60s sob vibração de 3°/s de pico | 0,004° de deriva |
+| 60° de pan com o sensor a 60° de tilt | 60,02° (sem a compensação daria 30°) |
+| 40 movimentos de ±45°, voltando ao zero | 0,066° de erro residual |
+
+O piso de detecção medido bate com o previsto (`limiar × janela` = 1°/s × 1s):
+movimentos de até ~1° são descartados como ruído, e a partir de ~2° são
+preservados integralmente.
+
+**Isso valida a matemática, não o hardware.** Falta rodar contra o MPU6050
+real — ver as duas confirmações de bancada nas limitações abaixo.
+
 ## Limitações conhecidas / próximos passos
 
+- **[1.2.0] Faixa do pan é placeholder.** `PAN_MIN_DEG`/`PAN_MAX_DEG` estão
+  em ±90° até a mecânica do pan estar definida. Só limita o valor
+  reportado — o integrador interno não é clampado, então voltar para dentro
+  da faixa recupera a leitura correta.
+- **[1.2.0] `PAN_SCALE_CORRECTION` ainda em 1.0.** Calibração de bancada
+  pendente: girar o eixo entre duas posições de separação angular conhecida
+  e usar `(ângulo real / integrado)`. Sem isso, sobra a tolerância de
+  fábrica do giro (~±3%, ou ~2,7° no extremo de um curso de ±90°).
+- **[1.2.0] Sinal do termo de compensação de tilt a confirmar.** O termo
+  `−gy·sin(θ)` depende da handedness real da montagem. Perto de `θ=0` ele
+  some (só sobra `gz·cos θ`), então um sinal trocado **não apareceria** nos
+  testes feitos com o tilt zerado — testar panning com o tilt em ±45°/±60° e
+  conferir se bate com a mesma medida feita em `θ=0`. Resolve junto com a
+  confirmação de montagem do `atan2(ay, az)`, que já estava pendente.
+- **[1.2.0] Boot com o eixo em movimento estraga o bias inicial.** A
+  primeira janela de ZUPT é aceita sem limiar (o zero-rate de fábrica do
+  MPU6050 chega a ±20°/s e nenhum limiar razoável o aceitaria), ou seja,
+  assume-se o sensor parado ao ligar. Se não estiver, o bias sai errado e as
+  janelas paradas seguintes passam a ser rejeitadas. **Pressionar Calibrar
+  com o eixo parado recupera** — `PanSensor::calibrate()` refaz a estimativa
+  do zero do giro junto com o zero do ângulo (confirmado em teste).
+- **[1.2.0] Movimentos menores que ~1° são descartados** como ruído, por
+  causa do cancelamento de janela parada. É o compromisso da abordagem:
+  ajustável em `PAN_ZUPT_RATE_THRESHOLD_DPS`/`PAN_ZUPT_WINDOW_MS`, ao custo
+  de uma estimativa de bias pior.
+- **[1.2.0] Mudança de tilt durante o pan** desloca ligeiramente o bias
+  projetado (o bias é estimado sobre a taxa já projetada, que depende de
+  `θ`). Irrelevante no uso normal, em que o tilt fica aproximadamente fixo
+  enquanto se mede pan; a janela de ZUPT seguinte reabsorve a diferença.
+- **[1.2.0] Modo Vibração ainda não cobre o eixo de pan.** Quando cobrir,
+  deve usar **integração no domínio da frequência** (`Θ(f) = R(f)/(2πf)`)
+  em vez de integrar no tempo: assim o bias cai no bin 0 e é excluído por
+  construção pelo `MIN_PEAK_FREQ_HZ` que o pipeline de FFT já tem. Exige
+  dobrar o buffer de captura e estender o protocolo de streaming.
+- **[1.2.0] Os apps ainda não consomem o pan.** O firmware já publica
+  (Modbus reg. 1 e BLE `6e6e0008-...`), mas `python-app`/`android-app`
+  seguem lendo só o tilt. Como a mudança é aditiva, os apps atuais
+  continuam funcionando sem alteração.
 - **[1.0.2]** Faixa de medição mudou de 0°~120° para -60°~+60° (0° agora é
   a posição calibrada, não mais um extremo mecânico). Isso muda a
   codificação do ângulo em `REG_ANGLE_INPUT` (Modbus) e na characteristic

@@ -10,6 +10,7 @@
 
 namespace {
 BLECharacteristic *angleChar = nullptr;
+BLECharacteristic *panChar = nullptr;
 BLECharacteristic *vibrationStatusChar = nullptr;
 BLECharacteristic *vibrationDataChar = nullptr;
 BleServer *self = nullptr;  // única instância — usada pelos callbacks estáticos do BLE
@@ -49,6 +50,11 @@ void BleServer::begin() {
     );
     angleChar->addDescriptor(new BLE2902());
 
+    panChar = service->createCharacteristic(
+        CHAR_PAN_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+    );
+    panChar->addDescriptor(new BLE2902());
+
     BLECharacteristic *calibrateChar =
         service->createCharacteristic(CHAR_CALIBRATE_UUID, BLECharacteristic::PROPERTY_WRITE);
     calibrateChar->setCallbacks(new CalibrateCallbacks());
@@ -81,7 +87,10 @@ void BleServer::begin() {
 }
 
 void BleServer::handleCalibrateWrite() {
+    // Uma ação de calibração zera os DOIS eixos: é o que os apps expõem como
+    // um único botão "Calibrar".
     _sensor.calibrate();
+    _pan.calibrate();
 }
 
 void BleServer::handleVibrationConfigWrite(uint16_t durationS, uint16_t rateHz) {
@@ -91,17 +100,28 @@ void BleServer::handleVibrationConfigWrite(uint16_t durationS, uint16_t rateHz) 
     }
 }
 
-void BleServer::notifyAngle() {
+void BleServer::notifyAngles() {
     uint32_t now = millis();
     if (now - _lastAngleNotifyMs < BLE_NOTIFY_INTERVAL_MS) {
         return;
     }
     _lastAngleNotifyMs = now;
 
-    uint16_t raw = static_cast<uint16_t>(lroundf(_sensor.readAngleDeg() * ANGLE_SCALE));
-    uint8_t payload[2] = {static_cast<uint8_t>(raw & 0xFF), static_cast<uint8_t>(raw >> 8)};
-    angleChar->setValue(payload, 2);
+    uint16_t rawAngle = static_cast<uint16_t>(lroundf(_sensor.readAngleDeg() * ANGLE_SCALE));
+    uint8_t anglePayload[2] = {
+        static_cast<uint8_t>(rawAngle & 0xFF),
+        static_cast<uint8_t>(rawAngle >> 8),
+    };
+    angleChar->setValue(anglePayload, 2);
     angleChar->notify();
+
+    uint16_t rawPan = static_cast<uint16_t>(lroundf(_pan.readPanDeg() * ANGLE_SCALE));
+    uint8_t panPayload[2] = {
+        static_cast<uint8_t>(rawPan & 0xFF),
+        static_cast<uint8_t>(rawPan >> 8),
+    };
+    panChar->setValue(panPayload, 2);
+    panChar->notify();
 }
 
 void BleServer::updateVibrationNotify() {
@@ -184,6 +204,6 @@ void BleServer::updateVibrationNotify() {
 }
 
 void BleServer::update() {
-    notifyAngle();
+    notifyAngles();
     updateVibrationNotify();
 }

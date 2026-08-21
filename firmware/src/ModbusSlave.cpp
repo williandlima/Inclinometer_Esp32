@@ -86,6 +86,8 @@ void ModbusSlave::handleReadInputRegisters(uint16_t startAddr, uint16_t count) {
         uint16_t addr = startAddr + i;
         if (addr == REG_ANGLE_INPUT) {
             values[i] = static_cast<uint16_t>(lroundf(_sensor.readAngleDeg() * ANGLE_SCALE));
+        } else if (addr == REG_PAN_INPUT) {
+            values[i] = static_cast<uint16_t>(lroundf(_pan.readPanDeg() * ANGLE_SCALE));
         } else if (addr == REG_VIBRATION_STATUS) {
             values[i] = static_cast<uint16_t>(_vibration.status());
         } else if (addr == REG_VIBRATION_PROGRESS) {
@@ -118,7 +120,10 @@ void ModbusSlave::handleWriteCoil(uint16_t addr, uint16_t value) {
     bool on = (value == 0xFF00);
     if (addr == COIL_CALIBRATE) {
         if (on) {
+            // Uma ação de calibração zera os DOIS eixos: é o que os apps
+            // expõem como um único botão "Calibrar".
             _sensor.calibrate();
+            _pan.calibrate();
         }
     } else if (addr == COIL_VIBRATION_START) {
         if (on) {

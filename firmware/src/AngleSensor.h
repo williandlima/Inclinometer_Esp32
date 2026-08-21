@@ -22,7 +22,9 @@
 //   medir, então filtrar destruiria o dado.
 class AngleSensor {
 public:
-    bool begin();
+    // O Mpu6050 é compartilhado (por referência) com o PanSensor: é o mesmo
+    // chip físico, então quem o inicializa é o main(), uma vez só.
+    explicit AngleSensor(Mpu6050 &mpu) : _mpu(mpu) {}
 
     // Chamar a cada iteração do loop(): amostra o sensor em intervalo fixo
     // (ANGLE_SAMPLE_INTERVAL_MS) e alimenta o filtro da leitura contínua.
@@ -45,7 +47,7 @@ public:
     void calibrate();
 
 private:
-    Mpu6050 _mpu;
+    Mpu6050 &_mpu;
     float _offsetDeg = 0.0f;
 
     float _filteredRawDeg = 0.0f;  // estado da média móvel (ângulo absoluto)
