@@ -6,6 +6,43 @@ ESP32 — inclinação (tilt) e azimute (pan) — via BLE, com registro de limit
 PDF — equivalente ao software desktop em PyQt5, na mesma experiência, e ao
 firmware em `firmware/`.
 
+## Instalar as duas versões lado a lado
+
+Dá para manter no mesmo aparelho a **versão 1** (mede só a inclinação) e a
+**versão 2** (esta, que mede inclinação e azimute), para comparar. O que
+separa as duas é o `applicationId`: o Android usa esse identificador para
+decidir se um APK é um app novo ou uma atualização de outro, então dois APKs
+com o mesmo id nunca coexistem — instalar um substitui o outro.
+
+| | Versão 1 | Versão 2 |
+|---|---|---|
+| Nome no aparelho | Inclinômetro | Inclinômetro 2 Eixos |
+| `applicationId` | `com.williandlima.inclinometro` | `com.williandlima.inclinometro.doiseixos` |
+| `versionName` | 0.1.0 | 2.0.0 |
+| Firmware correspondente | 1.1.0 | 1.3.1 |
+
+Cada uma guarda seus próprios dados: o banco Room fica no armazenamento
+privado de cada `applicationId`, então os históricos não se misturam e
+desinstalar uma não apaga os da outra.
+
+Para gerar o APK da **versão 2**, use o projeto como está hoje. Para o da
+**versão 1**, volte o repositório ao commit anterior ao eixo de azimute:
+
+```bash
+git checkout 0ca6ab1
+```
+
+Guarde o APK gerado em outra pasta antes de voltar para a versão atual
+(`git checkout claude/inclinometro-bluetooth-serial-x2we0f`). Naquele commit
+o `applicationId` e o nome antigos ainda estão no lugar, então o APK sai com
+a identidade da versão 1 automaticamente — não é preciso editar nada.
+
+> Use um app de cada vez contra o mesmo ESP32: feche a conexão de um antes
+> de conectar o outro. A partir do firmware **1.3.1** o ESP32 volta a
+> anunciar sozinho quando o cliente desconecta — em versões anteriores ele
+> sumia do scan até ser resetado na mão, o que atrapalha justamente esse
+> vaivém entre os dois apps.
+
 ## Requisitos
 
 - Android Studio (Koala ou mais recente) com Android SDK 34 instalado.

@@ -31,9 +31,9 @@ if errorlevel 1 (
 
 echo.
 echo ============================================
-echo  Executavel gerado em: dist\Inclinometro\Inclinometro.exe
+echo  Executavel gerado em: dist\Inclinometro2Eixos\Inclinometro2Eixos.exe
 echo.
-echo  A pasta "dist\Inclinometro" inteira pode ser copiada
+echo  A pasta "dist\Inclinometro2Eixos" inteira pode ser copiada
 echo  para qualquer computador Windows (10/11, 64 bits),
 echo  mesmo sem Python instalado.
 echo ============================================

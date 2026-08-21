@@ -3,24 +3,34 @@
 ; PyInstaller (windows\build_exe.bat).
 ;
 ; Requer o Inno Setup instalado (https://jrsoftware.org/isinfo.php) e que
-; "dist\Inclinometro\Inclinometro.exe" ja exista (rode build_exe.bat antes).
+; "dist\Inclinometro2Eixos\Inclinometro2Eixos.exe" ja exista (rode
+; build_exe.bat antes).
 ; Gerar com: windows\build_installer.bat
 
-#define MyAppName "Inclinometro Avibras Aeroco"
-#define MyAppVersion "1.0.0"
+; ATENCAO AO AppId: e' ele que o Windows usa para decidir se uma instalacao
+; e' um app novo ou um UPGRADE de outro ja instalado. Este GUID e' diferente
+; do da versao 1 (so inclinacao), e e' isso que permite ter as duas
+; instaladas ao mesmo tempo, cada uma com sua entrada em "Adicionar ou
+; remover programas". Nome, pasta e atalhos tambem sao proprios pelo mesmo
+; motivo. Nunca reaproveitar o GUID da outra versao.
+;
+; Manter em sincronia com python-app\app_version.py (mesmos nome e versao).
+
+#define MyAppName "Inclinometro 2 Eixos (Avibras Aeroco)"
+#define MyAppVersion "2.0.0"
 #define MyAppPublisher "Avibras Aeroco"
-#define MyAppExeName "Inclinometro.exe"
+#define MyAppExeName "Inclinometro2Eixos.exe"
 
 [Setup]
-AppId={{B4C6D9E1-7F2A-4B3C-9E1D-6A2F8C0D5E3B}
+AppId={{3F7A2C5D-8E14-4D6B-A2F9-5C7B1E0A9D34}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\Inclinometro
+DefaultDirName={autopf}\Inclinometro2Eixos
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=installer_output
-OutputBaseFilename=Inclinometro-Setup-{#MyAppVersion}
+OutputBaseFilename=Inclinometro-2Eixos-Setup-{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 SetupIconFile=..\assets\logo.ico
@@ -35,7 +45,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 Name: "desktopicon"; Description: "Criar atalho na Area de Trabalho"; GroupDescription: "Atalhos adicionais:"
 
 [Files]
-Source: "..\dist\Inclinometro\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\Inclinometro2Eixos\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

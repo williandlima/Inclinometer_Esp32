@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.3.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.3.1`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -275,6 +275,15 @@ ruído puro em 4 durações diferentes, mantendo 30/30 de detecção de sinal
 real, inclusive com amplitude de 0,02°.
 
 ## Limitações conhecidas / próximos passos
+
+- **[1.3.1]** O ESP32 não voltava a anunciar por BLE depois que um cliente
+  desconectava. O rádio para de anunciar sozinho ao aceitar uma conexão, e a
+  lib BLE do Arduino não retoma o anúncio na desconexão — resultado: o
+  dispositivo sumia do scan até ser resetado na mão. Aparecia ao trocar de
+  app, ou só ao reabrir o mesmo app, e parecia defeito de hardware. Agora
+  `BleServer` registra um `BLEServerCallbacks` que marca a desconexão, e o
+  anúncio é reiniciado no `loop()` — e não dentro do próprio callback, que
+  roda na task do stack BLE, onde essa chamada tende a falhar em silêncio.
 
 - **[1.2.0] Faixa do pan é placeholder.** `PAN_MIN_DEG`/`PAN_MAX_DEG` estão
   em ±90° até a mecânica do pan estar definida. Só limita o valor

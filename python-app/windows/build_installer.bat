@@ -10,7 +10,7 @@ REM Precisa ser executado em uma maquina Windows.
 cd /d "%~dp0"
 
 call build_exe.bat
-if not exist "..\dist\Inclinometro\Inclinometro.exe" (
+if not exist "..\dist\Inclinometro2Eixos\Inclinometro2Eixos.exe" (
     echo [ERRO] Executavel nao foi gerado. Veja os erros acima.
     exit /b 1
 )
@@ -41,7 +41,7 @@ if errorlevel 1 (
 echo.
 echo ============================================
 echo  Instalador gerado em:
-echo  windows\installer_output\Inclinometro-Setup-1.0.0.exe
+echo  windows\installer_output\Inclinometro-2Eixos-Setup-2.0.0.exe
 echo.
 echo  Esse arquivo unico pode ser copiado para qualquer
 echo  computador Windows (10/11, 64 bits) e instala o

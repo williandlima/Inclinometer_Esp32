@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from app_version import APP_NAME
 from data_source.base import AngleReading, IAngleDataSource
 from data_source.ble_source import BleAngleSource
 from data_source.modbus_source import ModbusAngleSource
@@ -137,7 +138,7 @@ def _fmt_time(ts: float) -> str:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Inclinômetro — Painel Desktop")
+        self.setWindowTitle(f"{APP_NAME} — Painel Desktop")
         self.resize(900, 520)
         self.setStyleSheet(_APP_STYLESHEET)
 
@@ -219,7 +220,7 @@ class MainWindow(QMainWindow):
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
 
-        title_label = QLabel("Inclinômetro")
+        title_label = QLabel(APP_NAME)
         title_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {TEXT_LIGHT};")
         header.addWidget(title_label)
 
