@@ -19,23 +19,22 @@ com o mesmo id nunca coexistem — instalar um substitui o outro.
 | Nome no aparelho | Inclinômetro | Inclinômetro 2 Eixos |
 | `applicationId` | `com.williandlima.inclinometro` | `com.williandlima.inclinometro.doiseixos` |
 | `versionName` | 0.1.0 | 2.0.0 |
-| Firmware correspondente | 1.1.0 | 1.3.1 |
+| Firmware correspondente | 1.1.1 | 1.3.1 |
 
 Cada uma guarda seus próprios dados: o banco Room fica no armazenamento
 privado de cada `applicationId`, então os históricos não se misturam e
 desinstalar uma não apaga os da outra.
 
-Para gerar o APK da **versão 2**, use o projeto como está hoje. Para o da
-**versão 1**, volte o repositório ao commit anterior ao eixo de azimute:
+Para gerar o APK da **versão 2**, use o projeto como está hoje (branch
+`main`). Para o da **versão 1**, mude para a branch dela:
 
 ```bash
-git checkout 0ca6ab1
+git checkout v1-inclinacao
 ```
 
-Guarde o APK gerado em outra pasta antes de voltar para a versão atual
-(`git checkout claude/inclinometro-bluetooth-serial-x2we0f`). Naquele commit
-o `applicationId` e o nome antigos ainda estão no lugar, então o APK sai com
-a identidade da versão 1 automaticamente — não é preciso editar nada.
+Guarde o APK gerado em outra pasta antes de voltar para a `main`. Naquela
+branch o `applicationId` e o nome da versão 1 já estão no lugar, então o APK
+sai com a identidade certa automaticamente — não é preciso editar nada.
 
 > Use um app de cada vez contra o mesmo ESP32: feche a conexão de um antes
 > de conectar o outro. A partir do firmware **1.3.1** o ESP32 volta a
