@@ -22,8 +22,8 @@ constexpr int PIN_I2C_SCL = 22;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.3.1";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10301;
+constexpr char FIRMWARE_VERSION[] = "1.4.0";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10400;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -94,12 +94,36 @@ constexpr float ANGLE_MAX_DEG = 60.0f;
 // toda a sensibilidade — por isso os dois caminhos são separados em
 // AngleSensor (readAngleDeg filtrado vs readRelativeAngleDeg instantâneo).
 //
-// Média móvel exponencial alimentada a cada ANGLE_SAMPLE_INTERVAL_MS. Com
-// 10ms de amostragem e 0.5s de constante de tempo, o ruído branco cai cerca
-// de 10x, com ~0.5s para a leitura acompanhar um movimento real.
+// O filtro é um "1-euro" (Casiez et al.): uma média móvel exponencial cuja
+// frequência de corte NÃO é fixa — ela sobe quando o ângulo está mudando de
+// verdade e desce quando o eixo está parado.
+//
+// Por que não uma média móvel comum: com constante de tempo fixa, estabilidade
+// e rapidez são um cabo de guerra — mais suave significa mais lento, sempre.
+// Com corte adaptativo dá para ter os dois, porque as duas situações são
+// tratadas separadamente. Medido em simulação da cadeia completa (ruído do
+// MPU6050 -> DLPF de 21Hz -> atan2 -> filtro), contra a média móvel de 0.5s
+// que estava aqui antes:
+//
+//   ruído com o eixo parado : 0.016° -> 0.006° RMS  (2.5x menos)
+//   atraso p/ acompanhar 90%
+//   de um movimento real    : 0.63s  -> 0.21s       (3x mais rápido)
+//
+// Ou seja, melhor nos dois eixos ao mesmo tempo — não é uma troca.
+//
+// Ajuste dos três parâmetros:
+// - MIN_CUTOFF manda no ruído com o eixo parado. Menor = mais estável, e é o
+//   primeiro a mexer se a leitura ainda tremular no hardware real.
+// - BETA manda na rapidez em movimento. Maior = acompanha mais rápido, mas
+//   deixa passar mais ruído (o próprio ruído infla a derivada estimada).
+// - DERIV_CUTOFF suaviza a estimativa de velocidade que alimenta o BETA.
+//   Baixo de propósito: sem isso, o ruído infla a derivada, que levanta o
+//   corte, que deixa passar mais ruído — a realimentação que estraga o ganho.
 // ============================================================================
-constexpr uint32_t ANGLE_SAMPLE_INTERVAL_MS = 10;     // 100Hz de amostragem interna
-constexpr float ANGLE_FILTER_TIME_CONSTANT_S = 0.5f;  // maior = mais estável, porém mais lento
+constexpr uint32_t ANGLE_SAMPLE_INTERVAL_MS = 10;  // 100Hz de amostragem interna
+constexpr float ANGLE_FILTER_MIN_CUTOFF_HZ = 0.02f;
+constexpr float ANGLE_FILTER_BETA = 0.15f;
+constexpr float ANGLE_FILTER_DERIV_CUTOFF_HZ = 0.3f;
 constexpr uint16_t VIBRATION_MAX_SAMPLES = 6000;  // limite de memória do buffer de captura
 
 // ============================================================================

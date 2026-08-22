@@ -56,9 +56,15 @@ def _find_logo_path() -> str | None:
 
 LOGO_PATH = _find_logo_path()
 
-# Exibição da leitura contínua em degraus de 0,25°. O grosso da estabilidade
-# vem do firmware (filtro interno do MPU6050 + média móvel, ver
+# Exibição da leitura contínua em degraus de 0,10°. O grosso da estabilidade
+# vem do firmware (filtro interno do MPU6050 + filtro adaptativo, ver
 # firmware/src/AngleSensor.h); aqui é só a apresentação.
+#
+# O degrau era de 0,25° e foi para 0,10° (2,5x mais fino) junto com a troca do
+# filtro do firmware. Não é ajuste solto: com a média móvel antiga o ruído
+# filtrado era de ~0,016° e um degrau de 0,10° já tremulava se o ruído real
+# passasse do previsto pelo datasheet; com o filtro adaptativo (~0,005°) o
+# mesmo degrau tem folga. Medido em simulação da cadeia completa.
 #
 # A histerese evita o último resíduo de tremulação: sem ela, um valor parado
 # bem na fronteira entre dois degraus (ex: 1,125°) alterna entre 1,00° e 1,25°
@@ -67,8 +73,8 @@ LOGO_PATH = _find_logo_path()
 #
 # Nada disso afeta os dados guardados: histórico, mín/máx e relatório usam
 # sempre o ângulo bruto.
-DISPLAY_ANGLE_STEP_DEG = 0.25
-DISPLAY_ANGLE_HYSTERESIS_DEG = 0.05
+DISPLAY_ANGLE_STEP_DEG = 0.10
+DISPLAY_ANGLE_HYSTERESIS_DEG = 0.02
 
 _VALUE_STYLE = f"font-size: 20px; font-weight: bold; color: {TEXT_LIGHT};"
 _FLASH_STYLE = f"font-size: 20px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 4px;"

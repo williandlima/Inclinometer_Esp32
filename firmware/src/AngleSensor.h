@@ -15,8 +15,9 @@
 // pan-tilt, quando o projeto elétrico definir isso.
 //
 // Há DOIS caminhos de leitura, de propósito:
-// - readAngleDeg(): filtrado (média móvel exponencial alimentada por
-//   update()), para a leitura contínua do dia a dia ficar estável;
+// - readAngleDeg(): filtrado (filtro adaptativo "1-euro" alimentado por
+//   update(); ver ANGLE_FILTER_* em Config.h), para a leitura contínua do dia
+//   a dia ficar estável sem ficar lenta;
 // - readRelativeAngleDeg(): amostra instantânea, sem filtro, para o Modo
 //   Vibração — ali a variação de frações de grau é justamente o que se quer
 //   medir, então filtrar destruiria o dado.
@@ -50,12 +51,19 @@ private:
     Mpu6050 &_mpu;
     float _offsetDeg = 0.0f;
 
-    float _filteredRawDeg = 0.0f;  // estado da média móvel (ângulo absoluto)
-    float _lastRawDeg = 0.0f;      // última amostra válida (absoluta)
-    bool _filterReady = false;     // primeira amostra inicializa o filtro direto
+    // Estado do filtro 1-euro (todos em ângulo absoluto, antes do offset):
+    float _filteredRawDeg = 0.0f;   // saída do filtro
+    float _filteredRateDps = 0.0f;  // derivada suavizada, que comanda o corte
+    float _prevRawDeg = 0.0f;       // amostra anterior, para calcular a derivada
+    float _lastRawDeg = 0.0f;       // última amostra válida (absoluta)
+    bool _filterReady = false;      // primeira amostra inicializa o filtro direto
     uint32_t _lastSampleMs = 0;
 
     // Lê uma amostra e converte para ângulo absoluto. Retorna false se a
     // leitura I2C falhar (sensor desconectado, mau contato).
     bool readRawAngleDeg(float &angleDeg);
+
+    // Coeficiente de uma média móvel exponencial de 1 polo para a frequência
+    // de corte e o intervalo dados.
+    static float emaAlpha(float cutoffHz, float dtS);
 };
