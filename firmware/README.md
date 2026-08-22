@@ -294,10 +294,22 @@ uma rampa real de 10°:
 
 Ou seja, ~3x menos ruído **e** ~3x mais rápido — não é troca.
 
-Com isso, o degrau de exibição dos apps foi de 0,25° para **0,10°** (2,5x mais
-fino). Esse número não é solto: com o filtro antigo, um degrau de 0,10° já
-tremulava se o ruído real passasse do previsto no datasheet; com o filtro
-novo, ele só começa a tremular com ~3x o ruído nominal.
+**O degrau de exibição continua em 0,25°**, o mesmo da versão 1 — é requisito,
+e mantém a comparação entre as duas versões direta. Com esse degrau a tela já
+era estável com o filtro antigo (meio degrau é muito maior que o ruído), então
+o ganho do filtro novo **não aparece na estabilidade da tela**: aparece em
+duas outras coisas.
+
+**1. O mín/máx e o relatório ficam mais limpos.** Eles usam o ângulo bruto, não
+o degrau da tela — e extremos são justamente o que o ruído mais infla. Numa
+sessão de 10 min com o eixo *parado*, a faixa mín/máx registrada:
+
+| | média móvel (0,5s) | 1-euro adaptativo |
+|---|---|---|
+| Faixa falsa, só de ruído | 0,120° | **0,040°** |
+
+**2. A tela assenta mais rápido no degrau certo** depois de um movimento:
+1,75s → 1,50s no ruído nominal, e 1,75s → 0,75s com 3x o ruído.
 
 ### De onde vem o ruído, e o que NÃO adiantaria mexer
 

@@ -38,26 +38,26 @@ import kotlinx.coroutines.withTimeoutOrNull
  * (`_CONN_STYLES` em `python-app/ui/main_window.py`). */
 enum class ConnectionStatus { PARADO, CONECTANDO, CONECTADO, ERRO, SIMULACAO }
 
-// Exibição da leitura contínua em degraus de 0,10°, igual ao app desktop. O
+// Exibição da leitura contínua em degraus de 0,25°, igual ao app desktop. O
 // grosso da estabilidade vem do firmware (filtro interno do MPU6050 + filtro
 // adaptativo, ver firmware/src/AngleSensor.h); aqui é só a apresentação.
 //
-// O degrau era de 0,25° e foi para 0,10° (2,5x mais fino) junto com a troca do
-// filtro do firmware, que derrubou o ruído da leitura de ~0,016° para ~0,005°
-// e deu folga para o degrau menor.
+// O degrau de 0,25° é requisito, e é o mesmo da versão 1 — as duas versões
+// mostram o ângulo com a mesma granularidade. O ruído do valor filtrado
+// (~0,005°) é bem menor que meio degrau, então o passo tem folga larga.
 //
 // A histerese evita o último resíduo de tremulação: sem ela, um valor parado
 // bem na fronteira entre dois degraus (ex: 1,125°) alterna entre 1,00° e
 // 1,25° a cada leitura. Nada disso afeta os dados guardados — histórico,
 // mín/máx e relatório usam sempre o ângulo bruto (`currentAngle`).
-private const val DISPLAY_ANGLE_STEP_DEG = 0.10
-private const val DISPLAY_ANGLE_HYSTERESIS_DEG = 0.02
+private const val DISPLAY_ANGLE_STEP_DEG = 0.25
+private const val DISPLAY_ANGLE_HYSTERESIS_DEG = 0.05
 
 data class UiState(
     val mode: ConnectionMode = ConnectionMode.SIMULATED,
     val running: Boolean = false,
     val currentAngle: Double? = null,   // valor bruto da leitura (tilt)
-    val displayAngle: Double? = null,   // valor exibido (degrau de 0,10° com histerese)
+    val displayAngle: Double? = null,   // valor exibido (degrau de 0,25° com histerese)
     val minReading: AngleReading? = null,
     val maxReading: AngleReading? = null,
     val minFlash: Boolean = false,
