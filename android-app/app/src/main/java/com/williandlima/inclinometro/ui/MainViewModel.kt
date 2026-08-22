@@ -39,8 +39,12 @@ import kotlinx.coroutines.withTimeoutOrNull
 enum class ConnectionStatus { PARADO, CONECTANDO, CONECTADO, ERRO, SIMULACAO }
 
 // Exibição da leitura contínua em degraus de 0,25°, igual ao app desktop. O
-// grosso da estabilidade vem do firmware (filtro interno do MPU6050 + média
-// móvel, ver firmware/src/AngleSensor.h); aqui é só a apresentação.
+// grosso da estabilidade vem do firmware (filtro interno do MPU6050 + filtro
+// adaptativo, ver firmware/src/AngleSensor.h); aqui é só a apresentação.
+//
+// O degrau de 0,25° é requisito, e é o mesmo da versão 1 — as duas versões
+// mostram o ângulo com a mesma granularidade. O ruído do valor filtrado
+// (~0,005°) é bem menor que meio degrau, então o passo tem folga larga.
 //
 // A histerese evita o último resíduo de tremulação: sem ela, um valor parado
 // bem na fronteira entre dois degraus (ex: 1,125°) alterna entre 1,00° e
@@ -339,9 +343,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun resetLimits() {
         val wasRunning = _uiState.value.running
         val mode = _uiState.value.mode
-        tracker.reset()
-        panTracker.reset()
         viewModelScope.launch {
+            // Com firmware v1.5.0+ quem guarda os extremos é o ESP32 (ver
+            // [LimitTracker]). Zerar só o lado do app não adiantaria: a
+            // próxima notificação traria os extremos antigos de volta.
+            //
+            // A ordem importa e é esta: dispositivo primeiro, rastreadores
+            // depois. Invertida, uma leitura chegando durante a escrita BLE
+            // (que suspende) reintroduziria os extremos antigos — e, como
+            // mín/máx só andam para fora, eles ficariam.
+            val source = currentSource
+            if (source != null && source.supportsPeakReset) {
+                runCatching { source.resetPeaks() }
+            }
+            tracker.reset()
+            panTracker.reset()
+
             if (wasRunning) {
                 currentSessionId?.let { repository.endSession(it) }
                 currentSessionId = repository.startSession(mode)

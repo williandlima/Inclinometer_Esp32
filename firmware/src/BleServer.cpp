@@ -14,6 +14,7 @@ BLECharacteristic *panChar = nullptr;
 BLECharacteristic *vibrationStatusChar = nullptr;
 BLECharacteristic *vibrationDataChar = nullptr;
 BLECharacteristic *vibrationPanDataChar = nullptr;
+BLECharacteristic *peaksChar = nullptr;
 BleServer *self = nullptr;  // única instância — usada pelos callbacks estáticos do BLE
 
 // Sinalizado pelo callback de desconexão e consumido no loop principal.
@@ -40,6 +41,15 @@ class CalibrateCallbacks : public BLECharacteristicCallbacks {
         std::string value = characteristic->getValue();
         if (!value.empty() && static_cast<uint8_t>(value[0]) == 0x01 && self != nullptr) {
             self->handleCalibrateWrite();
+        }
+    }
+};
+
+class ResetPeaksCallbacks : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *characteristic) override {
+        std::string value = characteristic->getValue();
+        if (!value.empty() && static_cast<uint8_t>(value[0]) == 0x01 && self != nullptr) {
+            self->handleResetPeaksWrite();
         }
     }
 };
@@ -76,9 +86,18 @@ void BleServer::begin() {
     );
     panChar->addDescriptor(new BLE2902());
 
+    peaksChar = service->createCharacteristic(
+        CHAR_PEAKS_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+    );
+    peaksChar->addDescriptor(new BLE2902());
+
     BLECharacteristic *calibrateChar =
         service->createCharacteristic(CHAR_CALIBRATE_UUID, BLECharacteristic::PROPERTY_WRITE);
     calibrateChar->setCallbacks(new CalibrateCallbacks());
+
+    BLECharacteristic *resetPeaksChar =
+        service->createCharacteristic(CHAR_RESET_PEAKS_UUID, BLECharacteristic::PROPERTY_WRITE);
+    resetPeaksChar->setCallbacks(new ResetPeaksCallbacks());
 
     BLECharacteristic *vibrationConfigChar =
         service->createCharacteristic(CHAR_VIBRATION_CONFIG_UUID, BLECharacteristic::PROPERTY_WRITE);
@@ -118,6 +137,11 @@ void BleServer::handleCalibrateWrite() {
     _pan.calibrate();
 }
 
+void BleServer::handleResetPeaksWrite() {
+    _sensor.resetPeaks();
+    _pan.resetPeaks();
+}
+
 void BleServer::handleVibrationConfigWrite(uint16_t durationS, uint16_t rateHz) {
     if (_vibration.start(durationS, rateHz)) {
         _vibrationDataCursor = 0;
@@ -148,6 +172,44 @@ void BleServer::notifyAngles() {
     };
     panChar->setValue(panPayload, 2);
     panChar->notify();
+
+    notifyPeaks();
+}
+
+void BleServer::notifyPeaks() {
+    uint16_t peaks[4] = {
+        static_cast<uint16_t>(lroundf(_sensor.minAngleDeg() * ANGLE_SCALE)),
+        static_cast<uint16_t>(lroundf(_sensor.maxAngleDeg() * ANGLE_SCALE)),
+        static_cast<uint16_t>(lroundf(_pan.minPanDeg() * ANGLE_SCALE)),
+        static_cast<uint16_t>(lroundf(_pan.maxPanDeg() * ANGLE_SCALE)),
+    };
+
+    uint8_t payload[8];
+    for (uint8_t i = 0; i < 4; i++) {
+        payload[i * 2] = static_cast<uint8_t>(peaks[i] & 0xFF);
+        payload[i * 2 + 1] = static_cast<uint8_t>(peaks[i] >> 8);
+    }
+
+    // setValue sempre: mantém o READ da characteristic válido para um cliente
+    // que acabou de conectar e ainda não recebeu nenhum notify.
+    peaksChar->setValue(payload, 8);
+
+    // notify só quando muda. Extremo é grandeza que fica parada quase o tempo
+    // todo — notificar a cada 200 ms gastaria banda BLE para repetir o mesmo
+    // pacote, e é justamente durante uma captura de vibração (quando a fila
+    // BLE está cheia) que isso mais atrapalharia.
+    bool changed = !_hasSentPeaks;
+    for (uint8_t i = 0; i < 4 && !changed; i++) {
+        changed = peaks[i] != _lastSentPeaks[i];
+    }
+    if (!changed) {
+        return;
+    }
+    for (uint8_t i = 0; i < 4; i++) {
+        _lastSentPeaks[i] = peaks[i];
+    }
+    _hasSentPeaks = true;
+    peaksChar->notify();
 }
 
 void BleServer::updateVibrationNotify() {

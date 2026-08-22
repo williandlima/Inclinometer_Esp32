@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.3.1`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.5.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -37,6 +37,8 @@ firmware/
     Mpu6050.h/.cpp         driver I2C mínimo do MPU6050 (sem lib externa)
     AngleSensor.h/.cpp     tilt por atan2 do acelerômetro + calibração (offset)
     PanSensor.h/.cpp       pan por integração do giroscópio + ZUPT
+    PeakHold.h/.cpp        extremos (mín/máx) medidos a 100Hz, com teste
+                           de persistência contra ruído
     VibrationCapture.h/.cpp  motor de captura em alta taxa, compartilhado
                              pelos dois transportes
     ModbusSlave.h/.cpp    escravo Modbus RTU sobre a porta serial USB (UART0)
@@ -87,8 +89,11 @@ ponto de vista do `pyserial`).
 |---|---|---|
 | Input reg. 0 | leitura | Ângulo de **tilt** * 100 (int16, com sinal, faixa -60~+60°) |
 | Input reg. 1 | leitura | Ângulo de **pan** * 100 (int16, com sinal, faixa `PAN_MIN_DEG`~`PAN_MAX_DEG`) |
-| Coil 0 | escrita | `true` → calibra (zera **os dois eixos**, tilt e pan) |
+| Input reg. 2-3 | leitura | Mín / máx de **tilt** * 100 (int16, medidos no firmware — ver "Extremos" abaixo) |
+| Input reg. 4-5 | leitura | Mín / máx de **pan** * 100 (int16) |
+| Coil 0 | escrita | `true` → calibra (zera **os dois eixos**, tilt e pan, e os extremos junto) |
 | Coil 1 | escrita | `true` → inicia captura de vibração |
+| Coil 2 | escrita | `true` → esquece os extremos (sem mexer no zero) |
 | Holding reg. 10 | escrita | Duração da captura (s) |
 | Holding reg. 11 | escrita | Taxa de amostragem (Hz) |
 | Input reg. 20-22 | leitura | Status / progresso (%) / total de amostras da captura |
@@ -109,6 +114,8 @@ ponto de vista do `pyserial`).
 | `6e6e0007-...` (versão firmware) | read | `FIRMWARE_VERSION_CODE` (uint16 LE, ver acima) — valor fixo, sem notify |
 | `6e6e0008-...` (pan) | read/notify | Ângulo de pan * 100 (int16 LE, com sinal), na mesma cadência do tilt |
 | `6e6e0009-...` (dados vibração pan) | notify | Amostras de pan em pacotes (índice + até 8 int16 LE), em **velocidade angular** °/s * 100 |
+| `6e6e000a-...` (extremos) | read/notify | 8 bytes = 4 int16 LE * 100: tilt mín, tilt máx, pan mín, pan máx. Notifica só quando muda |
+| `6e6e000b-...` (resetar extremos) | write | Byte `0x01` → esquece os extremos (sem mexer no zero) |
 
 O pan entrou numa characteristic própria, e não anexado à de tilt, de
 propósito: os apps já instalados esperam exatamente 2 bytes em
@@ -274,7 +281,174 @@ estatísticas). Depois da correção: 0 falsos positivos em 48 capturas de
 ruído puro em 4 durações diferentes, mantendo 30/30 de detecção de sinal
 real, inclusive com amplitude de 0,02°.
 
+## Sensibilidade da leitura contínua (v1.4.0)
+
+O filtro da leitura contínua deixou de ser uma média móvel exponencial de
+constante fixa (0,5s) e passou a ser um **filtro adaptativo "1-euro"**
+(Casiez et al.): a frequência de corte sobe quando o ângulo está mudando de
+verdade e desce quando o eixo está parado.
+
+O motivo é que, com constante de tempo fixa, estabilidade e rapidez são um
+cabo de guerra — mais suave é sempre mais lento. Separando os dois regimes dá
+para ganhar nos dois. Medido em simulação da cadeia completa (ruído do
+MPU6050 → DLPF de 21Hz → `atan2` → filtro), com o eixo parado e depois com
+uma rampa real de 10°:
+
+| | média móvel (0,5s) | 1-euro adaptativo |
+|---|---|---|
+| Ruído com o eixo parado | 0,016° RMS | **0,005° RMS** |
+| Atraso p/ acompanhar 90% de um movimento | 0,63 s | **0,21 s** |
+
+Ou seja, ~3x menos ruído **e** ~3x mais rápido — não é troca.
+
+**O degrau de exibição continua em 0,25°**, o mesmo da versão 1 — é requisito,
+e mantém a comparação entre as duas versões direta. Com esse degrau a tela já
+era estável com o filtro antigo (meio degrau é muito maior que o ruído), então
+o ganho do filtro novo **não aparece na estabilidade da tela**: aparece em
+duas outras coisas.
+
+**1. A tela assenta mais rápido no degrau certo** depois de um movimento:
+1,75s → 1,50s no ruído nominal, e 1,75s → 0,75s com 3x o ruído.
+
+**2. O mín/máx ficava mais limpo** — 0,120° → 0,040° de faixa falsa numa
+sessão de 10 min com o eixo parado. Esse segundo ponto **deixou de valer na
+v1.5.0**: o mín/máx não sai mais deste filtro, e sim do caminho de medida
+(ver "Extremos medidos no firmware" abaixo). O motivo é que a leitura da tela,
+por mais limpa que fique, é uma leitura *suavizada* — ela subestimava rajadas
+reais, que é o erro que importa num laudo de carga de vento.
+
+### De onde vem o ruído, e o que NÃO adiantaria mexer
+
+| Etapa | Contribuição |
+|---|---|
+| Acelerômetro após o DLPF de 21Hz | 2,2 mg |
+| Ângulo cru, via `atan2` | 0,127° RMS |
+| Após o filtro adaptativo | **0,005° RMS** |
+| Quantização do protocolo (0,01°) | 0,003° — desprezível |
+
+Duas coisas que pareceriam melhorias e não são:
+
+- **Baixar o DLPF do MPU6050** (de 21Hz para 5Hz) cortaria o ruído pela
+  metade antes mesmo do filtro. Mas o DLPF é compartilhado com o Modo
+  Vibração, que precisa da banda até ~5Hz e usa os 21Hz como anti-aliasing
+  a 50 amostras/s. Cortar ali destruiria o ensaio de vibração.
+- **Aumentar a resolução do protocolo** (`ANGLE_SCALE` acima de 100) não
+  ajuda: a quantização de 0,01° já contribui menos que o ruído do sensor.
+
+O caminho que sobra, se um dia precisar de mais, é reduzir o
+`ANGLE_FILTER_MIN_CUTOFF_HZ` — ao custo de o filtro demorar mais para
+assentar depois de um movimento.
+
+## Extremos medidos no firmware (v1.5.0)
+
+Até a v1.4.0 o mín/máx era calculado nos apps, a partir das leituras que eles
+recebiam. Isso tinha dois problemas somados, e o resultado ia direto para o
+relatório:
+
+1. **O valor lido era o da tela.** O filtro da leitura contínua é pesado de
+   propósito — o display tem degrau de 0,25° e não pode tremular. Mas um filtro
+   pesado achata pico: uma rajada de vento verdadeira de 2° durando meio
+   segundo saía do filtro com menos da metade da amplitude.
+2. **Os apps só enxergam 4-5 Hz.** O poll Modbus roda a 250 ms e o notify BLE a
+   200 ms, enquanto o sensor é amostrado a 100 Hz. Mesmo o que sobrava do pico
+   caía entre duas leituras.
+
+Medido em simulação da cadeia completa, percentual do pico de uma rajada real
+de 2,0° que chegava ao mín/máx:
+
+| duração da rajada | 0,3s | 0,5s | 1,0s | 2,0s |
+|---|---|---|---|---|
+| como era (valor da tela, a 4-5 Hz) | 24% | 39% | 64% | 80% |
+| **como é agora (100 Hz no firmware)** | **76%** | **88%** | **96%** | **99%** |
+
+Para uma medição de carga de vento, esse é o erro que mais importa: ele é
+sistemático e sempre **para menos**, ou seja, o relatório subestimava o
+esforço real na estrutura.
+
+### Como funciona
+
+A mesma amostra de 100 Hz passa a alimentar **três caminhos independentes**,
+cada um com o filtro que a sua finalidade pede:
+
+| caminho | filtro | destino |
+|---|---|---|
+| **Tela** | 1-euro adaptativo (v1.4.0) | display + degrau de 0,25° |
+| **Medida** | 1 polo em `ANGLE_PEAK_CUTOFF_HZ` (3 Hz) + peak-hold | mín/máx, histórico, relatório |
+| **Vibração** | nenhum (amostra crua) | FFT do Modo Vibração |
+
+O corte de 3 Hz cobre a banda física do balanço do mastro (1-5 Hz) sem deixar
+passar o ruído de alta frequência do acelerômetro. Sozinho, porém, ele deixa
+o ruído restante virar extremo falso — daí a segunda peça, o **teste de
+persistência** (`ANGLE_PEAK_PERSIST_SAMPLES`, 10 amostras = 100 ms): um
+extremo só é aceito se o sinal **se manteve** lá pela janela inteira. Ruído
+não se mantém; um movimento real do mastro se mantém.
+
+Com o eixo parado por 10 minutos, faixa mín/máx falsa (só ruído):
+
+| | 1x ruído | 2x | 3x |
+|---|---|---|---|
+| filtro de 3 Hz sozinho | 0,340° | 0,620° | 0,910° |
+| **+ persistência de 100 ms** | **0,240°** | 0,490° | 0,750° |
+| (referência: como era antes) | 0,120° | 0,230° | 0,330° |
+
+No ruído nominal a faixa falsa fica abaixo de um degrau de tela — em troca de
+capturar 88% de uma rajada de meio segundo em vez de 39%.
+
+### O eixo de pan é diferente
+
+No pan o peak-hold é **simples**: sem filtro extra e sem teste de
+persistência. Dois motivos:
+
+- **Não há ruído a filtrar.** O ângulo de pan não vem do acelerômetro, vem de
+  uma integração cujo cancelamento de janela parada (ver "Azimute (pan)"
+  acima) já deixa o valor cravado com o eixo parado.
+- **Persistência custaria caro ali.** O motor gira a 20-30°/s, então 100 ms de
+  exigência cortariam 2-3° do ponto de retorno de cada varredura — justamente
+  o extremo que se quer registrar.
+
+O que o peak-hold resolve no pan é só o segundo problema da lista lá em cima:
+a 4-5 Hz de polling, uma varredura rápida passa pelo extremo entre duas
+leituras do app e some.
+
+### Reset e calibração
+
+Calibrar zera os extremos junto, porque eles são relativos ao zero antigo e
+deixariam de significar qualquer coisa. Para esquecer só os extremos, sem
+mexer no zero, existe uma ação separada (coil 2 / characteristic
+`6e6e000b-...`) — é o que o botão "Resetar limites" dos apps usa.
+
+### Compatibilidade
+
+Aditiva, como as anteriores. Um app que não conhece os registradores/a
+characteristic nova simplesmente não os lê e volta a calcular os extremos por
+conta própria; um firmware antigo responde com exceção de endereço inválido e
+os apps encolhem o pedido automaticamente.
+
 ## Limitações conhecidas / próximos passos
+
+- **[1.5.0] O peak-hold não foi confirmado em hardware.** Os números acima
+  vêm de simulação da cadeia, e a classe `PeakHold` real foi exercitada
+  contra essa mesma simulação (reproduz os valores da tabela). O ajuste, se
+  no ESP32 real a faixa falsa ficar grande demais: subir
+  `ANGLE_PEAK_PERSIST_SAMPLES` (mais rejeição de ruído, menos captura de
+  rajada curta) ou baixar `ANGLE_PEAK_CUTOFF_HZ`. Na direção oposta — se o
+  mín/máx estiver perdendo eventos reais curtos — baixar a persistência.
+
+- **[1.5.0] O gráfico do relatório continua sendo o valor da tela.** Só o
+  mín/máx do resumo (e os marcadores de extremo) vêm do peak-hold. Por isso
+  um marcador pode aparecer *fora* da curva: a curva mostra o que a tela
+  mostrou, o marcador mostra o que de fato aconteceu. Traçar a curva do
+  caminho de medida exigiria transmitir uma segunda série contínua, o que não
+  parece valer o custo de banda — o valor que importa para o laudo é o
+  extremo.
+
+- **[1.4.0] O filtro adaptativo não foi confirmado em hardware.** Os números
+  acima vêm de simulação da cadeia, e o código real do `AngleSensor.cpp` foi
+  conferido contra essa simulação (bate até 8e-6°, só arredondamento de
+  `float`). Mas ruído real inclui vibração mecânica, montagem e temperatura,
+  que a simulação não modela. Se a leitura tremular no ESP32 real, o primeiro
+  ajuste é baixar `ANGLE_FILTER_MIN_CUTOFF_HZ`; se ficar lenta demais para
+  acompanhar o movimento, subir `ANGLE_FILTER_BETA`.
 
 - **[1.3.1]** O ESP32 não voltava a anunciar por BLE depois que um cliente
   desconectava. O rádio para de anunciar sozinho ao aceitar uma conexão, e a

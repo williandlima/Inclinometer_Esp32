@@ -57,8 +57,14 @@ def _find_logo_path() -> str | None:
 LOGO_PATH = _find_logo_path()
 
 # Exibição da leitura contínua em degraus de 0,25°. O grosso da estabilidade
-# vem do firmware (filtro interno do MPU6050 + média móvel, ver
+# vem do firmware (filtro interno do MPU6050 + filtro adaptativo, ver
 # firmware/src/AngleSensor.h); aqui é só a apresentação.
+#
+# O degrau de 0,25° é requisito, e é o mesmo da versão 1 — as duas versões
+# mostram o ângulo com a mesma granularidade, o que também torna a comparação
+# entre elas direta. Medindo a cadeia completa, o ruído do valor filtrado
+# (~0,005°) é bem menor que meio degrau, então este passo tem folga larga:
+# a leitura não tremula nem com várias vezes o ruído previsto no datasheet.
 #
 # A histerese evita o último resíduo de tremulação: sem ela, um valor parado
 # bem na fronteira entre dois degraus (ex: 1,125°) alterna entre 1,00° e 1,25°
@@ -391,6 +397,23 @@ class MainWindow(QMainWindow):
         if was_running:
             self._history.end_session()
             self._history.start_session(mode=mode)
+
+        # Com firmware v1.5.0+ quem guarda os extremos é o ESP32 (ver
+        # `limits.limit_tracker`). Zerar só o lado do app não adiantaria: a
+        # próxima leitura traria os extremos antigos de volta.
+        #
+        # A ordem importa e é esta: dispositivo primeiro, rastreadores depois.
+        # Invertida, uma leitura chegando no meio reintroduziria os extremos
+        # antigos — e, como mín/máx só andam para fora, eles ficariam. É por
+        # isso também que esta chamada é síncrona aqui na thread da UI, e não
+        # num worker: as leituras chegam por signal do Qt, ou seja, nesta mesma
+        # thread, então nada consegue se intercalar entre as duas etapas.
+        if self._source is not None and self._source.supports_peak_reset:
+            try:
+                self._source.reset_peaks()
+            except Exception as exc:  # noqa: BLE001 - reset local segue de qualquer forma
+                self.statusBar().showMessage(f"Falha ao resetar os extremos no dispositivo: {exc}")
+
         for axis, tracker in self._trackers.items():
             tracker.reset()
             widgets = self._axis_widgets[axis]

@@ -84,11 +84,9 @@ object PdfReportGenerator {
         val modeLabel = if (session.mode == ConnectionMode.SIMULATED) "Simulação" else "Real (BLE)"
         val started = timeFormat.format(Date(session.startedAt))
         val ended = session.endedAt?.let { timeFormat.format(Date(it)) } ?: "em andamento"
-        val angleMin = readings.minOfOrNull { it.angleDeg }
-        val angleMax = readings.maxOfOrNull { it.angleDeg }
+        val (angleMin, angleMax) = axisExtremes(readings, events, LimitAxis.TILT)
         val panValues = readings.mapNotNull { it.panDeg }
-        val panMin = panValues.minOrNull()
-        val panMax = panValues.maxOrNull()
+        val (panMin, panMax) = axisExtremes(readings, events, LimitAxis.PAN)
 
         fun fmtRange(low: Double?, high: Double?): String =
             if (low == null || high == null) "-" else "%.2f°  /  %.2f°".format(low, high)
@@ -98,8 +96,8 @@ object PdfReportGenerator {
             "Início" to started,
             "Fim" to ended,
             "Leituras registradas" to readings.size.toString(),
-            "Inclinação mín. / máx." to fmtRange(angleMin, angleMax),
-            "Azimute mín. / máx." to if (panValues.isNotEmpty()) {
+            "Inclinação mín. / máx. registrada" to fmtRange(angleMin, angleMax),
+            "Azimute mín. / máx. registrado" to if (panValues.isNotEmpty()) {
                 fmtRange(panMin, panMax)
             } else {
                 "não registrado (firmware sem eixo de azimute)"
@@ -139,6 +137,35 @@ object PdfReportGenerator {
     private fun axisValue(reading: AngleReading, axis: LimitAxis): Double? = when (axis) {
         LimitAxis.PAN -> reading.panDeg
         LimitAxis.TILT -> reading.angleDeg
+    }
+
+    /**
+     * Mínimo e máximo do eixo para o resumo do relatório.
+     *
+     * Prefere os EVENTOS DE LIMITE às leituras. Com firmware v1.5.0+ eles
+     * carregam o extremo medido no ESP32 a 100 Hz, enquanto as leituras são o
+     * valor suavizado para a tela, amostrado a 5 Hz — nelas uma rajada de meio
+     * segundo aparece com menos da metade da amplitude real. É por isso que o
+     * marcador de extremo no gráfico pode aparecer fora da curva: a curva
+     * mostra o que a tela mostrou, o marcador mostra o que de fato aconteceu.
+     *
+     * Cai para as leituras quando não há eventos do eixo.
+     */
+    private fun axisExtremes(
+        readings: List<AngleReading>,
+        events: List<LimitEvent>,
+        axis: LimitAxis,
+    ): Pair<Double?, Double?> {
+        val axisEvents = events.filter { it.axis == axis }
+        val mins = axisEvents.filter { it.kind == LimitKind.MIN }.map { it.valueDeg }
+        val maxs = axisEvents.filter { it.kind == LimitKind.MAX }.map { it.valueDeg }
+        if (mins.isNotEmpty() && maxs.isNotEmpty()) {
+            return mins.min() to maxs.max()
+        }
+
+        val values = readings.mapNotNull { axisValue(it, axis) }
+        if (values.isEmpty()) return null to null
+        return values.min() to values.max()
     }
 
     private fun drawChart(

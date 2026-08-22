@@ -2,7 +2,9 @@
 
 #include <stdint.h>
 
+#include "Config.h"
 #include "Mpu6050.h"
+#include "PeakHold.h"
 
 // Calcula o ângulo de inclinação (tilt) a partir do acelerômetro do
 // MPU6050, usando atan2 entre dois eixos para manter sensibilidade
@@ -14,12 +16,17 @@
 // confirmar/ajustar conforme a orientação real de montagem do sensor no
 // pan-tilt, quando o projeto elétrico definir isso.
 //
-// Há DOIS caminhos de leitura, de propósito:
-// - readAngleDeg(): filtrado (média móvel exponencial alimentada por
-//   update()), para a leitura contínua do dia a dia ficar estável;
-// - readRelativeAngleDeg(): amostra instantânea, sem filtro, para o Modo
-//   Vibração — ali a variação de frações de grau é justamente o que se quer
-//   medir, então filtrar destruiria o dado.
+// Há TRÊS caminhos de leitura, de propósito — a mesma amostra de 100 Hz
+// alimenta os três, cada um com o filtro que a sua finalidade pede:
+// - readAngleDeg(): TELA. Filtro adaptativo "1-euro" (ver ANGLE_FILTER_* em
+//   Config.h), pesado o bastante para o display de passo 0,25° não tremular;
+// - minAngleDeg()/maxAngleDeg(): MEDIDA (mín/máx, histórico, relatório).
+//   Filtro leve de ANGLE_PEAK_CUTOFF_HZ + peak-hold com teste de persistência
+//   (ver PeakHold.h). Existe porque o valor da tela, suavizado e ainda lido
+//   pelos apps a 4-5 Hz, registrava uma rajada real de 2° em 0,5 s como 0,78°;
+// - readRelativeAngleDeg(): VIBRAÇÃO. Amostra instantânea, sem filtro nenhum —
+//   ali a variação de frações de grau é justamente o que se quer medir, então
+//   filtrar destruiria o dado.
 class AngleSensor {
 public:
     // O Mpu6050 é compartilhado (por referência) com o PanSensor: é o mesmo
@@ -41,21 +48,50 @@ public:
     // objetivo.
     float readRelativeAngleDeg();
 
+    // Extremos acumulados desde o último reset/calibração, já relativos à
+    // calibração e clampados à faixa — o valor que os apps mostram como
+    // mín/máx e que entra no relatório. Só fazem sentido se hasPeaks(); antes
+    // disso (primeiros 100 ms após ligar ou calibrar) devolvem a leitura
+    // corrente, para o app nunca exibir um extremo inventado.
+    bool hasPeaks() const { return _peaks.hasData(); }
+    float minAngleDeg();
+    float maxAngleDeg();
+
+    // Esquece os extremos sem mexer no zero — o botão de reset dos apps.
+    void resetPeaks() { _peaks.reset(); }
+
     // Zera o offset de calibração na leitura atual (novo "zero" mecânico).
     // Usa o valor filtrado, não uma amostra isolada, para a calibração ser
-    // repetível mesmo com o sensor sob vibração.
+    // repetível mesmo com o sensor sob vibração. Zera junto os extremos: com
+    // o zero em outro lugar, os extremos antigos não significariam mais nada.
     void calibrate();
 
 private:
     Mpu6050 &_mpu;
     float _offsetDeg = 0.0f;
 
-    float _filteredRawDeg = 0.0f;  // estado da média móvel (ângulo absoluto)
-    float _lastRawDeg = 0.0f;      // última amostra válida (absoluta)
-    bool _filterReady = false;     // primeira amostra inicializa o filtro direto
+    // Estado do filtro 1-euro (todos em ângulo absoluto, antes do offset):
+    float _filteredRawDeg = 0.0f;   // saída do filtro
+    float _filteredRateDps = 0.0f;  // derivada suavizada, que comanda o corte
+    float _prevRawDeg = 0.0f;       // amostra anterior, para calcular a derivada
+    float _lastRawDeg = 0.0f;       // última amostra válida (absoluta)
+    bool _filterReady = false;      // primeira amostra inicializa o filtro direto
     uint32_t _lastSampleMs = 0;
+
+    // Caminho de medida: filtro leve de 1 polo em ANGLE_PEAK_CUTOFF_HZ,
+    // independente do 1-euro acima, alimentando o peak-hold.
+    float _measuredRawDeg = 0.0f;
+    PeakHold _peaks{ANGLE_PEAK_PERSIST_SAMPLES};
 
     // Lê uma amostra e converte para ângulo absoluto. Retorna false se a
     // leitura I2C falhar (sensor desconectado, mau contato).
     bool readRawAngleDeg(float &angleDeg);
+
+    // Aplica o offset de calibração e o clamp de faixa — a forma em que o
+    // ângulo sai deste sensor, seja como leitura corrente ou como extremo.
+    float toReported(float rawDeg) const;
+
+    // Coeficiente de uma média móvel exponencial de 1 polo para a frequência
+    // de corte e o intervalo dados.
+    static float emaAlpha(float cutoffHz, float dtS);
 };
