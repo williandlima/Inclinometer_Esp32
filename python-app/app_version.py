@@ -3,15 +3,14 @@
 Existe para permitir manter **duas versões instaladas ao mesmo tempo** na
 mesma máquina, para comparação:
 
-- **versão 1** (commit `0ca6ab1`, firmware 1.1.0): mede só a inclinação;
-- **versão 2** (esta): mede inclinação e azimute.
+- **versão 1** (branch `v1-inclinacao`, firmware 1.1.1): mede só a inclinação;
+- **versão 2** (esta, na `main`): mede inclinação e azimute.
 
 Como as duas se separam: cada uma tem seu próprio nome, sua própria pasta de
 instalação, seu próprio `AppId` no Inno Setup (é ele que faz o Windows tratar
 uma instalação como *upgrade* da outra, em vez de app separado) e sua própria
-pasta de dados. Trocar de versão é uma questão de fazer checkout do commit
-correspondente e reconstruir — a versão 1 carrega naturalmente a identidade
-antiga, porque estes valores ainda não existiam lá.
+pasta de dados. Trocar de versão é uma questão de fazer checkout da branch
+correspondente e reconstruir.
 
 Manter em sincronia com `windows/Inclinometro.iss`, que precisa dos mesmos
 valores mas não consegue importar Python.

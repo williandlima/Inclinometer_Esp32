@@ -93,24 +93,22 @@ por ele que o Windows decide se uma instalação é um app novo ou um
 | Nome no Menu Iniciar | Inclinometro Avibras Aeroco | Inclinometro 2 Eixos (Avibras Aeroco) |
 | Pasta de instalação | `Arquivos de Programas\Inclinometro` | `Arquivos de Programas\Inclinometro2Eixos` |
 | Instalador gerado | `Inclinometro-Setup-1.0.0.exe` | `Inclinometro-2Eixos-Setup-2.0.0.exe` |
-| Firmware correspondente | 1.1.0 | 1.3.1 |
+| Firmware correspondente | 1.1.1 | 1.3.1 |
 
 Para gerar o instalador da **versão 2**, siga a Opção 3 acima com o código
 como está hoje.
 
-Para gerar o da **versão 1**, volte o repositório ao commit anterior ao eixo
-de azimute e repita a Opção 3:
+Para gerar o da **versão 1**, mude para a branch dela e repita a Opção 3:
 
 ```bat
-git checkout 0ca6ab1
+git checkout v1-inclinacao
 windows\build_installer.bat
 ```
 
-Guarde o `.exe` gerado em outra pasta antes de voltar para a versão atual
-(`git checkout claude/inclinometro-bluetooth-serial-x2we0f`), porque
-`installer_output` é reaproveitado entre as duas gerações. Naquele commit os
-identificadores antigos ainda estão no lugar, então o instalador sai com a
-identidade da versão 1 automaticamente — não é preciso editar nada.
+Guarde o `.exe` gerado em outra pasta antes de voltar para a `main`, porque
+`installer_output` é reaproveitado entre as duas gerações. Naquela branch os
+identificadores da versão 1 já estão no lugar, então o instalador sai com a
+identidade certa automaticamente — não é preciso editar nada.
 
 **Cada versão tem seu próprio histórico.** O banco de dados fica em
 `%LOCALAPPDATA%\Inclinometro<variante>\`, com uma pasta por versão, então os
