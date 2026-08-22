@@ -1,5 +1,22 @@
 # Inclinômetro — App Android (Kotlin)
 
+> ## Esta é a **versão 1** — só inclinação
+>
+> Mede apenas a inclinação (tilt). A **versão 2**, que mede também o
+> **azimute (pan)**, está na branch `main`.
+>
+> As duas foram feitas para poder ficar **instaladas ao mesmo tempo**, no
+> mesmo celular e no mesmo PC: têm `applicationId` (Android) e `AppId` do
+> Inno Setup (Windows) diferentes, que são os identificadores que decidem se
+> uma instalação substitui a outra. Os dados também ficam separados.
+>
+> **Um firmware serve as duas.** Grave o mais novo (1.3.1, na `main`): o app
+> desta versão simplesmente ignora o eixo de azimute que não conhece. O
+> caminho contrário também funciona — o app da versão 2 contra o firmware
+> 1.1.1 daqui mostra "firmware sem este eixo" no painel de azimute e segue
+> normalmente só com a inclinação.
+
+
 App Android para leitura em tempo real da inclinação do inclinômetro ESP32,
 via BLE, com registro de limites (mínimo/máximo), calibração, Modo Vibração
 e geração de relatório em PDF — equivalente ao software desktop em PyQt5,

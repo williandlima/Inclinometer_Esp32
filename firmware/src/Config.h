@@ -22,8 +22,8 @@ constexpr int PIN_I2C_SCL = 22;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.1.0";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10100;
+constexpr char FIRMWARE_VERSION[] = "1.1.1";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10101;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py

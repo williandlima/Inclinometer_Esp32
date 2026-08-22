@@ -12,10 +12,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from app_version import user_data_dir
 from data_source.base import AngleReading
 from limits.limit_tracker import LimitEvent
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "inclinometro_historico.db"
+# Fica na pasta de dados desta versão do app — ver `app_version.user_data_dir`.
+# Isso resolve duas coisas de uma vez: o banco vai para um lugar onde o
+# usuário realmente pode escrever quando o app está instalado em Program
+# Files, e os históricos de duas versões instaladas lado a lado não se
+# misturam.
+DEFAULT_DB_PATH = user_data_dir() / "inclinometro_historico.db"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (

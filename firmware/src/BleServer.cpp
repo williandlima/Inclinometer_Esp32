@@ -14,6 +14,25 @@ BLECharacteristic *vibrationStatusChar = nullptr;
 BLECharacteristic *vibrationDataChar = nullptr;
 BleServer *self = nullptr;  // única instância — usada pelos callbacks estáticos do BLE
 
+// Sinalizado pelo callback de desconexão e consumido no loop principal.
+volatile bool restartAdvertisingPending = false;
+
+class ServerCallbacks : public BLEServerCallbacks {
+    void onDisconnect(BLEServer *) override {
+        // O ESP32 PARA de anunciar assim que um cliente conecta, e a lib BLE
+        // do Arduino não volta a anunciar sozinha quando ele desconecta — o
+        // dispositivo simplesmente some do scan até ser resetado na mão.
+        // Aparece ao reabrir o app (ou ao alternar entre as duas versões do
+        // app) e parece hardware com defeito.
+        //
+        // Só marca aqui: quem realmente reinicia o anúncio é update(), no
+        // loop principal. Este callback roda na task do stack BLE, e chamar
+        // startAdvertising() de dentro dele, no meio do processamento da
+        // desconexão, é justamente o caso em que essa chamada falha calada.
+        restartAdvertisingPending = true;
+    }
+};
+
 class CalibrateCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *characteristic) override {
         std::string value = characteristic->getValue();
@@ -42,6 +61,7 @@ void BleServer::begin() {
     BLEDevice::init(BLE_DEVICE_NAME);
     BLEDevice::setMTU(247);  // best-effort: reduz o nº de pacotes se o central negociar MTU maior
     BLEServer *server = BLEDevice::createServer();
+    server->setCallbacks(new ServerCallbacks());
     BLEService *service = server->createService(SERVICE_UUID);
 
     angleChar = service->createCharacteristic(
@@ -184,6 +204,10 @@ void BleServer::updateVibrationNotify() {
 }
 
 void BleServer::update() {
+    if (restartAdvertisingPending) {
+        restartAdvertisingPending = false;
+        BLEDevice::startAdvertising();
+    }
     notifyAngle();
     updateVibrationNotify();
 }
