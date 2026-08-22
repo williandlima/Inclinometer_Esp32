@@ -1,8 +1,9 @@
 # Inclinômetro — Software Desktop (PyQt5)
 
-Software desktop para leitura em tempo real da inclinação do inclinômetro ESP32,
-via Modbus RTU (cabo USB direto) ou Bluetooth Low Energy (BLE), com registro
-de limites (mínimo/máximo) e geração de relatório em PDF.
+Software desktop para leitura em tempo real dos **dois eixos** do inclinômetro
+ESP32 — inclinação (tilt) e azimute (pan) — via Modbus RTU (cabo USB direto)
+ou Bluetooth Low Energy (BLE), com registro de limites (mínimo/máximo) por
+eixo e geração de relatório em PDF.
 
 ## Instalação
 
@@ -15,8 +16,9 @@ pip install -r requirements.txt
 **Windows:** use o pacote de instalação pronto em
 [`windows/`](windows/INSTALACAO_WINDOWS.md) — instala tudo com um duplo
 clique (`windows\install.bat`) e também permite gerar um executável
-autônomo que roda em qualquer computador Windows sem precisar instalar
-Python.
+autônomo, ou um instalador completo (`Setup.exe` com atalhos e
+desinstalador) via `windows\build_installer.bat`, que roda em qualquer
+computador Windows sem precisar instalar Python.
 
 ## Uso
 
@@ -47,10 +49,32 @@ BLE segue o contrato de serviço/característica documentado em
 `data_source/ble_source.py` (o mesmo usado pelo app Android, para os dois
 transportes ficarem consistentes).
 
-Também é possível **calibrar** (zerar o eixo de tilt do acelerômetro na posição
-atual) pelo botão **Calibrar**, disponível com a leitura em execução — em modo
-real (USB ou BLE), envia um comando ao ESP32; em modo simulação, aplica um
-deslocamento equivalente aos dados sintéticos.
+Também é possível **calibrar** (zerar os dois eixos na posição atual) pelo
+botão **Calibrar**, disponível com a leitura em execução — em modo real (USB
+ou BLE), envia um comando ao ESP32; em modo simulação, aplica um deslocamento
+equivalente aos dados sintéticos. É uma ação só de propósito: o firmware zera
+tilt e pan no mesmo comando.
+
+## Os dois eixos
+
+A tela mostra os dois eixos lado a lado, cada um com seu valor em tempo real e
+seu par de mínimo/máximo independente:
+
+- **Inclinação (tilt)**, do acelerômetro, faixa -60° a +60°.
+- **Azimute (pan)**, do giroscópio integrado com ZUPT no firmware (ver
+  "Azimute (pan) pelo giroscópio" em `firmware/README.md`).
+
+Compatibilidade: um ESP32 com firmware anterior à v1.2.0 não mede azimute. O
+app detecta isso sozinho e segue funcionando só com a inclinação — o painel de
+azimute mostra `--.--°` com a nota "firmware sem este eixo", e o eixo fica de
+fora do histórico e do relatório em vez de registrar zeros falsos. No modo
+USB/Modbus isso é detectado pela exceção de endereço inválido que o firmware
+antigo devolve; no BLE, pela ausência da characteristic de pan.
+
+No modo simulação os dois eixos têm comportamentos diferentes de propósito,
+imitando o real: o tilt oscila continuamente com ruído, e o pan fica parado a
+maior parte do tempo e se desloca em rajadas — que é justamente o padrão de
+uso que torna a medição por giroscópio confiável.
 
 O indicador abaixo do modo mostra o estado da conexão com o ESP32
 (conectando/conectado/falha), atualizado a cada leitura ou erro, seja via
@@ -68,12 +92,36 @@ execução (habilite calibrando a posição de referência antes, com o botão
 1. Escolha a **duração** (padrão 30s) e a **taxa de amostragem** (padrão
    50Hz) da captura.
 2. O app mostra o progresso enquanto a captura acontece (pode ser cancelada).
-3. Ao final, mostra um resumo estatístico: **desvio padrão, RMS, pico a
-   pico, mínimo e máximo**.
-4. Opcionalmente, gera um **relatório em PDF** próprio, com o gráfico da
-   variação angular no tempo e o **espectro de frequência (FFT)** — útil
-   para identificar uma eventual frequência de ressonância dominante (ex:
-   balanço do mastro sob vento).
+3. Ao final, mostra um resumo estatístico **de cada eixo**: desvio padrão,
+   RMS, pico a pico, mínimo, máximo e a frequência dominante (com amplitude
+   e SNR — ou "nenhum pico confiável" se o sinal for compatível com ruído).
+4. Opcionalmente, gera um **relatório em PDF** próprio, com uma página por
+   eixo: gráfico da variação angular no tempo e **espectro de frequência
+   (FFT)** — útil para identificar uma eventual frequência de ressonância
+   dominante (ex: balanço do mastro sob vento), com a frequência dominante
+   marcada no gráfico.
+
+O eixo de azimute chega do firmware como **velocidade angular** (°/s), não
+como ângulo: o ângulo de pan é obtido por integração com ZUPT, e o ZUPT
+cancela de propósito o que integra enquanto o eixo está parado — que é
+exatamente a condição de um ensaio de vibração. O app integra e remove a
+tendência linear (que é o que o bias do giroscópio vira ao ser integrado).
+Detalhes em "Modo Vibração no eixo de pan" no `firmware/README.md`.
+
+A análise espectral (`limits/vibration_stats.py`) segue um pipeline padrão
+de processamento de sinais para o resultado ser confiável e fácil de ler:
+remoção de tendência linear, janela de Hann (reduz vazamento espectral),
+amplitude de um lado só corrigida (valor em graus bate com a amplitude
+física real da oscilação) e detecção do pico dominante com interpolação
+parabólica (sub-bin) e um limiar de SNR que se ajusta ao número de bins do
+espectro (evita falso positivo em sinais só com ruído). O app Android usa
+exatamente o mesmo pipeline (`limits/Fft.kt`).
+
+No eixo de azimute a detecção do pico roda no espectro da **taxa**, e só a
+amplitude encontrada é convertida para graus. O motivo é que o limiar de SNR
+supõe piso de ruído plano: o ruído do giroscópio é branco na taxa, mas no
+ângulo integrado vira passeio aleatório (espectro caindo com 1/f²), e nessa
+forma ruído puro era apontado como "frequência dominante" em 100% dos testes.
 
 Cada captura é salva separada das sessões de monitoramento contínuo no
 histórico (`limits/history_store.py`), para não misturar os dois tipos de

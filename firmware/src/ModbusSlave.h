@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "AngleSensor.h"
+#include "PanSensor.h"
 #include "VibrationCapture.h"
 
 // Escravo Modbus RTU sobre a porta serial USB do ESP32 (UART0 — a mesma
@@ -12,8 +13,8 @@
 // e 0x06 (write single register).
 class ModbusSlave {
 public:
-    ModbusSlave(AngleSensor &sensor, VibrationCapture &vibration)
-        : _sensor(sensor), _vibration(vibration) {}
+    ModbusSlave(AngleSensor &sensor, PanSensor &pan, VibrationCapture &vibration)
+        : _sensor(sensor), _pan(pan), _vibration(vibration) {}
 
     void begin();
 
@@ -22,6 +23,7 @@ public:
 
 private:
     AngleSensor &_sensor;
+    PanSensor &_pan;
     VibrationCapture &_vibration;
 
     uint16_t _vibrationDurationS = 30;

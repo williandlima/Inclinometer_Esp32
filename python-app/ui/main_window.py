@@ -21,13 +21,14 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from app_version import APP_NAME
 from data_source.base import AngleReading, IAngleDataSource
 from data_source.ble_source import BleAngleSource
 from data_source.modbus_source import ModbusAngleSource
 from data_source.simulated_source import SimulatedAngleSource
 from limits.history_store import HistoryStore
-from limits.limit_tracker import LimitTracker
-from limits.vibration_stats import compute_fft, compute_stats
+from limits.limit_tracker import PAN_AXIS, TILT_AXIS, LimitTracker
+from limits.vibration_stats import analyze_axis, has_pan_samples
 from report.report_generator import generate_report, generate_vibration_report
 from ui.settings_dialog import AppSettings, SettingsDialog
 from ui.vibration_dialog import VibrationConfigDialog, VibrationResultDialog
@@ -54,6 +55,20 @@ def _find_logo_path() -> str | None:
 
 
 LOGO_PATH = _find_logo_path()
+
+# Exibição da leitura contínua em degraus de 0,25°. O grosso da estabilidade
+# vem do firmware (filtro interno do MPU6050 + média móvel, ver
+# firmware/src/AngleSensor.h); aqui é só a apresentação.
+#
+# A histerese evita o último resíduo de tremulação: sem ela, um valor parado
+# bem na fronteira entre dois degraus (ex: 1,125°) alterna entre 1,00° e 1,25°
+# a cada leitura. Só troca de degrau quando o valor passa da fronteira com
+# uma margem extra.
+#
+# Nada disso afeta os dados guardados: histórico, mín/máx e relatório usam
+# sempre o ângulo bruto.
+DISPLAY_ANGLE_STEP_DEG = 0.25
+DISPLAY_ANGLE_HYSTERESIS_DEG = 0.05
 
 _VALUE_STYLE = f"font-size: 20px; font-weight: bold; color: {TEXT_LIGHT};"
 _FLASH_STYLE = f"font-size: 20px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 4px;"
@@ -123,16 +138,20 @@ def _fmt_time(ts: float) -> str:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Inclinômetro — Painel Desktop")
-        self.resize(520, 460)
+        self.setWindowTitle(f"{APP_NAME} — Painel Desktop")
+        self.resize(900, 520)
         self.setStyleSheet(_APP_STYLESHEET)
 
         self._settings = AppSettings()
         self._history = HistoryStore()
-        self._tracker = LimitTracker()
+        # Um rastreador de mín/máx por eixo: os extremos de inclinação e de
+        # azimute são independentes.
+        self._trackers = {TILT_AXIS: LimitTracker(TILT_AXIS), PAN_AXIS: LimitTracker(PAN_AXIS)}
         self._source: IAngleDataSource | None = None
         self._running = False
         self._vibration_progress_dialog: QProgressDialog | None = None
+        # Degrau atualmente exibido em cada eixo (histerese da exibição).
+        self._displayed: dict[str, float | None] = {TILT_AXIS: None, PAN_AXIS: None}
 
         self._bridge = _SignalBridge()
         self._bridge.reading.connect(self._on_reading)
@@ -161,17 +180,16 @@ class MainWindow(QMainWindow):
         self.connection_label.setAlignment(Qt.AlignCenter)
         root.addWidget(self.connection_label)
 
-        self.angle_label = QLabel("--.--°")
-        self.angle_label.setAlignment(Qt.AlignCenter)
-        self.angle_label.setFont(QFont("Sans Serif", 64, QFont.Bold))
-        root.addWidget(self.angle_label)
-
-        limits_row = QHBoxLayout()
-        self.min_frame, self.min_value_label, self.min_time_label = self._build_limit_box("Mínimo")
-        self.max_frame, self.max_value_label, self.max_time_label = self._build_limit_box("Máximo")
-        limits_row.addWidget(self.min_frame)
-        limits_row.addWidget(self.max_frame)
-        root.addLayout(limits_row)
+        # Os dois eixos lado a lado, cada um com seu valor grande e seu par de
+        # extremos. Inclinação à esquerda por ser o eixo principal do produto.
+        axes_row = QHBoxLayout()
+        self._axis_widgets = {
+            TILT_AXIS: self._build_axis_panel("Inclinação (tilt)"),
+            PAN_AXIS: self._build_axis_panel("Azimute (pan)"),
+        }
+        axes_row.addLayout(self._axis_widgets[TILT_AXIS]["layout"])
+        axes_row.addLayout(self._axis_widgets[PAN_AXIS]["layout"])
+        root.addLayout(axes_row)
 
         buttons_row = QHBoxLayout()
         self.start_stop_btn = QPushButton("Iniciar")
@@ -202,7 +220,7 @@ class MainWindow(QMainWindow):
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
 
-        title_label = QLabel("Inclinômetro")
+        title_label = QLabel(APP_NAME)
         title_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {TEXT_LIGHT};")
         header.addWidget(title_label)
 
@@ -224,6 +242,50 @@ class MainWindow(QMainWindow):
             header.addWidget(logo_label, 0, Qt.AlignRight)
 
         return header
+
+    def _build_axis_panel(self, title: str) -> dict:
+        """Coluna de um eixo: título, valor grande, aviso opcional e o par de
+        caixas de mínimo/máximo. Devolve os widgets num dicionário, para o
+        resto da janela atualizar os dois eixos pelo mesmo caminho de código."""
+        column = QVBoxLayout()
+
+        title_label = QLabel(title)
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {ORANGE};")
+        column.addWidget(title_label)
+
+        value_label = QLabel("--.--°")
+        value_label.setAlignment(Qt.AlignCenter)
+        value_label.setFont(QFont("Sans Serif", 46, QFont.Bold))
+        column.addWidget(value_label)
+
+        # Normalmente oculto; usado para explicar por que um eixo está sem
+        # valor (ex: firmware antigo, sem azimute). Fica escondido em vez de
+        # só vazio porque a folha de estilo desta janela dá borda a QFrame, e
+        # QLabel herda de QFrame — um rótulo vazio apareceria como uma faixa
+        # com borda no meio do painel.
+        note_label = QLabel("")
+        note_label.setAlignment(Qt.AlignCenter)
+        note_label.setStyleSheet("font-size: 11px; color: #9aa5b1;")
+        note_label.setVisible(False)
+        column.addWidget(note_label)
+
+        limits_row = QHBoxLayout()
+        min_frame, min_value_label, min_time_label = self._build_limit_box("Mínimo")
+        max_frame, max_value_label, max_time_label = self._build_limit_box("Máximo")
+        limits_row.addWidget(min_frame)
+        limits_row.addWidget(max_frame)
+        column.addLayout(limits_row)
+
+        return {
+            "layout": column,
+            "value": value_label,
+            "note": note_label,
+            "min_value": min_value_label,
+            "min_time": min_time_label,
+            "max_value": max_value_label,
+            "max_time": max_time_label,
+        }
 
     def _build_limit_box(self, title: str) -> tuple[QFrame, QLabel, QLabel]:
         frame = QFrame()
@@ -297,7 +359,9 @@ class MainWindow(QMainWindow):
                 slave_id=self._settings.slave_id,
             )
 
-        self._tracker.reset()
+        for tracker in self._trackers.values():
+            tracker.reset()
+        self._displayed = {TILT_AXIS: None, PAN_AXIS: None}
         self._history.start_session(mode=self._settings.mode)
         self._source.start(
             on_reading=lambda r: self._bridge.reading.emit(r),
@@ -315,6 +379,7 @@ class MainWindow(QMainWindow):
             self._source = None
         self._history.end_session()
         self._running = False
+        self._displayed = {TILT_AXIS: None, PAN_AXIS: None}
         self.start_stop_btn.setText("Iniciar")
         self._update_mode_label()
         self._set_connection_status("parado")
@@ -326,11 +391,13 @@ class MainWindow(QMainWindow):
         if was_running:
             self._history.end_session()
             self._history.start_session(mode=mode)
-        self._tracker.reset()
-        self.min_value_label.setText("--.--°")
-        self.min_time_label.setText("")
-        self.max_value_label.setText("--.--°")
-        self.max_time_label.setText("")
+        for axis, tracker in self._trackers.items():
+            tracker.reset()
+            widgets = self._axis_widgets[axis]
+            widgets["min_value"].setText("--.--°")
+            widgets["min_time"].setText("")
+            widgets["max_value"].setText("--.--°")
+            widgets["max_time"].setText("")
         self.statusBar().showMessage(
             "Limites resetados (histórico anterior preservado)." if was_running
             else "Limites resetados."
@@ -364,23 +431,41 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(self, "Relatório gerado", f"Relatório salvo em:\n{path}")
 
+    def _angle_for_display(self, axis: str, angle_deg: float) -> float:
+        """Arredonda para o degrau de exibição, com histerese para não
+        alternar entre dois degraus quando o valor fica na fronteira. Cada
+        eixo tem seu próprio estado de histerese."""
+        step = DISPLAY_ANGLE_STEP_DEG
+        current = self._displayed[axis]
+        if current is None or abs(angle_deg - current) >= step / 2 + DISPLAY_ANGLE_HYSTERESIS_DEG:
+            self._displayed[axis] = round(angle_deg / step) * step
+        return self._displayed[axis]
+
     # ------------------------------------------------------------ callbacks
     def _on_reading(self, reading: AngleReading) -> None:
         if self._settings.mode in ("real", "ble"):
             self._set_connection_status("conectado")
-        self.angle_label.setText(f"{reading.angle_deg:.2f}°")
         self._history.add_reading(reading)
 
-        for event in self._tracker.process(reading):
-            self._history.add_limit_event(event)
-            if event.kind == "min":
-                self.min_value_label.setText(f"{event.reading.angle_deg:.2f}°")
-                self.min_time_label.setText(_fmt_time(event.reading.timestamp))
-                self._flash(self.min_value_label)
-            else:
-                self.max_value_label.setText(f"{event.reading.angle_deg:.2f}°")
-                self.max_time_label.setText(_fmt_time(event.reading.timestamp))
-                self._flash(self.max_value_label)
+        values = {TILT_AXIS: reading.angle_deg, PAN_AXIS: reading.pan_deg}
+        for axis, value in values.items():
+            widgets = self._axis_widgets[axis]
+            if value is None:
+                # Firmware anterior à v1.2.0 não mede azimute — deixa claro
+                # que o eixo está sem dado, em vez de mostrar um zero falso.
+                widgets["value"].setText("--.--°")
+                widgets["note"].setText("firmware sem este eixo")
+                widgets["note"].setVisible(True)
+                continue
+            widgets["value"].setText(f"{self._angle_for_display(axis, value):.2f}°")
+            widgets["note"].setVisible(False)
+
+            for event in self._trackers[axis].process(reading):
+                self._history.add_limit_event(event)
+                prefix = "min" if event.kind == "min" else "max"
+                widgets[f"{prefix}_value"].setText(f"{event.value_deg:.2f}°")
+                widgets[f"{prefix}_time"].setText(_fmt_time(event.reading.timestamp))
+                self._flash(widgets[f"{prefix}_value"])
 
     def _on_error(self, message: str) -> None:
         if self._settings.mode in ("real", "ble"):
@@ -471,11 +556,12 @@ class MainWindow(QMainWindow):
             return
 
         capture_id = self._history.save_vibration_capture(self._settings.mode, duration_s, rate_hz, readings)
-        stats = compute_stats(readings)
-        freqs, magnitudes = compute_fft(readings, rate_hz)
+        tilt = analyze_axis(readings, rate_hz, TILT_AXIS)
+        # O eixo de azimute só existe na captura com firmware >= 1.3.0.
+        pan = analyze_axis(readings, rate_hz, PAN_AXIS) if has_pan_samples(readings) else None
         self.statusBar().showMessage("Captura de vibração concluída.", 5000)
 
-        result_dialog = VibrationResultDialog(stats, self)
+        result_dialog = VibrationResultDialog(tilt.stats, pan.stats if pan else None, self)
         result_dialog.exec_()
         if not result_dialog.save_requested:
             return
@@ -489,7 +575,7 @@ class MainWindow(QMainWindow):
         captures_by_id = {c.id: c for c in self._history.list_vibration_captures()}
         capture_info = captures_by_id.get(capture_id)
         try:
-            generate_vibration_report(path, capture_info, readings, stats, freqs, magnitudes)
+            generate_vibration_report(path, capture_info, readings, tilt, pan)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Erro ao gerar relatório", str(exc))
             return

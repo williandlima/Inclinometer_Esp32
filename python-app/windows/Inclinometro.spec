@@ -35,13 +35,13 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Inclinometro",
+    name="Inclinometro2Eixos",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     console=False,
-    icon=None,
+    icon=os.path.join(project_root, "assets", "logo.ico"),
 )
 
 coll = COLLECT(
@@ -52,5 +52,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="Inclinometro",
+    name="Inclinometro2Eixos",
 )

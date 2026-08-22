@@ -12,17 +12,28 @@ import matplotlib
 
 matplotlib.use("Agg")  # backend sem display, seguro para gerar imagens em background
 import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import (
+    Image,
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 from reportlab.lib.styles import getSampleStyleSheet
+
+from limits.limit_tracker import PAN_AXIS, TILT_AXIS
 
 if TYPE_CHECKING:
     from data_source.base import AngleReading
     from limits.history_store import SessionInfo, VibrationCaptureInfo
     from limits.limit_tracker import LimitEvent
-    from limits.vibration_stats import VibrationStats
+    from limits.vibration_stats import AxisAnalysis, VibrationStats
     import numpy as np
 
 _MODE_LABELS = {
@@ -31,29 +42,49 @@ _MODE_LABELS = {
     "ble": "Real (Bluetooth BLE)",
 }
 
+# Cada eixo tem seu próprio rótulo e escala fixa no gráfico. A escala é fixa
+# de propósito: deixar o matplotlib autoescalar faria uma variação de décimos
+# de grau ocupar o gráfico inteiro e parecer enorme.
+_AXIS_CHART_CONFIG = {
+    TILT_AXIS: ("Inclinação", "Inclinação (°)", "#1f77b4", (-65, 65)),
+    PAN_AXIS: ("Azimute", "Azimute (°)", "#9467bd", (-95, 95)),
+}
+
 
 def _fmt_dt(ts: float) -> str:
     return _dt.datetime.fromtimestamp(ts).strftime("%d/%m/%Y %H:%M:%S")
 
 
-def _build_chart_image(readings: list["AngleReading"], events: list["LimitEvent"]) -> Image:
-    fig, ax = plt.subplots(figsize=(16, 8))
-    if readings:
-        t0 = readings[0].timestamp
-        xs = [(r.timestamp - t0) for r in readings]
-        ys = [r.angle_deg for r in readings]
-        ax.plot(xs, ys, color="#1f77b4", linewidth=1, label="Ângulo")
+def _axis_value(reading: "AngleReading", axis: str) -> float | None:
+    return reading.pan_deg if axis == PAN_AXIS else reading.angle_deg
 
-        mins_x = [(e.reading.timestamp - t0) for e in events if e.kind == "min"]
-        mins_y = [e.reading.angle_deg for e in events if e.kind == "min"]
-        maxs_x = [(e.reading.timestamp - t0) for e in events if e.kind == "max"]
-        maxs_y = [e.reading.angle_deg for e in events if e.kind == "max"]
+
+def _build_chart_image(
+    readings: list["AngleReading"], events: list["LimitEvent"], axis: str = TILT_AXIS
+) -> Image:
+    series_label, y_label, color, y_limits = _AXIS_CHART_CONFIG[axis]
+    fig, ax = plt.subplots(figsize=(16, 8))
+
+    # Leituras sem valor neste eixo são puladas (não viram zero na curva).
+    points = [(r, _axis_value(r, axis)) for r in readings]
+    points = [(r, v) for r, v in points if v is not None]
+    if points:
+        t0 = readings[0].timestamp
+        xs = [(r.timestamp - t0) for r, _ in points]
+        ys = [v for _, v in points]
+        ax.plot(xs, ys, color=color, linewidth=1, label=series_label)
+
+        axis_events = [e for e in events if e.axis == axis]
+        mins_x = [(e.reading.timestamp - t0) for e in axis_events if e.kind == "min"]
+        mins_y = [e.value_deg for e in axis_events if e.kind == "min"]
+        maxs_x = [(e.reading.timestamp - t0) for e in axis_events if e.kind == "max"]
+        maxs_y = [e.value_deg for e in axis_events if e.kind == "max"]
         ax.scatter(mins_x, mins_y, color="#d62728", marker="v", zorder=3, label="Novo mínimo")
         ax.scatter(maxs_x, maxs_y, color="#2ca02c", marker="^", zorder=3, label="Novo máximo")
 
     ax.set_xlabel("Tempo (s)")
-    ax.set_ylabel("Ângulo (°)")
-    ax.set_ylim(-5, 125)
+    ax.set_ylabel(y_label)
+    ax.set_ylim(*y_limits)
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend(loc="upper right")
     fig.tight_layout()
@@ -86,14 +117,27 @@ def generate_report(
     n_readings = len(readings)
     angle_min = min((r.angle_deg for r in readings), default=None)
     angle_max = max((r.angle_deg for r in readings), default=None)
+    pan_values = [r.pan_deg for r in readings if r.pan_deg is not None]
+    pan_min = min(pan_values, default=None)
+    pan_max = max(pan_values, default=None)
+
+    def _fmt_range(low: float | None, high: float | None) -> str:
+        if low is None or high is None:
+            return "-"
+        return f"{low:.2f}°  /  {high:.2f}°"
 
     summary_rows = [
         ["Modo", mode_label],
         ["Início", started],
         ["Fim", ended],
         ["Leituras registradas", str(n_readings)],
-        ["Ângulo mínimo observado", f"{angle_min:.2f}°" if angle_min is not None else "-"],
-        ["Ângulo máximo observado", f"{angle_max:.2f}°" if angle_max is not None else "-"],
+        ["Inclinação mín. / máx. observada", _fmt_range(angle_min, angle_max)],
+        [
+            "Azimute mín. / máx. observado",
+            _fmt_range(pan_min, pan_max)
+            if pan_values
+            else "não registrado (firmware sem eixo de azimute)",
+        ],
     ]
     summary_table = Table(summary_rows, colWidths=[6 * cm, 10 * cm])
     summary_table.setStyle(
@@ -109,17 +153,33 @@ def generate_report(
     story.append(summary_table)
     story.append(Spacer(1, 0.8 * cm))
 
-    story.append(Paragraph("Ângulo ao longo do tempo", styles["Heading2"]))
-    story.append(_build_chart_image(readings, events))
+    story.append(Paragraph("Inclinação (tilt) ao longo do tempo", styles["Heading2"]))
+    story.append(_build_chart_image(readings, events, TILT_AXIS))
+    story.append(Spacer(1, 0.8 * cm))
+
+    story.append(Paragraph("Azimute (pan) ao longo do tempo", styles["Heading2"]))
+    if pan_values:
+        story.append(_build_chart_image(readings, events, PAN_AXIS))
+    else:
+        story.append(
+            Paragraph(
+                "Nenhum valor de azimute foi registrado nesta sessão — o ESP32 conectado"
+                " estava com firmware anterior à v1.2.0, que mede apenas a inclinação.",
+                styles["Normal"],
+            )
+        )
     story.append(Spacer(1, 0.8 * cm))
 
     story.append(Paragraph("Histórico de limites atingidos", styles["Heading2"]))
     if events:
-        event_rows = [["#", "Tipo", "Ângulo", "Data/Hora"]]
+        event_rows = [["#", "Eixo", "Tipo", "Valor", "Data/Hora"]]
         for i, e in enumerate(events, start=1):
             tipo = "Novo mínimo" if e.kind == "min" else "Novo máximo"
-            event_rows.append([str(i), tipo, f"{e.reading.angle_deg:.2f}°", _fmt_dt(e.reading.timestamp)])
-        events_table = Table(event_rows, colWidths=[1.5 * cm, 4 * cm, 3 * cm, 6 * cm])
+            eixo = "Azimute" if e.axis == PAN_AXIS else "Inclinação"
+            event_rows.append(
+                [str(i), eixo, tipo, f"{e.value_deg:.2f}°", _fmt_dt(e.reading.timestamp)]
+            )
+        events_table = Table(event_rows, colWidths=[1.2 * cm, 3 * cm, 3.5 * cm, 2.8 * cm, 5 * cm])
         events_table.setStyle(
             TableStyle(
                 [
@@ -138,15 +198,29 @@ def generate_report(
     doc.build(story)
 
 
-def _build_vibration_time_chart_image(readings: list["AngleReading"]) -> Image:
+def _apply_reference_grid(ax) -> None:
+    """Grade densa (maior + menor) nos dois eixos, com valores de escala
+    legíveis — para servir de referência de amplitude/tempo ao olhar o
+    gráfico, já que as variações do Modo Vibração costumam ser pequenas."""
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=12))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=10))
+    ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.grid(True, which="major", linestyle="--", linewidth=0.7, alpha=0.5)
+    ax.grid(True, which="minor", linestyle=":", linewidth=0.5, alpha=0.25)
+    ax.tick_params(axis="both", which="major", labelsize=8)
+
+
+def _build_vibration_time_chart_image(readings: list["AngleReading"], axis: str = TILT_AXIS) -> Image:
     fig, ax = plt.subplots(figsize=(16, 6))
     t0 = readings[0].timestamp
     xs = [r.timestamp - t0 for r in readings]
-    ys = [r.angle_deg for r in readings]
-    ax.plot(xs, ys, color="#1f77b4", linewidth=0.8)
+    ys = [_axis_value(r, axis) for r in readings]
+    color = "#9467bd" if axis == PAN_AXIS else "#1f77b4"
+    ax.plot(xs, ys, color=color, linewidth=0.8)
     ax.set_xlabel("Tempo (s)")
     ax.set_ylabel("Variação angular em relação à calibração (°)")
-    ax.grid(True, linestyle="--", alpha=0.4)
+    _apply_reference_grid(ax)
     fig.tight_layout()
 
     buf = io.BytesIO()
@@ -156,12 +230,25 @@ def _build_vibration_time_chart_image(readings: list["AngleReading"]) -> Image:
     return Image(buf, width=17 * cm, height=6.5 * cm)
 
 
-def _build_vibration_spectrum_chart_image(freqs: "np.ndarray", magnitudes: "np.ndarray") -> Image:
+def _build_vibration_spectrum_chart_image(
+    freqs: "np.ndarray", magnitudes: "np.ndarray", stats: "VibrationStats", axis: str = TILT_AXIS
+) -> Image:
     fig, ax = plt.subplots(figsize=(16, 6))
-    ax.plot(freqs, magnitudes, color="#d62728", linewidth=1)
+    ax.plot(freqs, magnitudes, color="#8c564b" if axis == PAN_AXIS else "#d62728", linewidth=1)
     ax.set_xlabel("Frequência (Hz)")
     ax.set_ylabel("Amplitude (°)")
-    ax.grid(True, linestyle="--", alpha=0.4)
+    _apply_reference_grid(ax)
+    if stats.dominant_freq_hz is not None:
+        ax.axvline(stats.dominant_freq_hz, color="#2ca02c", linestyle="--", linewidth=1.2, alpha=0.8)
+        ax.annotate(
+            f"{stats.dominant_freq_hz:.2f} Hz\n{stats.dominant_amplitude_deg:.3f}°",
+            xy=(stats.dominant_freq_hz, stats.dominant_amplitude_deg),
+            xytext=(8, 8),
+            textcoords="offset points",
+            color="#2ca02c",
+            fontsize=9,
+            fontweight="bold",
+        )
     fig.tight_layout()
 
     buf = io.BytesIO()
@@ -169,20 +256,75 @@ def _build_vibration_spectrum_chart_image(freqs: "np.ndarray", magnitudes: "np.n
     plt.close(fig)
     buf.seek(0)
     return Image(buf, width=17 * cm, height=6.5 * cm)
+
+
+def _vibration_summary_rows(stats: "VibrationStats") -> list[list[str]]:
+    return [
+        ["Média", f"{stats.mean_deg:.3f}°"],
+        ["Desvio padrão", f"{stats.std_dev_deg:.3f}°"],
+        ["RMS", f"{stats.rms_deg:.3f}°"],
+        ["Pico a pico", f"{stats.peak_to_peak_deg:.3f}°"],
+        ["Mínimo / Máximo", f"{stats.min_deg:.3f}° / {stats.max_deg:.3f}°"],
+        [
+            "Frequência dominante",
+            (
+                f"{stats.dominant_freq_hz:.2f} Hz  "
+                f"(amplitude {stats.dominant_amplitude_deg:.3f}°, SNR {stats.dominant_snr_db:.1f} dB)"
+                if stats.dominant_freq_hz is not None
+                else "nenhum pico confiável identificado (sinal compatível com ruído)"
+            ),
+        ],
+    ]
+
+
+def _vibration_table(rows: list[list[str]]) -> Table:
+    table = Table(rows, colWidths=[7 * cm, 9 * cm])
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+    return table
+
+
+def _append_vibration_axis_section(
+    story: list, styles, title: str, readings: list["AngleReading"], analysis: "AxisAnalysis"
+) -> None:
+    """Bloco de um eixo no relatório: tabela de estatísticas, gráfico no
+    tempo e espectro. Os dois eixos usam exatamente o mesmo bloco."""
+    story.append(Paragraph(title, styles["Heading2"]))
+    story.append(_vibration_table(_vibration_summary_rows(analysis.stats)))
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph("Variação angular ao longo do tempo", styles["Heading3"]))
+    story.append(_build_vibration_time_chart_image(readings, analysis.axis))
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph("Espectro de frequência (FFT)", styles["Heading3"]))
+    story.append(
+        _build_vibration_spectrum_chart_image(
+            analysis.freqs, analysis.magnitudes, analysis.stats, analysis.axis
+        )
+    )
 
 
 def generate_vibration_report(
     path: str,
     capture_info: "VibrationCaptureInfo | None",
     readings: list["AngleReading"],
-    stats: "VibrationStats",
-    freqs: "np.ndarray",
-    magnitudes: "np.ndarray",
+    tilt: "AxisAnalysis",
+    pan: "AxisAnalysis | None" = None,
 ) -> None:
     """Relatório de uma captura de vibração (Modo Vibração): resumo
     estatístico, gráfico da variação angular no tempo e espectro de
-    frequência (FFT), para identificar eventual frequência de ressonância
-    dominante (ex: balanço de mastro sob vento)."""
+    frequência (FFT) para cada eixo, para identificar eventual frequência de
+    ressonância dominante (ex: balanço de mastro sob vento).
+
+    `pan` é `None` quando a captura veio de um firmware anterior à v1.3.0,
+    que não amostra o eixo de azimute."""
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(path, pagesize=A4, title="Relatório de Captura de Vibração")
     story = []
@@ -195,38 +337,34 @@ def generate_vibration_report(
     duration_cfg = f"{capture_info.duration_s:.0f} s" if capture_info else "-"
     rate_cfg = f"{capture_info.rate_hz:.0f} Hz" if capture_info else "-"
 
-    summary_rows = [
-        ["Modo", mode_label],
-        ["Início", started],
-        ["Duração configurada", duration_cfg],
-        ["Taxa de amostragem configurada", rate_cfg],
-        ["Amostras capturadas", str(stats.n_samples)],
-        ["Duração efetiva", f"{stats.duration_s:.2f} s"],
-        ["Média", f"{stats.mean_deg:.3f}°"],
-        ["Desvio padrão", f"{stats.std_dev_deg:.3f}°"],
-        ["RMS", f"{stats.rms_deg:.3f}°"],
-        ["Pico a pico", f"{stats.peak_to_peak_deg:.3f}°"],
-        ["Mínimo / Máximo", f"{stats.min_deg:.3f}° / {stats.max_deg:.3f}°"],
-    ]
-    summary_table = Table(summary_rows, colWidths=[7 * cm, 9 * cm])
-    summary_table.setStyle(
-        TableStyle(
+    story.append(
+        _vibration_table(
             [
-                ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
-                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ["Modo", mode_label],
+                ["Início", started],
+                ["Duração configurada", duration_cfg],
+                ["Taxa de amostragem configurada", rate_cfg],
+                ["Amostras capturadas", str(tilt.stats.n_samples)],
+                ["Duração efetiva", f"{tilt.stats.duration_s:.2f} s"],
             ]
         )
     )
-    story.append(summary_table)
     story.append(Spacer(1, 0.8 * cm))
 
-    story.append(Paragraph("Variação angular ao longo do tempo", styles["Heading2"]))
-    story.append(_build_vibration_time_chart_image(readings))
-    story.append(Spacer(1, 0.8 * cm))
+    _append_vibration_axis_section(story, styles, "Inclinação (tilt)", readings, tilt)
 
-    story.append(Paragraph("Espectro de frequência (FFT)", styles["Heading2"]))
-    story.append(_build_vibration_spectrum_chart_image(freqs, magnitudes))
+    story.append(PageBreak())
+    if pan is not None:
+        _append_vibration_axis_section(story, styles, "Azimute (pan)", readings, pan)
+    else:
+        story.append(Paragraph("Azimute (pan)", styles["Heading2"]))
+        story.append(
+            Paragraph(
+                "O eixo de azimute não foi capturado: o ESP32 conectado estava com firmware"
+                " anterior à v1.2.0 (leitura contínua) ou v1.3.0 (Modo Vibração), que não"
+                " amostram esse eixo.",
+                styles["Normal"],
+            )
+        )
 
     doc.build(story)

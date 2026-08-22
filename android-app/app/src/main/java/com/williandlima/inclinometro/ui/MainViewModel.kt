@@ -6,9 +6,12 @@ import androidx.lifecycle.viewModelScope
 import com.williandlima.inclinometro.datasource.AngleDataSource
 import com.williandlima.inclinometro.datasource.AngleReading
 import com.williandlima.inclinometro.datasource.BleAngleDataSource
+import com.williandlima.inclinometro.datasource.BleConnectionTester
+import com.williandlima.inclinometro.datasource.BleScanner
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.datasource.SimulatedAngleDataSource
 import com.williandlima.inclinometro.limits.HistoryRepository
+import com.williandlima.inclinometro.limits.LimitAxis
 import com.williandlima.inclinometro.limits.LimitKind
 import com.williandlima.inclinometro.limits.LimitTracker
 import com.williandlima.inclinometro.limits.VibrationStats
@@ -24,49 +27,84 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Estado da conexão exibido na UI, mesma semântica do app desktop
  * (`_CONN_STYLES` em `python-app/ui/main_window.py`). */
 enum class ConnectionStatus { PARADO, CONECTANDO, CONECTADO, ERRO, SIMULACAO }
 
+// Exibição da leitura contínua em degraus de 0,25°, igual ao app desktop. O
+// grosso da estabilidade vem do firmware (filtro interno do MPU6050 + média
+// móvel, ver firmware/src/AngleSensor.h); aqui é só a apresentação.
+//
+// A histerese evita o último resíduo de tremulação: sem ela, um valor parado
+// bem na fronteira entre dois degraus (ex: 1,125°) alterna entre 1,00° e
+// 1,25° a cada leitura. Nada disso afeta os dados guardados — histórico,
+// mín/máx e relatório usam sempre o ângulo bruto (`currentAngle`).
+private const val DISPLAY_ANGLE_STEP_DEG = 0.25
+private const val DISPLAY_ANGLE_HYSTERESIS_DEG = 0.05
+
 data class UiState(
     val mode: ConnectionMode = ConnectionMode.SIMULATED,
     val running: Boolean = false,
-    val currentAngle: Double? = null,
+    val currentAngle: Double? = null,   // valor bruto da leitura (tilt)
+    val displayAngle: Double? = null,   // valor exibido (degrau de 0,25° com histerese)
     val minReading: AngleReading? = null,
     val maxReading: AngleReading? = null,
     val minFlash: Boolean = false,
     val maxFlash: Boolean = false,
+    // Eixo de azimute (pan) — mesma estrutura do tilt. `panAvailable` fica
+    // false quando o ESP32 conectado tem firmware anterior à v1.2.0 e não
+    // mede azimute; a UI então mostra o eixo como sem dado em vez de zero.
+    val currentPan: Double? = null,
+    val displayPan: Double? = null,
+    val panMinReading: AngleReading? = null,
+    val panMaxReading: AngleReading? = null,
+    val panMinFlash: Boolean = false,
+    val panMaxFlash: Boolean = false,
+    val panAvailable: Boolean = true,
     val statusMessage: String = "Pronto.",
     val bleDeviceAddress: String = "",
     val connectionStatus: ConnectionStatus = ConnectionStatus.PARADO,
+    val scanning: Boolean = false,
+    val scanResults: List<BleScanner.Found> = emptyList(),
+    val bleTestInProgress: Boolean = false,
+    val bleTestResult: String? = null,
+    val bleTestSuccess: Boolean = false,
     val calibrating: Boolean = false,
     val vibrationCapturing: Boolean = false,
     val vibrationProgress: Int = 0,
     val vibrationResult: VibrationStats? = null,
+    // Nulo quando a captura veio de firmware anterior à v1.3.0, que não
+    // amostra azimute no Modo Vibração.
+    val vibrationPanResult: VibrationStats? = null,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = HistoryRepository(AppDatabase.getInstance(application).dao())
-    private val tracker = LimitTracker()
+    // Um rastreador de mín/máx por eixo: os extremos são independentes.
+    private val tracker = LimitTracker(LimitAxis.TILT)
+    private val panTracker = LimitTracker(LimitAxis.PAN)
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     private var collectJob: Job? = null
     private var vibrationJob: Job? = null
+    private var scanJob: Job? = null
+    private var testJob: Job? = null
     private var currentSessionId: Long? = null
     private var currentSource: AngleDataSource? = null
 
     private var lastVibrationCaptureId: Long? = null
     private var lastVibrationReadings: List<AngleReading> = emptyList()
-    private var lastVibrationFreqsHz: DoubleArray = DoubleArray(0)
-    private var lastVibrationMagnitudes: DoubleArray = DoubleArray(0)
+    private var lastVibrationRateHz: Int = 0
 
     fun setMode(mode: ConnectionMode) {
         if (!_uiState.value.running) {
@@ -76,6 +114,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBleDeviceAddress(address: String) {
         _uiState.update { it.copy(bleDeviceAddress = address) }
+    }
+
+    // ---------------------------------------------------------- scan BLE
+
+    fun scanBleDevices() {
+        if (_uiState.value.scanning) return
+        _uiState.update { it.copy(scanning = true, scanResults = emptyList(), statusMessage = "Escaneando dispositivos BLE...") }
+        scanJob = viewModelScope.launch {
+            val found = linkedMapOf<String, BleScanner.Found>()
+            try {
+                withTimeoutOrNull(BLE_SCAN_TIMEOUT_MS) {
+                    BleScanner.scan(getApplication()).collect { result ->
+                        found[result.address] = result
+                        _uiState.update { it.copy(scanResults = found.values.toList()) }
+                    }
+                }
+                _uiState.update {
+                    it.copy(
+                        statusMessage = if (found.isEmpty()) {
+                            "Nenhum dispositivo BLE encontrado por perto."
+                        } else {
+                            "${found.size} dispositivo(s) encontrado(s)."
+                        },
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update { it.copy(statusMessage = "Falha ao escanear: ${e.message}") }
+            } finally {
+                _uiState.update { it.copy(scanning = false) }
+            }
+        }
+    }
+
+    fun cancelBleScan() {
+        scanJob?.cancel()
+    }
+
+    // ------------------------------------------------------ testar conexão
+
+    fun testBleConnection() {
+        val address = _uiState.value.bleDeviceAddress.trim()
+        if (address.isBlank()) {
+            _uiState.update {
+                it.copy(bleTestResult = "Informe ou escaneie um endereço MAC primeiro.", bleTestSuccess = false)
+            }
+            return
+        }
+        if (_uiState.value.bleTestInProgress) return
+        _uiState.update { it.copy(bleTestInProgress = true, bleTestResult = "Testando...", bleTestSuccess = false) }
+        testJob = viewModelScope.launch {
+            try {
+                val result = BleConnectionTester.test(getApplication(), address)
+                val panText = result.panDeg
+                    ?.let { pan -> ", azimute %.2f°".format(pan) }
+                    ?: ", sem eixo de azimute"
+                _uiState.update {
+                    it.copy(
+                        bleTestResult = "✓ ESP32 respondeu — inclinação %.2f°%s (firmware v%s)".format(
+                            result.angleDeg,
+                            panText,
+                            result.firmwareVersion,
+                        ),
+                        bleTestSuccess = true,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update { it.copy(bleTestResult = "✗ Falha: ${e.message}", bleTestSuccess = false) }
+            } finally {
+                _uiState.update { it.copy(bleTestInProgress = false) }
+            }
+        }
     }
 
     fun toggleStartStop() {
@@ -97,6 +210,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentSource = source
 
         tracker.reset()
+        panTracker.reset()
         viewModelScope.launch {
             currentSessionId = repository.startSession(mode)
             _uiState.update {
@@ -104,6 +218,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     running = true,
                     minReading = null,
                     maxReading = null,
+                    displayAngle = null,
+                    panMinReading = null,
+                    panMaxReading = null,
+                    displayPan = null,
+                    panAvailable = true,
                     statusMessage = "Conectado: ${source.label}",
                     connectionStatus = if (mode == ConnectionMode.SIMULATED) {
                         ConnectionStatus.SIMULACAO
@@ -126,12 +245,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Arredonda para o degrau de exibição, com histerese para não alternar
+     * entre dois degraus quando o valor fica na fronteira. */
+    private fun angleForDisplay(angleDeg: Double, current: Double?): Double {
+        val step = DISPLAY_ANGLE_STEP_DEG
+        if (current != null && kotlin.math.abs(angleDeg - current) < step / 2 + DISPLAY_ANGLE_HYSTERESIS_DEG) {
+            return current
+        }
+        return Math.round(angleDeg / step) * step
+    }
+
     private suspend fun onReading(reading: AngleReading) {
         val sessionId = currentSessionId ?: return
         repository.addReading(sessionId, reading)
+        val pan = reading.panDeg
         _uiState.update {
             it.copy(
                 currentAngle = reading.angleDeg,
+                displayAngle = angleForDisplay(reading.angleDeg, it.displayAngle),
+                currentPan = pan,
+                displayPan = if (pan == null) null else angleForDisplay(pan, it.displayPan),
+                panAvailable = pan != null,
                 connectionStatus = if (it.mode == ConnectionMode.REAL) ConnectionStatus.CONECTADO else it.connectionStatus,
             )
         }
@@ -141,20 +275,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             when (event.kind) {
                 LimitKind.MIN -> {
                     _uiState.update { it.copy(minReading = event.reading, minFlash = true) }
-                    scheduleFlashReset(isMin = true)
+                    scheduleFlashReset(LimitAxis.TILT, isMin = true)
                 }
                 LimitKind.MAX -> {
                     _uiState.update { it.copy(maxReading = event.reading, maxFlash = true) }
-                    scheduleFlashReset(isMin = false)
+                    scheduleFlashReset(LimitAxis.TILT, isMin = false)
+                }
+            }
+        }
+
+        // Devolve lista vazia quando a leitura não traz azimute, então este
+        // laço simplesmente não roda com firmware anterior à v1.2.0.
+        for (event in panTracker.process(reading)) {
+            repository.addLimitEvent(sessionId, event)
+            when (event.kind) {
+                LimitKind.MIN -> {
+                    _uiState.update { it.copy(panMinReading = event.reading, panMinFlash = true) }
+                    scheduleFlashReset(LimitAxis.PAN, isMin = true)
+                }
+                LimitKind.MAX -> {
+                    _uiState.update { it.copy(panMaxReading = event.reading, panMaxFlash = true) }
+                    scheduleFlashReset(LimitAxis.PAN, isMin = false)
                 }
             }
         }
     }
 
-    private fun scheduleFlashReset(isMin: Boolean) {
+    private fun scheduleFlashReset(axis: LimitAxis, isMin: Boolean) {
         viewModelScope.launch {
             delay(1500)
-            _uiState.update { if (isMin) it.copy(minFlash = false) else it.copy(maxFlash = false) }
+            _uiState.update {
+                when {
+                    axis == LimitAxis.PAN && isMin -> it.copy(panMinFlash = false)
+                    axis == LimitAxis.PAN -> it.copy(panMaxFlash = false)
+                    isMin -> it.copy(minFlash = false)
+                    else -> it.copy(maxFlash = false)
+                }
+            }
         }
     }
 
@@ -167,7 +324,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = currentSessionId
         viewModelScope.launch {
             sessionId?.let { repository.endSession(it) }
-            _uiState.update { it.copy(running = false, statusMessage = "Parado.", connectionStatus = ConnectionStatus.PARADO) }
+            _uiState.update {
+                it.copy(
+                    running = false,
+                    displayAngle = null,
+                    displayPan = null,
+                    statusMessage = "Parado.",
+                    connectionStatus = ConnectionStatus.PARADO,
+                )
+            }
         }
     }
 
@@ -175,6 +340,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val wasRunning = _uiState.value.running
         val mode = _uiState.value.mode
         tracker.reset()
+        panTracker.reset()
         viewModelScope.launch {
             if (wasRunning) {
                 currentSessionId?.let { repository.endSession(it) }
@@ -184,6 +350,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     minReading = null,
                     maxReading = null,
+                    panMinReading = null,
+                    panMaxReading = null,
                     statusMessage = if (wasRunning) {
                         "Limites resetados (histórico anterior preservado)."
                     } else {
@@ -265,15 +433,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val captureId = repository.saveVibrationCapture(mode, durationS, rateHz, readings)
-                val stats = VibrationStatsCalculator.computeStats(readings)
-                val (freqs, magnitudes) = VibrationStatsCalculator.computeFft(readings, rateHz)
+                val tilt = VibrationStatsCalculator.analyzeAxis(readings, rateHz, LimitAxis.TILT)
+                val pan = if (VibrationStatsCalculator.hasPanSamples(readings)) {
+                    VibrationStatsCalculator.analyzeAxis(readings, rateHz, LimitAxis.PAN)
+                } else {
+                    null
+                }
 
                 lastVibrationCaptureId = captureId
                 lastVibrationReadings = readings
-                lastVibrationFreqsHz = freqs
-                lastVibrationMagnitudes = magnitudes
+                lastVibrationRateHz = rateHz
 
-                _uiState.update { it.copy(vibrationResult = stats, statusMessage = "Captura de vibração concluída.") }
+                _uiState.update {
+                    it.copy(
+                        vibrationResult = tilt.stats,
+                        vibrationPanResult = pan?.stats,
+                        statusMessage = "Captura de vibração concluída.",
+                    )
+                }
             } catch (e: TimeoutCancellationException) {
                 _uiState.update { it.copy(statusMessage = "Tempo esgotado aguardando a captura de vibração.") }
             } catch (e: CancellationException) {
@@ -291,7 +468,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun dismissVibrationResult() {
-        _uiState.update { it.copy(vibrationResult = null) }
+        _uiState.update { it.copy(vibrationResult = null, vibrationPanResult = null) }
     }
 
     suspend fun generateVibrationReportFile(): File? {
@@ -299,20 +476,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val readings = lastVibrationReadings
         if (readings.isEmpty()) return null
         val captureInfo = repository.listVibrationCaptures().firstOrNull { it.id == captureId } ?: return null
-        val stats = VibrationStatsCalculator.computeStats(readings)
+        val rateHz = lastVibrationRateHz.coerceAtLeast(1)
+        val tilt = VibrationStatsCalculator.analyzeAxis(readings, rateHz, LimitAxis.TILT)
+        val pan = if (VibrationStatsCalculator.hasPanSamples(readings)) {
+            VibrationStatsCalculator.analyzeAxis(readings, rateHz, LimitAxis.PAN)
+        } else {
+            null
+        }
         return PdfReportGenerator.generateVibrationReport(
             getApplication(),
             captureInfo,
             readings,
-            stats,
-            lastVibrationFreqsHz,
-            lastVibrationMagnitudes,
+            tilt,
+            pan,
         )
     }
 
     override fun onCleared() {
         collectJob?.cancel()
         vibrationJob?.cancel()
+        scanJob?.cancel()
+        testJob?.cancel()
         super.onCleared()
+    }
+
+    private companion object {
+        // Mesma duração usada como default em ble_source.py (scan_devices).
+        const val BLE_SCAN_TIMEOUT_MS = 5000L
     }
 }

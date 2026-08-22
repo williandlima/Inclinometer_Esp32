@@ -5,6 +5,9 @@ import android.content.Intent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,7 +44,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
-import com.williandlima.inclinometro.datasource.AngleReading
+import com.williandlima.inclinometro.datasource.BleScanner
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.limits.VibrationStats
 import com.williandlima.inclinometro.ui.theme.AmberFlash
@@ -72,10 +75,21 @@ fun MainScreen(viewModel: MainViewModel) {
         targetValue = if (state.maxFlash) AmberFlash else MaterialTheme.colorScheme.surfaceVariant,
         label = "maxCardColor",
     )
+    val panMinCardColor by animateColorAsState(
+        targetValue = if (state.panMinFlash) AmberFlash else MaterialTheme.colorScheme.surfaceVariant,
+        label = "panMinCardColor",
+    )
+    val panMaxCardColor by animateColorAsState(
+        targetValue = if (state.panMaxFlash) AmberFlash else MaterialTheme.colorScheme.surfaceVariant,
+        label = "panMaxCardColor",
+    )
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            // Rolável: com os dois eixos empilhados, o conteúdo passa da
+            // altura da tela em celulares menores.
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -91,31 +105,33 @@ fun MainScreen(viewModel: MainViewModel) {
 
         Spacer(Modifier.height(16.dp))
 
-        Text(
-            text = state.currentAngle?.let { "%.2f°".format(it) } ?: "--.--°",
-            style = MaterialTheme.typography.displayLarge,
-            fontWeight = FontWeight.Bold,
+        AxisPanel(
+            title = "Inclinação (tilt)",
+            displayValue = state.displayAngle,
+            note = null,
+            minValue = state.minReading?.angleDeg,
+            minTimestamp = state.minReading?.timestamp,
+            maxValue = state.maxReading?.angleDeg,
+            maxTimestamp = state.maxReading?.timestamp,
+            minCardColor = minCardColor,
+            maxCardColor = maxCardColor,
         )
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            LimitCard(
-                title = "Mínimo",
-                reading = state.minReading,
-                containerColor = minCardColor,
-                modifier = Modifier.weight(1f),
-            )
-            LimitCard(
-                title = "Máximo",
-                reading = state.maxReading,
-                containerColor = maxCardColor,
-                modifier = Modifier.weight(1f),
-            )
-        }
+        AxisPanel(
+            title = "Azimute (pan)",
+            displayValue = state.displayPan,
+            // Deixa explícito que o eixo está sem dado, em vez de o usuário
+            // achar que o azimute está travado em zero.
+            note = if (state.running && !state.panAvailable) "firmware sem este eixo" else null,
+            minValue = state.panMinReading?.panDeg,
+            minTimestamp = state.panMinReading?.timestamp,
+            maxValue = state.panMaxReading?.panDeg,
+            maxTimestamp = state.panMaxReading?.timestamp,
+            minCardColor = panMinCardColor,
+            maxCardColor = panMaxCardColor,
+        )
 
         Spacer(Modifier.height(24.dp))
 
@@ -125,6 +141,18 @@ fun MainScreen(viewModel: MainViewModel) {
                 onModeChange = viewModel::setMode,
                 bleAddress = state.bleDeviceAddress,
                 onBleAddressChange = viewModel::setBleDeviceAddress,
+                scanning = state.scanning,
+                scanResults = state.scanResults,
+                onScanClick = viewModel::scanBleDevices,
+                onScanResultSelected = { address ->
+                    viewModel.setBleDeviceAddress(address)
+                    viewModel.cancelBleScan()
+                },
+                onScanDialogDismiss = viewModel::cancelBleScan,
+                testInProgress = state.bleTestInProgress,
+                testResult = state.bleTestResult,
+                testSuccess = state.bleTestSuccess,
+                onTestConnectionClick = viewModel::testBleConnection,
             )
             Spacer(Modifier.height(16.dp))
         }
@@ -187,6 +215,7 @@ fun MainScreen(viewModel: MainViewModel) {
     state.vibrationResult?.let { stats ->
         VibrationResultDialog(
             stats = stats,
+            panStats = state.vibrationPanResult,
             onDismiss = viewModel::dismissVibrationResult,
             onSaveReport = {
                 scope.launch {
@@ -307,9 +336,31 @@ private fun VibrationProgressDialog(progress: Int, onCancel: () -> Unit) {
     )
 }
 
+/** Bloco de estatísticas de um eixo dentro do diálogo de resultado. */
+@Composable
+private fun VibrationAxisSummary(title: String, stats: VibrationStats) {
+    Text(title, fontWeight = FontWeight.Bold, color = Orange)
+    Text("Desvio padrão: %.3f°   RMS: %.3f°".format(stats.stdDevDeg, stats.rmsDeg))
+    Text("Pico a pico: %.3f°".format(stats.peakToPeakDeg))
+    Text("Mínimo / Máximo: %.3f° / %.3f°".format(stats.minDeg, stats.maxDeg))
+    val dominantFreq = stats.dominantFreqHz
+    if (dominantFreq != null) {
+        Text(
+            "Frequência dominante: %.2f Hz (amplitude %.3f°, SNR %.1f dB)".format(
+                dominantFreq,
+                stats.dominantAmplitudeDeg ?: 0.0,
+                stats.dominantSnrDb ?: 0.0,
+            )
+        )
+    } else {
+        Text("Frequência dominante: nenhum pico confiável (sinal compatível com ruído).")
+    }
+}
+
 @Composable
 private fun VibrationResultDialog(
     stats: VibrationStats,
+    panStats: VibrationStats?,
     onDismiss: () -> Unit,
     onSaveReport: () -> Unit,
 ) {
@@ -317,13 +368,19 @@ private fun VibrationResultDialog(
         onDismissRequest = onDismiss,
         title = { Text("Modo Vibração — Resultado da captura") },
         text = {
-            Column {
+            // Rolável: com os dois eixos, o resumo passa da altura útil de um
+            // AlertDialog em telas menores.
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text("Amostras: ${stats.nSamples} (duração efetiva: %.2f s)".format(stats.durationS))
-                Text("Média: %.3f°".format(stats.meanDeg))
-                Text("Desvio padrão: %.3f°".format(stats.stdDevDeg))
-                Text("RMS: %.3f°".format(stats.rmsDeg))
-                Text("Pico a pico: %.3f°".format(stats.peakToPeakDeg))
-                Text("Mínimo / Máximo: %.3f° / %.3f°".format(stats.minDeg, stats.maxDeg))
+                Spacer(modifier = Modifier.height(12.dp))
+                VibrationAxisSummary("Inclinação (tilt)", stats)
+                Spacer(modifier = Modifier.height(12.dp))
+                if (panStats != null) {
+                    VibrationAxisSummary("Azimute (pan)", panStats)
+                } else {
+                    Text("Azimute (pan)", fontWeight = FontWeight.Bold, color = Orange)
+                    Text("não capturado — firmware anterior à v1.3.0.")
+                }
             }
         },
         confirmButton = { TextButton(onClick = onSaveReport) { Text("Salvar relatório PDF") } },
@@ -331,10 +388,61 @@ private fun VibrationResultDialog(
     )
 }
 
+/**
+ * Painel de um eixo: título, valor grande em tempo real e o par de caixas de
+ * mínimo/máximo. Os dois eixos usam o mesmo composable, empilhados — lado a
+ * lado não caberia com legibilidade na largura de um celular.
+ */
+@Composable
+private fun AxisPanel(
+    title: String,
+    displayValue: Double?,
+    note: String?,
+    minValue: Double?,
+    minTimestamp: Long?,
+    maxValue: Double?,
+    maxTimestamp: Long?,
+    minCardColor: Color,
+    maxCardColor: Color,
+) {
+    Text(title, style = MaterialTheme.typography.titleMedium, color = Orange, fontWeight = FontWeight.Bold)
+    Text(
+        text = displayValue?.let { "%.2f°".format(it) } ?: "--.--°",
+        style = MaterialTheme.typography.displayMedium,
+        fontWeight = FontWeight.Bold,
+    )
+    if (note != null) {
+        Text(note, style = MaterialTheme.typography.bodySmall)
+    }
+
+    Spacer(Modifier.height(8.dp))
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        LimitCard(
+            title = "Mínimo",
+            valueDeg = minValue,
+            timestamp = minTimestamp,
+            containerColor = minCardColor,
+            modifier = Modifier.weight(1f),
+        )
+        LimitCard(
+            title = "Máximo",
+            valueDeg = maxValue,
+            timestamp = maxTimestamp,
+            containerColor = maxCardColor,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
 @Composable
 private fun LimitCard(
     title: String,
-    reading: AngleReading?,
+    valueDeg: Double?,
+    timestamp: Long?,
     containerColor: Color,
     modifier: Modifier = Modifier,
 ) {
@@ -348,10 +456,10 @@ private fun LimitCard(
         ) {
             Text(title, fontWeight = FontWeight.Bold)
             Text(
-                reading?.let { "%.2f°".format(it.angleDeg) } ?: "--.--°",
+                valueDeg?.let { "%.2f°".format(it) } ?: "--.--°",
                 style = MaterialTheme.typography.titleLarge,
             )
-            Text(reading?.let { timeFormatter.format(Date(it.timestamp)) } ?: "")
+            Text(timestamp?.let { timeFormatter.format(Date(it)) } ?: "")
         }
     }
 }
@@ -362,7 +470,18 @@ private fun ModeSelector(
     onModeChange: (ConnectionMode) -> Unit,
     bleAddress: String,
     onBleAddressChange: (String) -> Unit,
+    scanning: Boolean,
+    scanResults: List<BleScanner.Found>,
+    onScanClick: () -> Unit,
+    onScanResultSelected: (String) -> Unit,
+    onScanDialogDismiss: () -> Unit,
+    testInProgress: Boolean,
+    testResult: String?,
+    testSuccess: Boolean,
+    onTestConnectionClick: () -> Unit,
 ) {
+    var showScanDialog by remember { mutableStateOf(false) }
+
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             RadioButton(selected = mode == ConnectionMode.SIMULATED, onClick = { onModeChange(ConnectionMode.SIMULATED) })
@@ -372,13 +491,89 @@ private fun ModeSelector(
             Text("Real (BLE)")
         }
         if (mode == ConnectionMode.REAL) {
-            OutlinedTextField(
-                value = bleAddress,
-                onValueChange = onBleAddressChange,
-                label = { Text("Endereço MAC do dispositivo BLE") },
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = bleAddress,
+                    onValueChange = onBleAddressChange,
+                    label = { Text("Endereço MAC do dispositivo BLE") },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = {
+                    showScanDialog = true
+                    onScanClick()
+                }) {
+                    Text("Escanear")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onTestConnectionClick, enabled = !testInProgress) {
+                Text(if (testInProgress) "Testando..." else "Testar conexão com ESP32")
+            }
+            testResult?.let {
+                Text(
+                    it,
+                    color = if (testSuccess) Green else Red,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
     }
+
+    if (showScanDialog) {
+        BleScanDialog(
+            scanning = scanning,
+            results = scanResults,
+            onSelect = { address ->
+                onScanResultSelected(address)
+                showScanDialog = false
+            },
+            onDismiss = {
+                showScanDialog = false
+                onScanDialogDismiss()
+            },
+        )
+    }
+}
+
+@Composable
+private fun BleScanDialog(
+    scanning: Boolean,
+    results: List<BleScanner.Found>,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Dispositivos BLE") },
+        text = {
+            Column {
+                if (scanning) {
+                    Text("Escaneando...", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                }
+                if (results.isEmpty()) {
+                    if (!scanning) {
+                        Text("Nenhum dispositivo BLE encontrado por perto.", style = MaterialTheme.typography.bodySmall)
+                    }
+                } else {
+                    results.forEach { found ->
+                        Text(
+                            "${found.name} (${found.address})",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(found.address) }
+                                .padding(vertical = 8.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar") } },
+    )
 }
 
 private fun sharePdf(context: Context, file: File) {

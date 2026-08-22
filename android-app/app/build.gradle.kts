@@ -10,11 +10,22 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.williandlima.inclinometro"
+        // O applicationId e' a IDENTIDADE do app para o Android: dois APKs com
+        // o mesmo id nao coexistem — instalar um substitui o outro. Este e'
+        // diferente do da versao 1 (so inclinacao, `com.williandlima.
+        // inclinometro`) de proposito, para as duas poderem ficar instaladas
+        // ao mesmo tempo no aparelho, cada uma com seus proprios dados
+        // (o banco Room fica no sandbox privado de cada applicationId).
+        //
+        // O `namespace` acima continua o mesmo — ele so define o pacote das
+        // classes geradas (R, BuildConfig) e nao precisa acompanhar. A
+        // authority do FileProvider usa `${applicationId}` no manifesto, entao
+        // se ajusta sozinha.
+        applicationId = "com.williandlima.inclinometro.doiseixos"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "2.0.0"
     }
 
     buildFeatures {

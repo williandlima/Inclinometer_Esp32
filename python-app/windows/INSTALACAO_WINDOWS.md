@@ -31,12 +31,12 @@ dependências).
 
 Útil para instalar em computadores onde não se quer/pode instalar Python
 (ex: máquina de produção/chão de fábrica). Gera uma pasta com um
-`Inclinometro.exe` que roda sozinho.
+`Inclinometro2Eixos.exe` que roda sozinho.
 
 **Importante:** o executável precisa ser **gerado em um computador
 Windows** (o PyInstaller não faz cross-compilação de Linux/macOS para
 `.exe`). O passo a passo abaixo é feito uma vez, em qualquer PC Windows
-com Python instalado; o resultado (pasta `dist\Inclinometro`) pode então
+com Python instalado; o resultado (pasta `dist\Inclinometro2Eixos`) pode então
 ser copiado para quantos computadores forem necessários, mesmo sem
 Python.
 
@@ -45,11 +45,76 @@ Passos (em um Windows com Python instalado):
 1. Rode `windows\install.bat` (Opção 1, passo 2) se ainda não rodou.
 2. Dê duplo clique em `windows\build_exe.bat`.
    - Instala o PyInstaller e empacota o app.
-   - Ao final, gera a pasta `dist\Inclinometro\`, contendo
-     `Inclinometro.exe` e todos os arquivos necessários.
-3. Copie a pasta `dist\Inclinometro` inteira para o computador de
-   destino (pendrive, rede, etc.) e rode `Inclinometro.exe` diretamente
+   - Ao final, gera a pasta `dist\Inclinometro2Eixos\`, contendo
+     `Inclinometro2Eixos.exe` e todos os arquivos necessários.
+3. Copie a pasta `dist\Inclinometro2Eixos` inteira para o computador de
+   destino (pendrive, rede, etc.) e rode `Inclinometro2Eixos.exe` diretamente
    — não precisa instalar nada nesse computador.
+
+## Opção 3 — Gerar um instalador (Setup.exe) com atalhos e desinstalador
+
+A forma mais próxima de um "programa instalado de verdade": um único
+arquivo `Inclinometro-2Eixos-Setup-2.0.0.exe` que, ao ser executado no computador
+de destino, instala o programa em `Arquivos de Programas`, cria atalho no
+Menu Iniciar (e, opcionalmente, na Área de Trabalho) e registra um
+desinstalador em "Adicionar ou remover programas" — sem precisar de Python
+em nenhum dos dois computadores (o de geração nem o de destino).
+
+**Requisito extra** (só na máquina onde o instalador é **gerado**, uma
+única vez): instalar o [Inno Setup](https://jrsoftware.org/isdl.php)
+(gratuito) — instalação padrão, sem opções especiais.
+
+Passos (em um Windows com Python **e** Inno Setup instalados):
+
+1. Rode `windows\install.bat` (Opção 1, passo 2) se ainda não rodou.
+2. Dê duplo clique em `windows\build_installer.bat`.
+   - Gera o executável autônomo (mesmo processo da Opção 2).
+   - Compila o instalador com o Inno Setup.
+   - Ao final, gera `windows\installer_output\Inclinometro-2Eixos-Setup-2.0.0.exe`.
+3. Copie esse único arquivo `.exe` para o(s) computador(es) de destino e
+   execute — o assistente de instalação cuida do resto. Não precisa
+   instalar Python nem Inno Setup nesses computadores.
+
+Esse arquivo é o mais indicado para distribuir para os usuários finais do
+software (ex: equipe de chão de fábrica); as Opções 1 e 2 continuam úteis
+para desenvolvimento/testes.
+
+## Instalar as duas versões lado a lado
+
+Dá para manter no mesmo computador a **versão 1** (mede só a inclinação) e a
+**versão 2** (mede inclinação e azimute), para comparar. Elas não se
+atropelam porque a versão 2 tem nome, pasta de instalação, `AppId` do Inno
+Setup e pasta de dados próprios — o `AppId` é o que importa de verdade: é
+por ele que o Windows decide se uma instalação é um app novo ou um
+*upgrade* do outro.
+
+| | Versão 1 | Versão 2 |
+|---|---|---|
+| Nome no Menu Iniciar | Inclinometro Avibras Aeroco | Inclinometro 2 Eixos (Avibras Aeroco) |
+| Pasta de instalação | `Arquivos de Programas\Inclinometro` | `Arquivos de Programas\Inclinometro2Eixos` |
+| Instalador gerado | `Inclinometro-Setup-1.0.0.exe` | `Inclinometro-2Eixos-Setup-2.0.0.exe` |
+| Firmware correspondente | 1.1.0 | 1.3.1 |
+
+Para gerar o instalador da **versão 2**, siga a Opção 3 acima com o código
+como está hoje.
+
+Para gerar o da **versão 1**, volte o repositório ao commit anterior ao eixo
+de azimute e repita a Opção 3:
+
+```bat
+git checkout 0ca6ab1
+windows\build_installer.bat
+```
+
+Guarde o `.exe` gerado em outra pasta antes de voltar para a versão atual
+(`git checkout claude/inclinometro-bluetooth-serial-x2we0f`), porque
+`installer_output` é reaproveitado entre as duas gerações. Naquele commit os
+identificadores antigos ainda estão no lugar, então o instalador sai com a
+identidade da versão 1 automaticamente — não é preciso editar nada.
+
+**Cada versão tem seu próprio histórico.** O banco de dados fica em
+`%LOCALAPPDATA%\Inclinometro<variante>\`, com uma pasta por versão, então os
+dados de uma não aparecem na outra e desinstalar uma não apaga os da outra.
 
 ## Observações
 
@@ -59,9 +124,11 @@ Passos (em um Windows com Python instalado):
   isso acontecer, use "Mais informações → Executar assim mesmo" ou
   adicione uma exceção no antivírus. Assinar digitalmente o `.exe` é uma
   opção futura se isso incomodar no ambiente corporativo.
-- **Logo:** a logo da Avibras Aeroco já está versionada em `assets/logo.jpg`
-  e é empacotada automaticamente ao gerar o executável (ver seção
-  "Identidade visual" no `README.md` principal).
+- **Logo/ícone:** a logo da Avibras Aeroco já está versionada em
+  `assets/logo.png` (empacotada automaticamente ao gerar o executável — ver
+  seção "Identidade visual" no `README.md` principal) e um ícone derivado
+  dela em `assets/logo.ico` é usado no `.exe`, no instalador e nos atalhos
+  gerados.
 - **Bluetooth (BLE):** o modo de leitura via Bluetooth usa o adaptador
   Bluetooth nativo do próprio computador (via `bleak`); não precisa de
   dongle extra, mas o computador precisa ter Bluetooth.

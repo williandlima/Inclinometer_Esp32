@@ -10,15 +10,74 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable
 
-# Faixa física do inclinômetro (0-120 graus), usada para clamping/validação.
-ANGLE_MIN_DEG = 0.0
-ANGLE_MAX_DEG = 120.0
+# Faixa física do eixo de inclinação (-60 a +60 graus), usada para
+# clamping/validação.
+ANGLE_MIN_DEG = -60.0
+ANGLE_MAX_DEG = 60.0
+
+# Faixa do eixo de azimute (pan). Espelha PAN_MIN_DEG/PAN_MAX_DEG de
+# firmware/src/Config.h — ainda é um placeholder ali, a ajustar quando a
+# mecânica do pan estiver definida.
+PAN_MIN_DEG = -90.0
+PAN_MAX_DEG = 90.0
 
 
 @dataclass(frozen=True)
 class AngleReading:
+    """Uma leitura dos eixos do inclinômetro.
+
+    `pan_deg` é opcional: fica `None` quando a fonte não fornece azimute —
+    caso de um ESP32 com firmware anterior à v1.2.0, que não expõe o
+    registrador/characteristic de pan. Todo o resto do app (limites,
+    histórico, relatório) trata `None` como "este eixo não foi medido" e
+    simplesmente o ignora, em vez de assumir zero.
+    """
+
     angle_deg: float
     timestamp: float  # segundos desde epoch (time.time())
+    pan_deg: float | None = None
+
+    # Só preenchido em capturas do Modo Vibração: a velocidade angular bruta
+    # do eixo de azimute, como o firmware a envia (`pan_deg` é a integral
+    # dela). Guardar as duas não é redundância — a análise espectral do
+    # azimute precisa da taxa, cujo ruído é branco, enquanto os gráficos e as
+    # estatísticas no tempo precisam do ângulo. Ver `limits.vibration_stats`.
+    pan_rate_dps: float | None = None
+
+
+def build_vibration_readings(
+    angles_deg: list[float],
+    pan_rates_dps: list[float] | None,
+    rate_hz: float,
+    t_start: float,
+) -> list[AngleReading]:
+    """Monta as amostras de uma captura de vibração a partir das séries
+    brutas de cada eixo, usada pelas três fontes de dados.
+
+    `pan_rates_dps` são **velocidades angulares** (graus/s), como o firmware
+    as envia, e são convertidas aqui para variação angular — ver
+    `limits.vibration_stats.pan_rates_to_angles`. Passe `None` (ou uma lista
+    de tamanho diferente do eixo de tilt) quando o firmware conectado não
+    fornecer o eixo de azimute: as amostras saem com `pan_deg` nulo.
+    """
+    # Import local para `data_source` não depender de numpy quando só as
+    # leituras contínuas forem usadas, e para não amarrar a ordem de import
+    # entre os pacotes `data_source` e `limits`.
+    from limits.vibration_stats import pan_rates_to_angles
+
+    pan_angles: list[float] | None = None
+    if pan_rates_dps is not None and len(pan_rates_dps) == len(angles_deg):
+        pan_angles = pan_rates_to_angles(pan_rates_dps, rate_hz)
+
+    return [
+        AngleReading(
+            angle_deg=angle,
+            timestamp=t_start + i / rate_hz,
+            pan_deg=pan_angles[i] if pan_angles is not None else None,
+            pan_rate_dps=pan_rates_dps[i] if pan_angles is not None else None,
+        )
+        for i, angle in enumerate(angles_deg)
+    ]
 
 
 ReadingCallback = Callable[[AngleReading], None]
@@ -49,7 +108,11 @@ class IAngleDataSource(ABC):
         return False
 
     def calibrate(self) -> None:
-        """Zera o eixo de tilt do acelerômetro na posição atual.
+        """Zera os dois eixos (tilt e pan) na posição atual.
+
+        É uma ação só, de propósito: o firmware zera tilt e pan juntos no
+        mesmo comando (`COIL_CALIBRATE`/`CHAR_CALIBRATE_UUID`), então a UI
+        expõe um único botão "Calibrar".
 
         Chamada de forma síncrona (bloqueante) pelo chamador; fontes que
         suportam calibração devem sobrescrever este método. Levanta

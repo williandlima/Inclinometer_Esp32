@@ -1,3 +1,5 @@
 <resources>
-    <string name="app_name">Inclinômetro</string>
+    <!-- Nome exibido no aparelho. O sufixo e o que distingue esta versao da
+         versao 1 (so inclinacao) quando as duas estao instaladas juntas. -->
+    <string name="app_name">Inclinômetro 2 Eixos</string>
 </resources>
