@@ -59,6 +59,34 @@ def _axis_value(reading: "AngleReading", axis: str) -> float | None:
     return reading.pan_deg if axis == PAN_AXIS else reading.angle_deg
 
 
+def _axis_extremes(
+    readings: list["AngleReading"], events: list["LimitEvent"], axis: str
+) -> tuple[float | None, float | None]:
+    """Mínimo e máximo do eixo para o resumo do relatório.
+
+    Prefere os EVENTOS DE LIMITE às leituras. Com firmware v1.5.0+ eles
+    carregam o extremo medido no ESP32 a 100 Hz, enquanto as leituras são o
+    valor suavizado para a tela, amostrado a 4-5 Hz — nelas uma rajada de meio
+    segundo aparece com menos da metade da amplitude real. É por isso que o
+    marcador de extremo no gráfico pode aparecer fora da curva: a curva mostra
+    o que a tela mostrou, o marcador mostra o que de fato aconteceu.
+
+    Cai para as leituras quando não há eventos do eixo — sessão sem eventos
+    gravados, ou eixo que o firmware conectado não mede.
+    """
+    axis_events = [e for e in events if e.axis == axis]
+    if axis_events:
+        mins = [e.value_deg for e in axis_events if e.kind == "min"]
+        maxs = [e.value_deg for e in axis_events if e.kind == "max"]
+        if mins and maxs:
+            return min(mins), max(maxs)
+
+    values = [v for v in (_axis_value(r, axis) for r in readings) if v is not None]
+    if not values:
+        return None, None
+    return min(values), max(values)
+
+
 def _build_chart_image(
     readings: list["AngleReading"], events: list["LimitEvent"], axis: str = TILT_AXIS
 ) -> Image:
@@ -115,11 +143,9 @@ def generate_report(
     started = _fmt_dt(session_info.started_at) if session_info else "-"
     ended = _fmt_dt(session_info.ended_at) if (session_info and session_info.ended_at) else "em andamento"
     n_readings = len(readings)
-    angle_min = min((r.angle_deg for r in readings), default=None)
-    angle_max = max((r.angle_deg for r in readings), default=None)
+    angle_min, angle_max = _axis_extremes(readings, events, TILT_AXIS)
     pan_values = [r.pan_deg for r in readings if r.pan_deg is not None]
-    pan_min = min(pan_values, default=None)
-    pan_max = max(pan_values, default=None)
+    pan_min, pan_max = _axis_extremes(readings, events, PAN_AXIS)
 
     def _fmt_range(low: float | None, high: float | None) -> str:
         if low is None or high is None:
@@ -131,9 +157,9 @@ def generate_report(
         ["Início", started],
         ["Fim", ended],
         ["Leituras registradas", str(n_readings)],
-        ["Inclinação mín. / máx. observada", _fmt_range(angle_min, angle_max)],
+        ["Inclinação mín. / máx. registrada", _fmt_range(angle_min, angle_max)],
         [
-            "Azimute mín. / máx. observado",
+            "Azimute mín. / máx. registrado",
             _fmt_range(pan_min, pan_max)
             if pan_values
             else "não registrado (firmware sem eixo de azimute)",

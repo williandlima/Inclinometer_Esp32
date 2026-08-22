@@ -68,6 +68,11 @@ void PanSensor::update() {
     if (now - _windowStartMs >= PAN_ZUPT_WINDOW_MS) {
         closeWindow(now);
     }
+
+    // Extremos amostrados a 100 Hz, e não na cadência do protocolo: uma
+    // varredura do motor a 20-30°/s atravessa vários graus entre duas leituras
+    // do app. Ver minPanDeg() em PanSensor.h.
+    _peaks.push(readPanDeg());
 }
 
 void PanSensor::closeWindow(uint32_t now) {
@@ -109,8 +114,20 @@ float PanSensor::readPanDeg() {
     return pan;
 }
 
+float PanSensor::minPanDeg() {
+    return _peaks.hasData() ? _peaks.minValue() : readPanDeg();
+}
+
+float PanSensor::maxPanDeg() {
+    return _peaks.hasData() ? _peaks.maxValue() : readPanDeg();
+}
+
 void PanSensor::calibrate() {
     _offsetDeg = _panDeg;
+
+    // Extremos guardados são relativos ao zero antigo — ver o mesmo raciocínio
+    // em AngleSensor::calibrate().
+    _peaks.reset();
 
     // Refaz também a estimativa de bias: a calibração é feita com o eixo
     // parado na posição de referência, que é exatamente a condição ideal para

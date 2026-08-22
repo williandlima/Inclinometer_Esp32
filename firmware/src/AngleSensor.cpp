@@ -42,6 +42,7 @@ void AngleSensor::update() {
         // Primeira amostra entra direto: sem isso a leitura começaria em 0°
         // e levaria segundos subindo até o valor real.
         _filteredRawDeg = rawDeg;
+        _measuredRawDeg = rawDeg;
         _prevRawDeg = rawDeg;
         _filteredRateDps = 0.0f;
         _filterReady = true;
@@ -67,6 +68,13 @@ void AngleSensor::update() {
     // Em movimento real, o termo do BETA levanta o corte e o filtro acompanha.
     float cutoffHz = ANGLE_FILTER_MIN_CUTOFF_HZ + ANGLE_FILTER_BETA * fabsf(_filteredRateDps);
     _filteredRawDeg += emaAlpha(cutoffHz, dtS) * (rawDeg - _filteredRawDeg);
+
+    // Caminho de medida, em paralelo e a partir da MESMA amostra: filtro fixo
+    // e leve, largo o bastante para não achatar rajada (ver o bloco de
+    // ANGLE_PEAK_* em Config.h). O peak-hold é alimentado a 100 Hz — é essa
+    // taxa, e não a de leitura do protocolo, que faz a diferença.
+    _measuredRawDeg += emaAlpha(ANGLE_PEAK_CUTOFF_HZ, dtS) * (rawDeg - _measuredRawDeg);
+    _peaks.push(toReported(_measuredRawDeg));
 }
 
 float AngleSensor::readRelativeAngleDeg() {
@@ -77,13 +85,29 @@ float AngleSensor::readRelativeAngleDeg() {
     return rawDeg - _offsetDeg;
 }
 
-float AngleSensor::readAngleDeg() {
-    float angle = _filteredRawDeg - _offsetDeg;
+float AngleSensor::toReported(float rawDeg) const {
+    float angle = rawDeg - _offsetDeg;
     if (angle < ANGLE_MIN_DEG) angle = ANGLE_MIN_DEG;
     if (angle > ANGLE_MAX_DEG) angle = ANGLE_MAX_DEG;
     return angle;
 }
 
+float AngleSensor::readAngleDeg() {
+    return toReported(_filteredRawDeg);
+}
+
+float AngleSensor::minAngleDeg() {
+    return _peaks.hasData() ? _peaks.minValue() : readAngleDeg();
+}
+
+float AngleSensor::maxAngleDeg() {
+    return _peaks.hasData() ? _peaks.maxValue() : readAngleDeg();
+}
+
 void AngleSensor::calibrate() {
     _offsetDeg = _filteredRawDeg;
+
+    // Os extremos guardados são relativos ao zero antigo — mantê-los depois de
+    // mover o zero reportaria mínimos e máximos que nunca aconteceram.
+    _peaks.reset();
 }

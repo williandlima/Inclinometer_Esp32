@@ -44,12 +44,20 @@ class BleAngleDataSource(
 
     private var gatt: BluetoothGatt? = null
     private var calibrateCharacteristic: BluetoothGattCharacteristic? = null
+    private var resetPeaksCharacteristic: BluetoothGattCharacteristic? = null
     private var vibrationConfigCharacteristic: BluetoothGattCharacteristic? = null
 
     // Último azimute notificado, anexado à próxima leitura de tilt. Fica
     // `null` até a primeira notificação de pan chegar — e para sempre, se o
     // firmware for anterior à v1.2.0 e não tiver esse eixo.
     @Volatile private var lastPanDeg: Double? = null
+
+    // Idem para os extremos medidos pelo firmware (v1.5.0+): chegam num pacote
+    // só e são notificados apenas quando mudam, então o último recebido
+    // continua valendo. `peaksIgnoreUntilMs` é o fim da janela de graça após
+    // um reset — ver [BleContract.PEAKS_RESET_GRACE_MS].
+    @Volatile private var lastPeaks: DoubleArray? = null
+    @Volatile private var peaksIgnoreUntilMs: Long = 0L
 
     private var pendingWriteContinuation: CancellableContinuation<Unit>? = null
     private var vibrationStatusListener: ((status: Int, progress: Int, totalSamples: Int) -> Unit)? = null
@@ -100,6 +108,10 @@ class BleAngleDataSource(
                     return
                 }
                 calibrateCharacteristic = service.getCharacteristic(BleContract.CALIBRATE_CHARACTERISTIC_UUID)
+                // Ausentes em firmware anterior à v1.5.0: sem elas o app volta
+                // a calcular os extremos a partir das leituras.
+                resetPeaksCharacteristic =
+                    service.getCharacteristic(BleContract.RESET_PEAKS_CHARACTERISTIC_UUID)
                 vibrationConfigCharacteristic =
                     service.getCharacteristic(BleContract.VIBRATION_CONFIG_CHARACTERISTIC_UUID)
                 val vibrationStatusChar = service.getCharacteristic(BleContract.VIBRATION_STATUS_CHARACTERISTIC_UUID)
@@ -111,11 +123,13 @@ class BleAngleDataSource(
                 // o eixo de tilt, sem derrubar nada.
                 val vibrationPanDataChar =
                     service.getCharacteristic(BleContract.VIBRATION_PAN_DATA_CHARACTERISTIC_UUID)
+                val peaksChar = service.getCharacteristic(BleContract.PEAKS_CHARACTERISTIC_UUID)
 
                 // Enfileiradas: ver nota da classe sobre operações GATT
                 // seriais no Android.
                 enqueueGattOperation { enableNotify(g, angleCharacteristic) }
                 panChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
+                peaksChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
                 vibrationStatusChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
                 vibrationDataChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
                 vibrationPanDataChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
@@ -149,6 +163,7 @@ class BleAngleDataSource(
                     // Só sobrescreve com um valor válido: uma notificação
                     // malformada não deve apagar o último azimute conhecido.
                     BleContract.PAN_CHARACTERISTIC_UUID -> decodeAngle(raw)?.let { lastPanDeg = it }
+                    BleContract.PEAKS_CHARACTERISTIC_UUID -> decodePeaks(raw)?.let { lastPeaks = it }
                     BleContract.VIBRATION_STATUS_CHARACTERISTIC_UUID -> handleVibrationStatus(raw)
                     BleContract.VIBRATION_DATA_CHARACTERISTIC_UUID -> handleVibrationData(raw, pan = false)
                     BleContract.VIBRATION_PAN_DATA_CHARACTERISTIC_UUID ->
@@ -177,15 +192,34 @@ class BleAngleDataSource(
                 return rawValue.toShort() / BleContract.ANGLE_SCALE
             }
 
+            /** 4 int16 LE: tilt mín, tilt máx, pan mín, pan máx. */
+            private fun decodePeaks(raw: ByteArray): DoubleArray? {
+                if (raw.size < 8) return null
+                return DoubleArray(4) { i ->
+                    val lo = raw[i * 2].toInt() and 0xFF
+                    val hi = raw[i * 2 + 1].toInt() and 0xFF
+                    ((hi shl 8) or lo).toShort() / BleContract.ANGLE_SCALE
+                }
+            }
+
             private fun emitAngleFromBytes(raw: ByteArray) {
                 val angle = decodeAngle(raw) ?: return
-                // A notificação de tilt é o gatilho da leitura; o pan entra
-                // com o último valor recebido — ver [BleContract].
+                // A notificação de tilt é o gatilho da leitura; o pan e os
+                // extremos entram com o último valor recebido — ver
+                // [BleContract]. Na janela de graça após um reset os extremos
+                // do dispositivo são descartados, porque um pacote com os
+                // valores antigos pode estar em trânsito.
+                val peaks = lastPeaks
+                    ?.takeIf { System.currentTimeMillis() >= peaksIgnoreUntilMs }
                 trySend(
                     AngleReading(
                         angleDeg = angle,
                         timestamp = System.currentTimeMillis(),
                         panDeg = lastPanDeg,
+                        angleMinDeg = peaks?.get(0),
+                        angleMaxDeg = peaks?.get(1),
+                        panMinDeg = peaks?.get(2),
+                        panMaxDeg = peaks?.get(3),
                     )
                 )
             }
@@ -223,8 +257,11 @@ class BleAngleDataSource(
             gatt?.close()
             gatt = null
             calibrateCharacteristic = null
+            resetPeaksCharacteristic = null
             vibrationConfigCharacteristic = null
             lastPanDeg = null
+            lastPeaks = null
+            peaksIgnoreUntilMs = 0L
             gattOperationQueue.clear()
             gattOperationInFlight = false
         }
@@ -236,6 +273,20 @@ class BleAngleDataSource(
         val g = gatt ?: throw IOException("Não conectado ao dispositivo.")
         val characteristic = calibrateCharacteristic
             ?: throw IOException("Característica de calibração não encontrada.")
+        writeCharacteristic(g, characteristic, byteArrayOf(0x01))
+    }
+
+    override val supportsPeakReset: Boolean
+        get() = resetPeaksCharacteristic != null
+
+    override suspend fun resetPeaks() {
+        val g = gatt ?: throw IOException("Não conectado ao dispositivo.")
+        val characteristic = resetPeaksCharacteristic ?: return  // firmware anterior à v1.5.0
+
+        // Abre a janela de graça ANTES da escrita: qualquer notificação com os
+        // extremos antigos que chegue daqui em diante é descartada.
+        peaksIgnoreUntilMs = System.currentTimeMillis() + BleContract.PEAKS_RESET_GRACE_MS
+        lastPeaks = null
         writeCharacteristic(g, characteristic, byteArrayOf(0x01))
     }
 

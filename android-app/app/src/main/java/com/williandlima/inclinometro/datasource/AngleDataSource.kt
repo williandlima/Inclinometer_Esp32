@@ -25,6 +25,21 @@ interface AngleDataSource {
     suspend fun calibrate(): Unit =
         throw UnsupportedOperationException("Esta fonte de dados não suporta calibração.")
 
+    /**
+     * Indica se esta fonte mede os extremos no dispositivo e portanto precisa
+     * que [resetPeaks] seja chamado junto com o reset local dos limites. Por
+     * padrão, não — nesse caso os extremos são calculados no app e zerá-los
+     * ali basta.
+     */
+    val supportsPeakReset: Boolean get() = false
+
+    /**
+     * Manda o dispositivo esquecer os extremos, sem mexer no zero — diferente
+     * de [calibrate], que move a referência dos dois eixos. No-op por padrão,
+     * para o botão de reset da UI funcionar igual em qualquer fonte.
+     */
+    suspend fun resetPeaks() {}
+
     /** Indica se esta fonte suporta [startVibrationCapture]. Por padrão, não. */
     val supportsVibrationCapture: Boolean get() = false
 

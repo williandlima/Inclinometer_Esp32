@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "Mpu6050.h"
+#include "PeakHold.h"
 
 // Calcula o ângulo de azimute (pan) — a rotação em torno da vertical —
 // integrando o GIROSCÓPIO do MPU6050, relativo a um zero calibrado.
@@ -73,6 +74,33 @@ public:
     // integrador mantido por update().
     float readPanDeg();
 
+    // Extremos do pan acumulados desde o último reset/calibração, medidos a
+    // 100 Hz (ver PeakHold.h). Aqui o peak-hold é SIMPLES, sem filtro extra e
+    // sem teste de persistência, ao contrário do tilt — e por dois motivos:
+    //
+    // - não há ruído a filtrar. O ângulo de pan não vem do acelerômetro, vem
+    //   de uma integração cujo mecanismo de cancelamento de janela parada
+    //   (item 3 do cabeçalho acima) já deixa o valor cravado com o eixo
+    //   parado. Filtrar de novo só adicionaria atraso;
+    // - persistência aqui custaria caro. O motor gira a ~20-30°/s, então
+    //   100 ms de exigência de persistência cortariam 2-3° do ponto de
+    //   retorno de cada varredura — justamente o extremo que se quer registrar.
+    //
+    // O que o peak-hold resolve no pan é o outro problema: a 4-5 Hz de
+    // polling, uma varredura rápida do motor passa pelo extremo entre duas
+    // leituras do app e some.
+    //
+    // Efeito de borda conhecido: um movimento pequeno o bastante para a janela
+    // ainda ser classificada como parada (< ~1°, ver item 3) é cancelado no
+    // ângulo mas fica registrado no extremo, porque o peak-hold já o viu
+    // acontecer. O extremo é o valor honesto dos dois — o movimento existiu.
+    bool hasPeaks() const { return _peaks.hasData(); }
+    float minPanDeg();
+    float maxPanDeg();
+
+    // Esquece os extremos sem mexer no zero — o botão de reset dos apps.
+    void resetPeaks() { _peaks.reset(); }
+
     // Zera o pan na posição atual e reinicia a estimativa de bias do giro —
     // a próxima janela vira a nova referência de "parado". Chamado junto com
     // AngleSensor::calibrate(), pela mesma ação de calibração dos apps.
@@ -112,6 +140,8 @@ private:
     float _windowRateSumDps = 0.0f;
     uint16_t _windowSamples = 0;
     float _windowDeltaDeg = 0.0f;  // quanto foi integrado nesta janela
+
+    PeakHold _peaks{1};  // sem teste de persistência — ver minPanDeg() acima
 
     // Fecha a janela corrente: decide se estava parada, atualiza o bias e
     // cancela a integração da janela em caso afirmativo.

@@ -17,9 +17,20 @@ consistentes:
   máximo um ciclo de notify (~200ms) e só em caso de pacote perdido.
   Firmware anterior à v1.2.0 não tem essa característica — o `start_notify`
   falha, o app segue só com o tilt e `pan_deg` fica `None`.
+- Extremos (mín/máx de cada eixo): característica `PEAKS_CHARACTERISTIC_UUID`,
+  8 bytes = 4 int16 LE na escala do ângulo — tilt mín, tilt máx, pan mín, pan
+  máx. Quem os mede é o firmware, e não o app, porque ele vê o sensor a
+  100 Hz enquanto o notify chega a 5 Hz: uma rajada de vento de meio segundo
+  acontece inteira entre duas notificações. O firmware só notifica quando o
+  valor muda (extremo fica parado quase o tempo todo), então o último pacote
+  recebido continua valendo. Firmware anterior à v1.5.0 não tem essa
+  característica — o app volta a calcular os extremos a partir das leituras.
+- Reset dos extremos: escrever `0x01` em `RESET_PEAKS_CHARACTERISTIC_UUID`
+  faz o firmware esquecê-los sem mexer no zero.
 - Calibração: escrever o byte `0x01` na característica
   `CALIBRATE_CHARACTERISTIC_UUID` sinaliza ao firmware para zerar **os dois
-  eixos** na posição atual (equivalente à coil Modbus usada no modo USB).
+  eixos** na posição atual (equivalente à coil Modbus usada no modo USB), o
+  que zera os extremos junto.
 - Captura de vibração (leitura em alta taxa, para caracterizar variação
   angular por vento/vibração — o notify normal já é "tempo real", mas numa
   taxa que depende do firmware; este modo pede uma taxa/duração explícitas):
@@ -74,8 +85,14 @@ VIBRATION_DATA_CHARACTERISTIC_UUID = "6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 FIRMWARE_VERSION_CHARACTERISTIC_UUID = "6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 PAN_CHARACTERISTIC_UUID = "6e6e0008-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_PAN_DATA_CHARACTERISTIC_UUID = "6e6e0009-3c17-4a2e-8f4b-1a2b3c4d5e6f"
+PEAKS_CHARACTERISTIC_UUID = "6e6e000a-3c17-4a2e-8f4b-1a2b3c4d5e6f"
+RESET_PEAKS_CHARACTERISTIC_UUID = "6e6e000b-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 ANGLE_SCALE = 100.0
 PAN_RATE_SCALE = 100.0  # amostra = graus/s * 100 (int16, faixa +-327°/s)
+# Quanto tempo os extremos vindos do dispositivo são ignorados após um pedido
+# de reset. Só precisa cobrir a latência de uma notificação BLE em trânsito —
+# ver `BleAngleSource.reset_peaks`.
+PEAKS_RESET_GRACE_S = 1.0
 CONNECT_TIMEOUT_S = 10.0
 VIBRATION_TIMEOUT_MARGIN_S = 30.0
 
@@ -85,6 +102,17 @@ def _decode_angle(raw: bytearray | bytes) -> float:
         raise IOError("Resposta BLE inválida (esperado ao menos 2 bytes).")
     raw_value = raw[0] | (raw[1] << 8)
     return _to_signed16(raw_value) / ANGLE_SCALE
+
+
+def _decode_peaks(raw: bytearray | bytes) -> tuple[float, float, float, float]:
+    """Decodifica o pacote de extremos: 4 int16 LE — tilt mín, tilt máx,
+    pan mín, pan máx — todos em `graus * ANGLE_SCALE`."""
+    if len(raw) < 8:
+        raise IOError("Pacote de extremos BLE inválido (esperado ao menos 8 bytes).")
+    values = tuple(
+        _to_signed16(raw[i * 2] | (raw[i * 2 + 1] << 8)) / ANGLE_SCALE for i in range(4)
+    )
+    return values  # type: ignore[return-value]
 
 
 def _to_signed16(raw: int) -> int:
@@ -152,6 +180,11 @@ class BleAngleSource(IAngleDataSource):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client = None
 
+        # Extremos medidos pelo firmware (v1.5.0+). `_peaks_ignore_until` é o
+        # fim da janela de graça após um reset — ver `_handle_notify`.
+        self._peaks_subscribed = False
+        self._peaks_ignore_until = 0.0
+
     @property
     def label(self) -> str:
         return f"Bluetooth BLE ({self._device_address})"
@@ -170,6 +203,30 @@ class BleAngleSource(IAngleDataSource):
             raise RuntimeError("Não conectado ao dispositivo.")
         future = asyncio.run_coroutine_threadsafe(
             self._client.write_gatt_char(CALIBRATE_CHARACTERISTIC_UUID, bytes([0x01]), response=True),
+            self._loop,
+        )
+        future.result(timeout=5.0)
+
+    @property
+    def supports_peak_reset(self) -> bool:
+        return self._peaks_subscribed
+
+    def reset_peaks(self) -> None:
+        """Manda o ESP32 esquecer os extremos dos dois eixos, sem mexer no zero.
+
+        Bloqueante — deve ser chamado fora da thread da UI.
+        """
+        if not self._peaks_subscribed:
+            return
+        if self._loop is None or self._client is None:
+            raise RuntimeError("Não conectado ao dispositivo.")
+
+        # Abre a janela de graça ANTES da escrita: qualquer notificação com os
+        # extremos antigos que chegue daqui em diante é descartada. Ver
+        # `_handle_notify`.
+        self._peaks_ignore_until = time.monotonic() + PEAKS_RESET_GRACE_S
+        future = asyncio.run_coroutine_threadsafe(
+            self._client.write_gatt_char(RESET_PEAKS_CHARACTERISTIC_UUID, bytes([0x01]), response=True),
             self._loop,
         )
         future.result(timeout=5.0)
@@ -302,9 +359,20 @@ class BleAngleSource(IAngleDataSource):
         # dentro dos callbacks aninhados sem `nonlocal`.
         last_pan: list[float | None] = [None]
 
+        # Idem para os extremos: chegam numa característica própria e num
+        # pacote só, e o firmware só os notifica quando mudam — então o último
+        # recebido continua valendo entre notificações.
+        last_peaks: list[tuple[float, float, float, float] | None] = [None]
+
         def _handle_pan_notify(_characteristic, raw: bytearray) -> None:
             try:
                 last_pan[0] = _decode_angle(raw)
+            except Exception:  # noqa: BLE001 - notificação malformada, ignora
+                return
+
+        def _handle_peaks_notify(_characteristic, raw: bytearray) -> None:
+            try:
+                last_peaks[0] = _decode_peaks(raw)
             except Exception:  # noqa: BLE001 - notificação malformada, ignora
                 return
 
@@ -313,7 +381,28 @@ class BleAngleSource(IAngleDataSource):
                 angle = _decode_angle(raw)
             except Exception:  # noqa: BLE001 - notificação malformada, ignora
                 return
-            on_reading(AngleReading(angle_deg=angle, pan_deg=last_pan[0], timestamp=time.time()))
+
+            # Descarta os extremos durante a janela de graça após um reset:
+            # a escrita BLE é assíncrona, então uma notificação com os valores
+            # ANTIGOS pode estar em trânsito. Como mín/máx só andam para fora,
+            # um único pacote atrasado envenenaria a faixa nova de forma
+            # permanente. Nessa janela o app usa a própria leitura, que é o
+            # comportamento correto e temporário.
+            peaks = last_peaks[0]
+            if peaks is not None and time.monotonic() < self._peaks_ignore_until:
+                peaks = None
+
+            on_reading(
+                AngleReading(
+                    angle_deg=angle,
+                    pan_deg=last_pan[0],
+                    timestamp=time.time(),
+                    angle_min_deg=peaks[0] if peaks else None,
+                    angle_max_deg=peaks[1] if peaks else None,
+                    pan_min_deg=peaks[2] if peaks else None,
+                    pan_max_deg=peaks[3] if peaks else None,
+                )
+            )
 
         try:
             async with BleakClient(self._device_address, timeout=CONNECT_TIMEOUT_S) as client:
@@ -330,9 +419,20 @@ class BleAngleSource(IAngleDataSource):
                     if on_error:
                         on_error("Firmware sem eixo de azimute (pan) — seguindo só com a inclinação.")
 
+                # Firmware anterior à v1.5.0 não mede os extremos: o app volta
+                # a calculá-los a partir das leituras. Sem aviso na UI, porque
+                # nada some da tela — só a fidelidade em eventos curtos cai.
+                try:
+                    await client.start_notify(PEAKS_CHARACTERISTIC_UUID, _handle_peaks_notify)
+                    self._peaks_subscribed = True
+                except Exception:  # noqa: BLE001
+                    self._peaks_subscribed = False
+
                 while not self._stop_event.is_set():
                     await asyncio.sleep(0.2)
 
+                if self._peaks_subscribed:
+                    await client.stop_notify(PEAKS_CHARACTERISTIC_UUID)
                 if pan_subscribed:
                     await client.stop_notify(PAN_CHARACTERISTIC_UUID)
                 await client.stop_notify(ANGLE_CHARACTERISTIC_UUID)
@@ -341,3 +441,4 @@ class BleAngleSource(IAngleDataSource):
                 on_error(f"Erro BLE: {exc}")
         finally:
             self._client = None
+            self._peaks_subscribed = False

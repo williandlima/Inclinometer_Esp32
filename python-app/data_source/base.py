@@ -44,6 +44,22 @@ class AngleReading:
     # estatísticas no tempo precisam do ângulo. Ver `limits.vibration_stats`.
     pan_rate_dps: float | None = None
 
+    # Extremos medidos pelo próprio firmware desde a última calibração/reset,
+    # a partir da v1.5.0. Ficam `None` com firmware mais antigo, e aí o app
+    # calcula os extremos por conta própria a partir das leituras (ver
+    # `limits.limit_tracker`).
+    #
+    # Por que o firmware faz isso melhor que o app: ele amostra a 100 Hz,
+    # enquanto o app só recebe leituras a 4-5 Hz (poll Modbus de 250 ms,
+    # notify BLE de 200 ms) e ainda por cima recebe o valor suavizado para a
+    # tela. Uma rajada de vento real de 2° durando meio segundo chegava aqui
+    # como 0,78°; medida no firmware, chega como 1,76°. Ver o bloco
+    # ANGLE_PEAK_* em firmware/src/Config.h.
+    angle_min_deg: float | None = None
+    angle_max_deg: float | None = None
+    pan_min_deg: float | None = None
+    pan_max_deg: float | None = None
+
 
 def build_vibration_readings(
     angles_deg: list[float],
@@ -119,6 +135,23 @@ class IAngleDataSource(ABC):
         `NotImplementedError` se a fonte não suportar.
         """
         raise NotImplementedError("Esta fonte de dados não suporta calibração.")
+
+    @property
+    def supports_peak_reset(self) -> bool:
+        """Indica se esta fonte mede os extremos no dispositivo e portanto
+        precisa que `reset_peaks()` seja chamado junto com o reset local dos
+        limites. Por padrão, não — nesse caso os extremos são calculados no
+        app e zerá-los ali basta."""
+        return False
+
+    def reset_peaks(self) -> None:
+        """Manda o dispositivo esquecer os extremos, sem mexer no zero.
+
+        Diferente de `calibrate()`, que move a referência dos dois eixos.
+        Chamada de forma síncrona (bloqueante) pelo chamador. No-op por
+        padrão, para o botão de reset da UI funcionar igual em qualquer fonte.
+        """
+        return
 
     @property
     def supports_vibration_capture(self) -> bool:

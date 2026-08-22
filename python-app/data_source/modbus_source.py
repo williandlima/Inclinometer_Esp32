@@ -9,23 +9,30 @@ pode voltar a quebrar com `unexpected keyword argument`.
 Contrato com o firmware do ESP32: a inclinação (tilt) é exposta no
 registrador de entrada (input register) `ANGLE_INPUT_REGISTER` e o azimute
 (pan) em `PAN_INPUT_REGISTER`, ambos como inteiro de 16 bits **com sinal**
-igual a `angulo * SCALE` (duas casas decimais de resolução). Por serem
-registradores contíguos, os dois eixos são lidos numa única transação. O
-rastreamento de mínimo/máximo é feito no próprio app
-(`limits.limit_tracker`), não depende de registradores extras no escravo —
-assim o contrato Modbus fica mínimo e estável.
+igual a `angulo * SCALE` (duas casas decimais de resolução). Logo depois vêm
+os quatro registradores de extremo (mín/máx de cada eixo), na mesma
+codificação. Os seis são contíguos de propósito: saem numa transação só.
 
-Compatibilidade com firmware anterior à v1.2.0 (que não tem o eixo de pan):
-aquele firmware responde com exceção de "endereço inválido" ao ver o
-registrador 1, derrubando a leitura dos dois eixos junto. Por isso a leitura
-começa pedindo os dois registradores e, se o escravo responder com uma
-*exceção Modbus*, passa a pedir só o de tilt dali em diante, com `pan_deg`
-ficando `None`. A degradação é só para exceção do escravo — erro de
-transporte (timeout, CRC) não desabilita o pan, senão uma falha passageira
-de cabo deixaria o eixo desligado pelo resto da sessão.
+Os extremos são medidos pelo firmware, e não pelo app, desde a v1.5.0. A
+razão é de amostragem: o firmware vê o sensor a 100 Hz, este poll roda a
+4 Hz, e uma rajada de vento de meio segundo — justamente o que o relatório
+existe para registrar — acontece inteira entre duas leituras daqui. Ver o
+bloco ANGLE_PEAK_* em firmware/src/Config.h. Contra firmware antigo o app
+volta a calcular os extremos por conta própria (`limits.limit_tracker`).
+
+Compatibilidade com firmware antigo: um firmware que não conhece um
+registrador responde com exceção de "endereço inválido" e derruba a leitura
+inteira junto. Por isso a leitura começa pedindo os seis registradores e, a
+cada *exceção Modbus*, encolhe o pedido de forma permanente — seis (com
+extremos, v1.5.0+), dois (só os dois eixos, v1.2.0+) ou um (só tilt). A
+degradação é só para exceção do escravo: erro de transporte (timeout, CRC)
+não desabilita nada, senão uma falha passageira de cabo deixaria recursos
+desligados pelo resto da sessão.
 
 Calibração: escrever `True` na coil `CALIBRATE_COIL` sinaliza ao firmware
-para zerar **os dois eixos** na posição atual (novo "zero" mecânico).
+para zerar **os dois eixos** na posição atual (novo "zero" mecânico), o que
+zera os extremos junto. Para esquecer só os extremos, sem mexer no zero,
+escreve-se `True` em `RESET_PEAKS_COIL`.
 
 Captura de vibração (leitura em alta taxa, usada para caracterizar variação
 angular por vento/vibração — o poll normal de ~250ms é lento demais para
@@ -76,8 +83,13 @@ BOARD_RESET_GRACE_S = 2.5
 
 ANGLE_INPUT_REGISTER = 0
 PAN_INPUT_REGISTER = 1  # contíguo ao de tilt de propósito: os dois saem numa leitura só
+# Extremos medidos pelo firmware, contíguos aos dois acima (registradores 2 a
+# 5): tilt mín, tilt máx, pan mín, pan máx.
+ANGLE_MIN_INPUT_REGISTER = 2
+PEAK_REGISTER_COUNT = 6  # os seis registradores lidos numa transação só
 ANGLE_SCALE = 100.0  # registrador = ângulo * 100 (int16, resolução de 0.01°)
 CALIBRATE_COIL = 0
+RESET_PEAKS_COIL = 2  # esquece os extremos sem mexer no zero
 FIRMWARE_VERSION_REGISTER = 40  # registrador = major*10000 + minor*100 + patch (ex: "1.0.0" -> 10000)
 
 VIBRATION_START_COIL = 1
@@ -115,32 +127,66 @@ def _is_slave_exception(result) -> bool:
     return getattr(result, "exception_code", None) is not None
 
 
-def _read_axes(client, slave_id: int, pan_supported: bool) -> tuple[float, float | None, bool]:
-    """Lê tilt (e pan, quando disponível) do escravo.
+class SlaveCapabilities:
+    """O que o firmware conectado sabe responder.
 
-    Retorna `(angle_deg, pan_deg | None, pan_supported)` — o terceiro item é
-    o valor atualizado da flag, que fica `False` depois que o escravo rejeita
-    o registrador de pan (firmware anterior à v1.2.0). Levanta `IOError` em
-    falha de transporte.
+    Cada flag cai para `False` de forma permanente quando o escravo rejeita o
+    bloco correspondente com uma exceção Modbus — ver "Compatibilidade com
+    firmware antigo" no cabeçalho do módulo. Fica numa instância mutável (e
+    não em flags devolvidas pela função) para o estado ser um só, mesmo com a
+    leitura sendo chamada de lugares diferentes.
     """
-    if pan_supported:
+
+    def __init__(self) -> None:
+        self.pan = True
+        self.peaks = True
+
+
+class AxisSample(NamedTuple):
+    """Uma leitura dos eixos, com os extremos quando o firmware os fornece."""
+
+    angle_deg: float
+    pan_deg: float | None = None
+    angle_min_deg: float | None = None
+    angle_max_deg: float | None = None
+    pan_min_deg: float | None = None
+    pan_max_deg: float | None = None
+
+
+def _read_axes(client, slave_id: int, caps: SlaveCapabilities) -> AxisSample:
+    """Lê os eixos do escravo, com os extremos quando disponíveis.
+
+    Encolhe o pedido conforme o escravo rejeita registradores, atualizando
+    `caps`. Levanta `IOError` em falha de transporte.
+    """
+    if caps.peaks:
+        result = client.read_input_registers(
+            address=ANGLE_INPUT_REGISTER, count=PEAK_REGISTER_COUNT, device_id=slave_id
+        )
+        if not result.isError():
+            values = [_to_signed16(raw) / ANGLE_SCALE for raw in result.registers]
+            return AxisSample(*values)
+        if not _is_slave_exception(result):
+            raise IOError(str(result))
+        caps.peaks = False  # firmware anterior à v1.5.0: extremos ficam por conta do app
+
+    if caps.pan:
         result = client.read_input_registers(
             address=ANGLE_INPUT_REGISTER, count=2, device_id=slave_id
         )
         if not result.isError():
-            return (
+            return AxisSample(
                 _to_signed16(result.registers[0]) / ANGLE_SCALE,
                 _to_signed16(result.registers[1]) / ANGLE_SCALE,
-                True,
             )
         if not _is_slave_exception(result):
             raise IOError(str(result))
-        pan_supported = False  # firmware sem eixo de pan: segue só com o tilt
+        caps.pan = False  # firmware sem eixo de pan: segue só com o tilt
 
     result = client.read_input_registers(address=ANGLE_INPUT_REGISTER, count=1, device_id=slave_id)
     if result.isError():
         raise IOError(str(result))
-    return _to_signed16(result.registers[0]) / ANGLE_SCALE, None, pan_supported
+    return AxisSample(_to_signed16(result.registers[0]) / ANGLE_SCALE)
 
 
 class ConnectionTestResult(NamedTuple):
@@ -162,14 +208,14 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
         if not client.connect():
             raise IOError(f"Não foi possível abrir a porta serial {port}.")
         time.sleep(BOARD_RESET_GRACE_S)  # ver BOARD_RESET_GRACE_S: a porta abrir já reseta o ESP32
-        angle_deg, pan_deg, _ = _read_axes(client, slave_id, pan_supported=True)
+        sample = _read_axes(client, slave_id, SlaveCapabilities())
 
         version_result = client.read_input_registers(address=FIRMWARE_VERSION_REGISTER, count=1, device_id=slave_id)
         firmware_version = (
             _decode_firmware_version(version_result.registers[0]) if not version_result.isError() else "?"
         )
 
-        return ConnectionTestResult(angle_deg, firmware_version, pan_deg)
+        return ConnectionTestResult(sample.angle_deg, firmware_version, sample.pan_deg)
     finally:
         client.close()
 
@@ -198,9 +244,9 @@ class ModbusAngleSource(IAngleDataSource):
         self._vibration_thread: threading.Thread | None = None
         self._vibration_stop_event = threading.Event()
 
-        # Vira False se o escravo rejeitar o registrador de pan (firmware
-        # anterior à v1.2.0) — ver o cabeçalho do módulo.
-        self._pan_supported = True
+        # Encolhe conforme o escravo rejeita registradores — ver o cabeçalho
+        # do módulo.
+        self._caps = SlaveCapabilities()
 
     @property
     def label(self) -> str:
@@ -222,6 +268,33 @@ class ModbusAngleSource(IAngleDataSource):
             result = self._client.write_coil(address=CALIBRATE_COIL, value=True, device_id=self._slave_id)
             if result.isError():
                 raise IOError(str(result))
+
+    @property
+    def supports_peak_reset(self) -> bool:
+        return self._caps.peaks
+
+    def reset_peaks(self) -> None:
+        """Manda o escravo esquecer os extremos dos dois eixos.
+
+        Não há corrida com a leitura: a escrita e o poll compartilham
+        `_client_lock`, então nenhuma resposta com os extremos antigos pode
+        estar em trânsito quando esta função retorna.
+
+        Silenciosamente no-op se o firmware não conhecer a coil — nesse caso
+        os extremos são do app, e zerá-los ali já resolveu.
+        """
+        if not self._caps.peaks:
+            return
+        with self._client_lock:
+            if self._client is None:
+                raise RuntimeError("Não conectado ao dispositivo.")
+            result = self._client.write_coil(
+                address=RESET_PEAKS_COIL, value=True, device_id=self._slave_id
+            )
+            if result.isError():
+                if not _is_slave_exception(result):
+                    raise IOError(str(result))
+                self._caps.peaks = False
 
     @property
     def supports_vibration_capture(self) -> bool:
@@ -373,10 +446,10 @@ class ModbusAngleSource(IAngleDataSource):
             while not self._stop_event.is_set():
                 try:
                     with self._client_lock:
-                        angle, pan, self._pan_supported = _read_axes(
-                            client, self._slave_id, self._pan_supported
-                        )
-                    on_reading(AngleReading(angle_deg=angle, pan_deg=pan, timestamp=time.time()))
+                        sample = _read_axes(client, self._slave_id, self._caps)
+                    on_reading(
+                        AngleReading(timestamp=time.time(), **sample._asdict())
+                    )
                 except Exception as exc:  # noqa: BLE001 - reporta e segue tentando
                     if on_error:
                         on_error(f"Erro de leitura Modbus: {exc}")

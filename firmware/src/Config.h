@@ -22,8 +22,8 @@ constexpr int PIN_I2C_SCL = 22;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.4.0";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10400;
+constexpr char FIRMWARE_VERSION[] = "1.5.0";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10500;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -33,8 +33,17 @@ constexpr uint32_t MODBUS_BAUDRATE = 9600;
 
 constexpr uint16_t REG_ANGLE_INPUT = 0;       // input register: ângulo de tilt * ANGLE_SCALE (int16 com sinal, faixa -60~+60°)
 constexpr uint16_t REG_PAN_INPUT = 1;         // input register: ângulo de pan * ANGLE_SCALE (int16 com sinal, faixa PAN_MIN_DEG~PAN_MAX_DEG)
+// Extremos medidos pelo peak-hold do firmware (ver PeakHold.h), na mesma
+// codificação dos ângulos e relativos à mesma calibração. Ficam contíguos aos
+// registradores 0 e 1 de propósito: o app lê os seis de uma vez só, numa
+// única transação Modbus.
+constexpr uint16_t REG_ANGLE_MIN_INPUT = 2;
+constexpr uint16_t REG_ANGLE_MAX_INPUT = 3;
+constexpr uint16_t REG_PAN_MIN_INPUT = 4;
+constexpr uint16_t REG_PAN_MAX_INPUT = 5;
 constexpr uint16_t COIL_CALIBRATE = 0;        // coil: write true -> zera os dois eixos (tilt e pan)
 constexpr uint16_t COIL_VIBRATION_START = 1;  // coil: write true -> inicia captura de vibração
+constexpr uint16_t COIL_RESET_PEAKS = 2;      // coil: write true -> esquece os extremos dos dois eixos
 constexpr uint16_t REG_FIRMWARE_VERSION = 40; // input register: FIRMWARE_VERSION_CODE (somente leitura)
 
 constexpr uint16_t REG_VIBRATION_DURATION = 10;  // holding register: duração da captura (s)
@@ -72,6 +81,15 @@ constexpr char CHAR_PAN_UUID[] = "6e6e0008-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 // mudança ser aditiva: um app que não a conhece continua recebendo a captura
 // de tilt exatamente como antes.
 constexpr char CHAR_VIBRATION_PAN_DATA_UUID[] = "6e6e0009-3c17-4a2e-8f4b-1a2b3c4d5e6f";
+// Extremos do peak-hold, num pacote só de 8 bytes (int16 LE, x ANGLE_SCALE):
+// tiltMin, tiltMax, panMin, panMax. Os quatro juntos numa characteristic
+// porque são sempre lidos juntos e mudam devagar — e, como sempre, aditivo:
+// um app antigo simplesmente não a assina.
+constexpr char CHAR_PEAKS_UUID[] = "6e6e000a-3c17-4a2e-8f4b-1a2b3c4d5e6f";
+// Write de 0x01 -> esquece os extremos dos dois eixos. Separada da de
+// calibração porque são ações diferentes: calibrar move o zero, resetar os
+// extremos não mexe na leitura.
+constexpr char CHAR_RESET_PEAKS_UUID[] = "6e6e000b-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 constexpr uint32_t BLE_NOTIFY_INTERVAL_MS = 200;  // taxa de notificação do ângulo em modo contínuo
 constexpr uint32_t BLE_VIBRATION_STATUS_NOTIFY_INTERVAL_MS = 300;  // limita notify() de status/progresso durante a captura
 constexpr uint32_t BLE_VIBRATION_CHUNK_INTERVAL_MS = 20;  // intervalo entre pacotes de dados da captura (evita congestionar o BLE)
@@ -124,6 +142,37 @@ constexpr uint32_t ANGLE_SAMPLE_INTERVAL_MS = 10;  // 100Hz de amostragem intern
 constexpr float ANGLE_FILTER_MIN_CUTOFF_HZ = 0.02f;
 constexpr float ANGLE_FILTER_BETA = 0.15f;
 constexpr float ANGLE_FILTER_DERIV_CUTOFF_HZ = 0.3f;
+
+// ============================================================================
+// Caminho de MEDIDA (mín/máx, histórico e relatório) — separado do caminho de
+// TELA logo acima, e de propósito.
+//
+// O filtro da tela precisa ser pesado: o display tem passo de 0,25° e não pode
+// tremular. Só que o mesmo valor suavizado alimentava os extremos — e aí uma
+// rajada de vento real entrava no relatório achatada. Simulação da cadeia
+// completa, rajada verdadeira de 2,0°, percentual do pico que chegava ao
+// mín/máx:
+//
+//   duração da rajada       : 0,3s   0,5s   1,0s   2,0s
+//   valor da tela, a 4-5 Hz :  24%    39%    64%    80%
+//   este caminho, a 100 Hz  :  76%    88%    96%    99%
+//
+// São dois problemas somados: o filtro pesado achata o pico, e o app só
+// amostra a 4-5 Hz, então nem o que sobra ele pega. Por isso o extremo é
+// calculado aqui dentro, a 100 Hz (ver PeakHold.h), e transmitido pronto.
+//
+// PEAK_CUTOFF é o corte do filtro leve que alimenta o peak-hold. 3 Hz cobre a
+// banda física do balanço do mastro (1-5 Hz) sem deixar passar o ruído de
+// alta frequência do acelerômetro.
+//
+// PEAK_PERSIST_SAMPLES é o que impede o ruído restante de virar extremo: com
+// o eixo parado por 10 min, a faixa mín/máx falsa sai de 0,34° (só o filtro
+// de 3 Hz) para 0,24° (com 100 ms de persistência) — abaixo de um passo de
+// tela — sem perder captura de rajada.
+// ============================================================================
+constexpr float ANGLE_PEAK_CUTOFF_HZ = 3.0f;
+constexpr uint8_t ANGLE_PEAK_PERSIST_SAMPLES = 10;  // 10 amostras a 100 Hz = 100 ms
+
 constexpr uint16_t VIBRATION_MAX_SAMPLES = 6000;  // limite de memória do buffer de captura
 
 // ============================================================================

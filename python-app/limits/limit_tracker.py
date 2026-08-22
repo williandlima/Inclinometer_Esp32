@@ -8,9 +8,22 @@ Cada instância rastreia **um eixo**. O app cria duas: uma para a inclinação
 medido — `pan_deg is None`, caso de um ESP32 com firmware anterior à v1.2.0 —
 são simplesmente ignoradas, em vez de contarem como zero e poluírem os
 extremos.
+
+DE ONDE VEM O EXTREMO. A partir do firmware v1.5.0, quem mede os extremos é o
+próprio ESP32, e a leitura os traz prontos (`angle_min_deg` e companhia). Este
+rastreador então apenas os acompanha, em vez de calculá-los. O motivo é de
+amostragem, não de código: o firmware vê o sensor a 100 Hz, o app vê a 4-5 Hz,
+e um evento curto — a rajada de vento que o relatório existe para registrar —
+acontece inteiro entre duas leituras do app.
+
+Sem esses campos (firmware antigo, modo simulação) o cálculo volta a ser feito
+aqui, a partir das leituras recebidas, exatamente como antes. As duas fontes
+convivem por eixo: dá para o tilt vir do dispositivo e o pan ser calculado
+aqui, se for isso que o firmware conectado oferecer.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 from data_source.base import AngleReading
@@ -67,6 +80,24 @@ class LimitTracker:
     def _value(self, reading: AngleReading) -> float | None:
         return reading.pan_deg if self._axis == PAN_AXIS else reading.angle_deg
 
+    def _device_peak(self, reading: AngleReading, kind: str) -> float | None:
+        """Extremo medido pelo firmware para o eixo deste rastreador, se houver."""
+        if self._axis == PAN_AXIS:
+            return reading.pan_min_deg if kind == "min" else reading.pan_max_deg
+        return reading.angle_min_deg if kind == "min" else reading.angle_max_deg
+
+    def _as_extreme(self, reading: AngleReading, value: float) -> AngleReading:
+        """Leitura que representa um extremo vindo do dispositivo.
+
+        O extremo do firmware é só um número — não vem acompanhado do instante
+        em que aconteceu. Aqui ele é ancorado na leitura que o trouxe, com o
+        valor do eixo rastreado substituído pelo extremo. O carimbo de tempo
+        fica portanto até um intervalo de poll (~250 ms) depois do evento real;
+        o VALOR, que é o que vai para o relatório, é exato.
+        """
+        field = "pan_deg" if self._axis == PAN_AXIS else "angle_deg"
+        return dataclasses.replace(reading, **{field: value})
+
     def process(self, reading: AngleReading) -> list[LimitEvent]:
         """Atualiza os extremos e retorna os eventos de novo limite (0, 1 ou 2).
 
@@ -78,14 +109,23 @@ class LimitTracker:
 
         events: list[LimitEvent] = []
 
-        current_min = None if self._min_reading is None else self._value(self._min_reading)
-        if current_min is None or value < current_min:
-            self._min_reading = reading
-            events.append(LimitEvent(kind="min", reading=reading, axis=self._axis))
+        for kind in ("min", "max"):
+            peak = self._device_peak(reading, kind)
+            candidate = value if peak is None else peak
+            candidate_reading = reading if peak is None else self._as_extreme(reading, candidate)
 
-        current_max = None if self._max_reading is None else self._value(self._max_reading)
-        if current_max is None or value > current_max:
-            self._max_reading = reading
-            events.append(LimitEvent(kind="max", reading=reading, axis=self._axis))
+            previous = self._min_reading if kind == "min" else self._max_reading
+            current = None if previous is None else self._value(previous)
+            improved = current is None or (
+                candidate < current if kind == "min" else candidate > current
+            )
+            if not improved:
+                continue
+
+            if kind == "min":
+                self._min_reading = candidate_reading
+            else:
+                self._max_reading = candidate_reading
+            events.append(LimitEvent(kind=kind, reading=candidate_reading, axis=self._axis))
 
         return events

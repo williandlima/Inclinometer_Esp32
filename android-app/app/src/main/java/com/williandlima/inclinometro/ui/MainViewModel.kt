@@ -343,9 +343,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun resetLimits() {
         val wasRunning = _uiState.value.running
         val mode = _uiState.value.mode
-        tracker.reset()
-        panTracker.reset()
         viewModelScope.launch {
+            // Com firmware v1.5.0+ quem guarda os extremos é o ESP32 (ver
+            // [LimitTracker]). Zerar só o lado do app não adiantaria: a
+            // próxima notificação traria os extremos antigos de volta.
+            //
+            // A ordem importa e é esta: dispositivo primeiro, rastreadores
+            // depois. Invertida, uma leitura chegando durante a escrita BLE
+            // (que suspende) reintroduziria os extremos antigos — e, como
+            // mín/máx só andam para fora, eles ficariam.
+            val source = currentSource
+            if (source != null && source.supportsPeakReset) {
+                runCatching { source.resetPeaks() }
+            }
+            tracker.reset()
+            panTracker.reset()
+
             if (wasRunning) {
                 currentSessionId?.let { repository.endSession(it) }
                 currentSessionId = repository.startSession(mode)

@@ -397,6 +397,23 @@ class MainWindow(QMainWindow):
         if was_running:
             self._history.end_session()
             self._history.start_session(mode=mode)
+
+        # Com firmware v1.5.0+ quem guarda os extremos é o ESP32 (ver
+        # `limits.limit_tracker`). Zerar só o lado do app não adiantaria: a
+        # próxima leitura traria os extremos antigos de volta.
+        #
+        # A ordem importa e é esta: dispositivo primeiro, rastreadores depois.
+        # Invertida, uma leitura chegando no meio reintroduziria os extremos
+        # antigos — e, como mín/máx só andam para fora, eles ficariam. É por
+        # isso também que esta chamada é síncrona aqui na thread da UI, e não
+        # num worker: as leituras chegam por signal do Qt, ou seja, nesta mesma
+        # thread, então nada consegue se intercalar entre as duas etapas.
+        if self._source is not None and self._source.supports_peak_reset:
+            try:
+                self._source.reset_peaks()
+            except Exception as exc:  # noqa: BLE001 - reset local segue de qualquer forma
+                self.statusBar().showMessage(f"Falha ao resetar os extremos no dispositivo: {exc}")
+
         for axis, tracker in self._trackers.items():
             tracker.reset()
             widgets = self._axis_widgets[axis]
