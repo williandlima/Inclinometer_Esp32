@@ -48,6 +48,14 @@ consistentes:
 Usa a biblioteca `bleak` (multiplataforma: Windows/Linux/macOS), importada
 localmente para não exigir a dependência quando só o modo simulado ou
 USB/Modbus RTU forem usados.
+
+Detecção de queda de conexão: como a leitura contínua é por notify (e não
+por polling, como no Modbus), uma leitura que falha não é o sinal de que a
+conexão caiu — as notificações simplesmente parariam de chegar, em
+silêncio. Por isso `_run_async` usa o `disconnected_callback` da `bleak`,
+que o backend do sistema operacional (BlueZ/WinRT/CoreBluetooth) aciona
+tão logo detecta a queda (ESP32 desligado, fora de alcance, etc.), e só
+então o app reporta o erro pela UI.
 """
 from __future__ import annotations
 
@@ -302,6 +310,21 @@ class BleAngleSource(IAngleDataSource):
         # dentro dos callbacks aninhados sem `nonlocal`.
         last_pan: list[float | None] = [None]
 
+        # Sem isso, o app não tem como notar que o ESP32 desligou ou saiu de
+        # alcance: as notificações simplesmente param de chegar, e o loop
+        # abaixo (que só dorme esperando `_stop_event`) continua rodando
+        # indefinidamente com a última leitura na tela, como se a conexão
+        # ainda estivesse ativa. A `bleak` chama `disconnected_callback`
+        # (síncrono, no loop de eventos do próprio client) tão logo o
+        # backend do sistema (BlueZ/WinRT/CoreBluetooth) detecta a queda —
+        # é esse sinal, e não uma leitura que falha, que expõe a desconexão
+        # aqui, já que o transporte é por notify, não por polling.
+        disconnected = asyncio.Event()
+        disconnected_reported = False
+
+        def _handle_disconnect(_client) -> None:
+            disconnected.set()
+
         def _handle_pan_notify(_characteristic, raw: bytearray) -> None:
             try:
                 last_pan[0] = _decode_angle(raw)
@@ -316,7 +339,9 @@ class BleAngleSource(IAngleDataSource):
             on_reading(AngleReading(angle_deg=angle, pan_deg=last_pan[0], timestamp=time.time()))
 
         try:
-            async with BleakClient(self._device_address, timeout=CONNECT_TIMEOUT_S) as client:
+            async with BleakClient(
+                self._device_address, timeout=CONNECT_TIMEOUT_S, disconnected_callback=_handle_disconnect
+            ) as client:
                 self._client = client
                 await client.start_notify(ANGLE_CHARACTERISTIC_UUID, _handle_notify)
 
@@ -330,14 +355,25 @@ class BleAngleSource(IAngleDataSource):
                     if on_error:
                         on_error("Firmware sem eixo de azimute (pan) — seguindo só com a inclinação.")
 
-                while not self._stop_event.is_set():
+                while not self._stop_event.is_set() and not disconnected.is_set():
                     await asyncio.sleep(0.2)
 
-                if pan_subscribed:
-                    await client.stop_notify(PAN_CHARACTERISTIC_UUID)
-                await client.stop_notify(ANGLE_CHARACTERISTIC_UUID)
+                # `_stop_event` tem prioridade: se o usuário pediu parada, o
+                # disconnect que vem a seguir (o `__aexit__` abaixo desliga
+                # de propósito) não é um erro a reportar.
+                if disconnected.is_set() and not self._stop_event.is_set():
+                    disconnected_reported = True
+                    if on_error:
+                        on_error("Conexão Bluetooth perdida — verifique se o ESP32 está ligado e ao alcance.")
+                else:
+                    if pan_subscribed:
+                        await client.stop_notify(PAN_CHARACTERISTIC_UUID)
+                    await client.stop_notify(ANGLE_CHARACTERISTIC_UUID)
         except Exception as exc:  # noqa: BLE001
-            if on_error:
+            # Se a queda de conexão já foi reportada acima, evita um segundo
+            # aviso (menos claro) causado pelo próprio `__aexit__` tentando
+            # desconectar um client que já caiu.
+            if on_error and not disconnected_reported:
                 on_error(f"Erro BLE: {exc}")
         finally:
             self._client = None
