@@ -7,7 +7,7 @@ import os
 import threading
 
 from PyQt5.QtCore import QObject, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -131,10 +131,14 @@ _FLASH_STYLE = f"font-size: 24px; font-weight: bold; background-color: {ORANGE};
 
 # O grande valor central de cada eixo: mesma linguagem visual das caixas de
 # mínimo/máximo (fundo mais escuro, canto arredondado), só maior e com borda
-# — para ler como o "mostrador" principal do cartão.
+# — para ler como o "mostrador" principal do cartão. A caixa ocupa a largura
+# do cartão (ver `column.addWidget(value_label)`, sem alinhamento central
+# restringindo a largura ao texto) — um número grande boiando numa caixa
+# pequena, do tamanho do próprio texto, é o que ficava "pequeno diante do
+# tamanho do quadro".
 _MAIN_VALUE_STYLE = (
-    f"font-size: 56px; font-weight: bold; color: {TEXT_LIGHT}; background-color: {_VALUE_BG}; "
-    f"border: 2px solid {ORANGE}; border-radius: 22px; padding: 6px 24px;"
+    f"font-size: 88px; font-weight: bold; color: {TEXT_LIGHT}; background-color: {_VALUE_BG}; "
+    f"border: 2px solid {ORANGE}; border-radius: 22px; padding: 10px 16px;"
 )
 
 # `border: none` explícito em todos: QLabel é subclasse de QFrame no Qt, então
@@ -260,7 +264,7 @@ class MainWindow(QMainWindow):
         # Alto o bastante para o cabeçalho + os dois cartões de eixo (com o
         # mostrador analógico) + a barra de botões nunca se sobreporem,
         # mesmo desmaximizada e redimensionada para o menor tamanho possível.
-        self.setMinimumSize(1080, 760)
+        self.setMinimumSize(1120, 800)
         self.setStyleSheet(_APP_STYLESHEET)
 
         self._settings = AppSettings()
@@ -299,9 +303,11 @@ class MainWindow(QMainWindow):
 
         root.addLayout(self._build_header())
 
+        # Cinza discreto, não branco: é informação secundária (estado/modo),
+        # não deve competir com os números grandes dos cartões abaixo.
         self.mode_label = QLabel()
         self.mode_label.setAlignment(Qt.AlignCenter)
-        self.mode_label.setStyleSheet("font-size: 14px;")
+        self.mode_label.setStyleSheet("font-size: 13px; color: #9aa5b1;")
         root.addWidget(self.mode_label)
 
         # Os dois eixos lado a lado, cada um em um cartão do mesmo tamanho
@@ -392,16 +398,14 @@ class MainWindow(QMainWindow):
         self.settings_btn.clicked.connect(self._open_settings)
         header.addWidget(self.settings_btn)
 
-        # A logo ganha a mesma borda laranja arredondada usada nos cartões
-        # do resto da janela (em vez de um retângulo branco solto), e uma
-        # sombra suave para se destacar do fundo azul marinho — a "interação
-        # com as cores e a tela" pedida.
+        # Cartão branco simples, sem contorno colorido — a logo já tem
+        # contraste de sobra contra o branco; uma borda laranja por cima só
+        # competia com as cores da própria marca. A sombra suave já basta
+        # para separar o cartão do fundo azul marinho.
         logo_card = QFrame()
-        logo_card.setStyleSheet(
-            f"background-color: white; border: 2px solid {ORANGE}; border-radius: 10px; padding: 4px 10px;"
-        )
+        logo_card.setStyleSheet("background-color: white; border: none; border-radius: 10px; padding: 6px 16px;")
         logo_card_layout = QHBoxLayout(logo_card)
-        logo_card_layout.setContentsMargins(6, 4, 6, 4)
+        logo_card_layout.setContentsMargins(0, 0, 0, 0)
         if LOGO_PATH is not None:
             logo_label = QLabel()
             pixmap = QPixmap(LOGO_PATH)
@@ -412,9 +416,9 @@ class MainWindow(QMainWindow):
             logo_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {ORANGE}; background: transparent;")
         logo_card_layout.addWidget(logo_label)
         shadow = QGraphicsDropShadowEffect(logo_card)
-        shadow.setBlurRadius(18)
-        shadow.setOffset(0, 3)
-        shadow.setColor(QColor(0, 0, 0, 140))
+        shadow.setBlurRadius(24)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 110))
         logo_card.setGraphicsEffect(shadow)
         header.addWidget(logo_card, 0, Qt.AlignRight)
 
@@ -442,10 +446,18 @@ class MainWindow(QMainWindow):
         maior — em vez de dois blocos de texto soltos sobre o fundo."""
         frame = QFrame()
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        frame.setMinimumHeight(380)
+        frame.setMinimumHeight(420)
         column = QVBoxLayout(frame)
         column.setContentsMargins(20, 18, 20, 18)
-        column.setSpacing(10)
+        column.setSpacing(12)
+
+        # Sombra suave por baixo do cartão — a mesma "elevação" da logo,
+        # pra dar profundidade em vez de um contorno chapado.
+        card_shadow = QGraphicsDropShadowEffect(frame)
+        card_shadow.setBlurRadius(28)
+        card_shadow.setOffset(0, 6)
+        card_shadow.setColor(QColor(0, 0, 0, 90))
+        frame.setGraphicsEffect(card_shadow)
 
         title_label = QLabel(title)
         title_label.setAlignment(Qt.AlignCenter)
@@ -459,9 +471,9 @@ class MainWindow(QMainWindow):
 
         value_label = QLabel("--.--°")
         value_label.setAlignment(Qt.AlignCenter)
-        value_label.setFont(QFont("Sans Serif", 40, QFont.Bold))
+        value_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         value_label.setStyleSheet(_MAIN_VALUE_STYLE)
-        column.addWidget(value_label, 0, Qt.AlignCenter)
+        column.addWidget(value_label)
 
         # Normalmente oculto; usado para explicar por que um eixo está sem
         # valor (ex: firmware antigo, sem azimute). Escondido (setVisible)
