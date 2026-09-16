@@ -6,24 +6,36 @@ import datetime as _dt
 import os
 import threading
 
-from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt5.QtCore import QObject, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressDialog,
     QPushButton,
     QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from app_version import APP_NAME
-from data_source.base import AngleReading, IAngleDataSource
+from data_source.base import (
+    ANGLE_MAX_DEG,
+    ANGLE_MIN_DEG,
+    PAN_MAX_DEG,
+    PAN_MIN_DEG,
+    AngleReading,
+    IAngleDataSource,
+)
 from data_source.ble_source import BleAngleSource
 from data_source.modbus_source import ModbusAngleSource
 from data_source.simulated_source import SimulatedAngleSource
@@ -31,20 +43,57 @@ from limits.history_store import HistoryStore
 from limits.limit_tracker import PAN_AXIS, TILT_AXIS, LimitTracker
 from limits.vibration_stats import analyze_axis, has_pan_samples
 from report.report_generator import generate_report, generate_vibration_report
+from ui import icons
+from ui.gauge_widget import AngleGauge
 from ui.settings_dialog import AppSettings, SettingsDialog
 from ui.vibration_dialog import VibrationConfigDialog, VibrationResultDialog
 
-# Paleta Avibras Aeroco (fundo azul marinho + detalhes laranja). O logo é
-# opcional: se `assets/logo.<ext>` existir (png, jpg ou jpeg), é exibido no
-# canto superior direito; caso contrário, o título em texto já usa a mesma
-# identidade visual.
+# Faixa de cada eixo, usada para desenhar o mostrador analógico (mín./máx.
+# nas duas pontas do arco) e para preencher a tabela de "Valores de
+# referência". A mesma faixa já usada para clamping em data_source/base.py.
+_AXIS_RANGE = {
+    TILT_AXIS: (ANGLE_MIN_DEG, ANGLE_MAX_DEG),
+    PAN_AXIS: (PAN_MIN_DEG, PAN_MAX_DEG),
+}
+_AXIS_LABEL = {
+    TILT_AXIS: "Inclinação (tilt)",
+    PAN_AXIS: "Azimute (pan)",
+}
+
+# Paleta Avibras Aeroco (fundo azul marinho, laranja só como sotaque
+# pontual — cubo do ponteiro, indicador de aviso do mostrador — não mais
+# como preenchimento de botão/título/borda de cartão espalhado pela tela;
+# ver o histórico de feedback: "muito colorido"/"muito chamativo"/"tem que
+# ficar mais profissional"). O logo é opcional: se `assets/logo.<ext>`
+# existir (png, jpg ou jpeg), é exibido no canto superior esquerdo, junto do
+# título; caso contrário, o título em texto já usa a mesma identidade
+# visual.
 NAVY = "#0B2145"
-NAVY_PANEL = "#15305F"  # tom mais claro que o fundo, para destacar painéis/caixas
+NAVY_PANEL = "#122A52"  # tom mais claro que o fundo, para destacar cartões/caixas
+CARD_BORDER = "#22406E"  # contorno discreto dos cartões — não mais laranja
 ORANGE = "#F5821F"
 TEXT_LIGHT = "#F4F6F9"
-GREEN = "#2e7d32"
-RED = "#c62828"
+TEXT_MUTED = "#8C9AB3"
+GREEN = "#3DA55A"
+RED = "#D9534F"
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+
+
+def _fmt_num(value: float, decimals: int = 2) -> str:
+    """Formata um número com separador decimal de vírgula (padrão
+    brasileiro), sem o símbolo de grau — para células de tabela, cujo
+    cabeçalho de coluna já diz a unidade."""
+    return f"{value:.{decimals}f}".replace(".", ",")
+
+
+def _fmt_deg(value: float, decimals: int = 2) -> str:
+    """Como `_fmt_num`, mas com o símbolo de grau — para valores exibidos
+    fora de uma tabela (mostrador digital, lista de mínimo/máximo/limite)."""
+    return f"{_fmt_num(value, decimals)}°"
+
+
+_PLACEHOLDER_DEG = "--,--°"
+_PLACEHOLDER_NUM = "--,--"
 
 
 def _find_logo_path() -> str | None:
@@ -71,18 +120,67 @@ LOGO_PATH = _find_logo_path()
 DISPLAY_ANGLE_STEP_DEG = 0.25
 DISPLAY_ANGLE_HYSTERESIS_DEG = 0.05
 
-_VALUE_STYLE = f"font-size: 24px; font-weight: bold; color: {TEXT_LIGHT}; padding: 4px;"
-_FLASH_STYLE = f"font-size: 24px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 4px; padding: 4px;"
+# Quantas leituras recentes ficam visíveis na tabela "Últimas leituras" — só
+# um resumo em tela; o histórico completo de cada sessão continua
+# integralmente no banco (ver limits/history_store.py) e no relatório PDF.
+_RECENT_READINGS_ROWS = 6
 
-_BADGE_STYLE = "font-size: 15px; font-weight: bold; border-radius: 10px; padding: 6px 16px;"
+_VALUE_STYLE = f"font-size: 20px; font-weight: bold; color: {TEXT_LIGHT}; background: transparent;"
+_FLASH_STYLE = f"font-size: 20px; font-weight: bold; color: {ORANGE}; background: transparent;"
+
+# O grande valor central de cada eixo: só o número, sem caixa/borda ao redor
+# — lê como o dado "vivo" do cartão, na mesma superfície do resto do
+# cartão, em vez de mais um retângulo chapado. O tamanho e o peso da fonte
+# já bastam para destacá-lo.
+_MAIN_VALUE_STYLE = f"font-size: 64px; font-weight: bold; color: {TEXT_LIGHT}; background: transparent;"
+
+# `border: none` explícito em todos: QLabel é subclasse de QFrame no Qt, então
+# a borda definida globalmente para QFrame (cartões) também valeria para
+# qualquer QLabel comum, a menos que a própria regra do label a sobrescreva.
+_PILL_STYLE = "font-size: 13px; font-weight: bold; border-radius: 10px; padding: 6px 14px; border: 1px solid #2C4A7C;"
 
 _CONN_STYLES = {
-    "parado": ("○ Parado", f"color: #9aa5b1; background: transparent;"),
-    "conectando": ("◐ Conectando...", f"color: {ORANGE}; background: transparent; font-weight: bold;"),
-    "conectado": ("● Conectado", f"{_BADGE_STYLE} color: white; background-color: {GREEN};"),
-    "erro": ("● Falha de conexão", f"{_BADGE_STYLE} color: white; background-color: {RED};"),
-    "simulacao": ("● Simulação (interna)", f"color: {ORANGE}; background: transparent; font-weight: bold;"),
+    "parado": ("○ Parado", f"{_PILL_STYLE} color: {TEXT_MUTED}; background-color: {NAVY_PANEL};"),
+    "conectando": ("◐ Conectando...", f"{_PILL_STYLE} color: {ORANGE}; background-color: {NAVY_PANEL};"),
+    "conectado": ("●  Conectado", f"{_PILL_STYLE} color: {TEXT_LIGHT}; background-color: {NAVY_PANEL}; border-color: {GREEN};"),
+    "erro": ("●  Falha de conexão", f"{_PILL_STYLE} color: {TEXT_LIGHT}; background-color: {NAVY_PANEL}; border-color: {RED};"),
+    "simulacao": ("●  Simulação (interna)", f"{_PILL_STYLE} color: {ORANGE}; background-color: {NAVY_PANEL};"),
 }
+
+# Botão de Configurações: estilo "fantasma" (contorno neutro, sem
+# preenchimento) — fica no cabeçalho, junto da marca, deliberadamente
+# diferente dos botões de ação principal (a barra inferior), para não
+# competir com eles nem parecer mais uma ação operacional do dia a dia.
+_GHOST_BUTTON_STYLE = f"""
+QPushButton {{
+    background-color: transparent;
+    color: {TEXT_LIGHT};
+    border: 1px solid #2C4A7C;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-weight: bold;
+    font-size: 13px;
+}}
+QPushButton:hover {{ background-color: #1B3766; }}
+QPushButton:pressed {{ background-color: #0D1D3B; }}
+"""
+
+# Botões de ação principal: os quatro neutros (Calibrar/Resetar/Vibração/
+# Relatório) usam o mesmo fundo azul-marinho escuro do QPushButton padrão
+# (ver _APP_STYLESHEET) — sem preenchimento laranja. Só o par Iniciar/Parar
+# ganha uma cor própria (verde/vermelho apagados, não um sinal de trânsito),
+# porque é a única ação com dois estados opostos que precisam ser
+# distinguíveis à distância.
+_START_BTN_STYLE = f"""
+QPushButton {{ background-color: #234A34; color: {TEXT_LIGHT}; border: 1px solid {GREEN}; border-radius: 10px; padding: 12px 18px; font-weight: bold; font-size: 13px; }}
+QPushButton:hover {{ background-color: #2B5A3F; }}
+QPushButton:pressed {{ background-color: #1A3827; }}
+"""
+_STOP_BTN_STYLE = f"""
+QPushButton {{ background-color: #4A2323; color: {TEXT_LIGHT}; border: 1px solid {RED}; border-radius: 10px; padding: 12px 18px; font-weight: bold; font-size: 13px; }}
+QPushButton:hover {{ background-color: #5A2B2B; }}
+QPushButton:pressed {{ background-color: #381A1A; }}
+"""
 
 _APP_STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -93,31 +191,65 @@ QLabel {{
     color: {TEXT_LIGHT};
 }}
 QPushButton {{
-    background-color: {ORANGE};
-    color: {NAVY};
-    border: none;
-    border-radius: 6px;
+    background-color: #13284D;
+    color: {TEXT_LIGHT};
+    border: 1px solid #2C4A7C;
+    border-radius: 10px;
     padding: 12px 18px;
     font-weight: bold;
-    font-size: 14px;
+    font-size: 13px;
 }}
 QPushButton:hover {{
-    background-color: #ff9d40;
+    background-color: #1B3766;
 }}
 QPushButton:pressed {{
-    background-color: #cf6a12;
+    background-color: #0D1D3B;
 }}
 QPushButton:disabled {{
-    background-color: #5a6472;
-    color: #cfd4da;
+    background-color: #1a2740;
+    color: #5a6472;
+    border-color: #223350;
 }}
 QFrame {{
     background-color: {NAVY_PANEL};
-    border: 2px solid {ORANGE};
-    border-radius: 6px;
+    border: 1px solid {CARD_BORDER};
+    border-radius: 14px;
+}}
+/* QLabel é subclasse de QFrame no Qt — sem esta regra depois da de QFrame
+   (a ordem decide o empate entre dois seletores de mesma especificidade),
+   todo texto simples (títulos, "Modo: ...", etc.) herdaria a borda/fundo dos
+   cartões. Widgets que precisam de um fundo próprio (badges, valores)
+   definem seu style inline, que sempre tem prioridade sobre esta regra. */
+QLabel {{
+    border: none;
+    background: transparent;
+}}
+QTableWidget {{
+    background-color: transparent;
+    color: {TEXT_LIGHT};
+    border: none;
+    gridline-color: {CARD_BORDER};
+    font-size: 13px;
+}}
+QTableWidget::item {{
+    padding: 6px;
+    border: none;
+    border-bottom: 1px solid {CARD_BORDER};
+}}
+QHeaderView::section {{
+    background-color: transparent;
+    color: {TEXT_LIGHT};
+    font-weight: bold;
+    font-size: 12px;
+    border: none;
+    border-bottom: 1px solid {CARD_BORDER};
+    padding: 6px;
 }}
 QStatusBar {{
     color: {TEXT_LIGHT};
+}}
+QStatusBar::item {{
+    border: none;
 }}
 """
 
@@ -144,8 +276,15 @@ class MainWindow(QMainWindow):
         # A janela abre maximizada (ver main.py, `showMaximized()`); este
         # tamanho só vale para quando o usuário desmaximiza manualmente, daí
         # ser bem maior que o mínimo abaixo.
-        self.resize(1280, 800)
-        self.setMinimumSize(1000, 640)
+        self.resize(1400, 970)
+        # Alto o bastante para o cabeçalho + os dois cartões de eixo (com o
+        # mostrador analógico) + as tabelas de resumo + a barra de botões
+        # nunca se sobreporem, mesmo desmaximizada e redimensionada para o
+        # menor tamanho possível. A largura mínima também precisa caber o
+        # cabeçalho inteiro (marca + título + pill de conexão + caixa de
+        # porta/IMU + relógio + botão de Configurações) sem que o título
+        # seja espremido a ponto de cortar o texto.
+        self.setMinimumSize(1360, 950)
         self.setStyleSheet(_APP_STYLESHEET)
 
         self._settings = AppSettings()
@@ -169,6 +308,13 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._update_mode_label()
         self._set_connection_status("parado")
+        self._set_start_stop_style(running=False)
+        self._init_reference_table()
+
+        self._clock_timer = QTimer(self)
+        self._clock_timer.timeout.connect(self._update_clock)
+        self._clock_timer.start(1000)
+        self._update_clock()
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -180,98 +326,166 @@ class MainWindow(QMainWindow):
         # deixando um vão vazio embaixo — a origem da impressão de
         # "desproporcional" relatada.
         root.setContentsMargins(28, 20, 28, 20)
-        root.setSpacing(18)
+        root.setSpacing(16)
 
         root.addLayout(self._build_header())
 
-        status_row = QHBoxLayout()
-        status_row.setSpacing(24)
-        self.mode_label = QLabel()
-        self.mode_label.setAlignment(Qt.AlignCenter)
-        self.mode_label.setStyleSheet("font-size: 14px;")
-        self.connection_label = QLabel()
-        self.connection_label.setAlignment(Qt.AlignCenter)
-        status_row.addStretch(1)
-        status_row.addWidget(self.mode_label)
-        status_row.addWidget(self.connection_label)
-        status_row.addStretch(1)
-        root.addLayout(status_row)
-
-        # Os dois eixos lado a lado, cada um em um cartão do mesmo tamanho
-        # (stretch 1 para os dois), com peso 1 na coluna principal para
-        # ocupar o espaço vertical que sobra numa janela maximizada.
         axes_row = QHBoxLayout()
         axes_row.setSpacing(24)
         self._axis_widgets = {
-            TILT_AXIS: self._build_axis_panel("Inclinação (tilt)"),
-            PAN_AXIS: self._build_axis_panel("Azimute (pan)"),
+            TILT_AXIS: self._build_axis_panel(_AXIS_LABEL[TILT_AXIS], icons.tilt_icon, *_AXIS_RANGE[TILT_AXIS]),
+            PAN_AXIS: self._build_axis_panel(_AXIS_LABEL[PAN_AXIS], icons.pan_icon, *_AXIS_RANGE[PAN_AXIS]),
         }
         axes_row.addWidget(self._axis_widgets[TILT_AXIS]["frame"], 1)
         axes_row.addWidget(self._axis_widgets[PAN_AXIS]["frame"], 1)
         root.addLayout(axes_row, 1)
 
-        buttons_row = QHBoxLayout()
-        buttons_row.setSpacing(16)
-        self.start_stop_btn = QPushButton("Iniciar")
-        self.start_stop_btn.clicked.connect(self._toggle_start_stop)
-        self.reset_btn = QPushButton("Resetar limites")
-        self.reset_btn.clicked.connect(self._reset_limits)
-        self.calibrate_btn = QPushButton("Calibrar")
-        self.calibrate_btn.clicked.connect(self._calibrate)
-        self.vibration_btn = QPushButton("Modo Vibração")
-        self.vibration_btn.clicked.connect(self._start_vibration_capture)
-        self.settings_btn = QPushButton("Configurações...")
-        self.settings_btn.clicked.connect(self._open_settings)
-        self.report_btn = QPushButton("Gerar relatório PDF")
-        self.report_btn.clicked.connect(self._generate_report)
-        # Peso igual (stretch 1) para os seis: preenchem a largura toda de
-        # forma uniforme em vez de ficarem amontoados de um lado só, com o
-        # resto da barra vazio, como numa janela maximizada larga.
-        for btn in (
-            self.start_stop_btn,
-            self.reset_btn,
-            self.calibrate_btn,
-            self.vibration_btn,
-            self.settings_btn,
-            self.report_btn,
-        ):
-            btn.setMinimumHeight(46)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            buttons_row.addWidget(btn, 1)
-        root.addLayout(buttons_row)
+        root.addLayout(self._build_tables_row())
+        root.addLayout(self._build_buttons_row())
 
+        # Indicador de modo embaixo da tela, junto da barra de status —
+        # widget permanente (não é apagado pelas mensagens temporárias de
+        # showMessage()). O status de conexão já mora no cabeçalho (o "pill"
+        # junto do título), então aqui sobra só o modo de operação.
+        self.mode_label = QLabel()
+        self.mode_label.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED};")
+        self.statusBar().addPermanentWidget(self.mode_label)
         self.statusBar().showMessage("Pronto.")
 
-    def _build_header(self) -> QHBoxLayout:
+    def _build_header(self) -> QVBoxLayout:
+        header_wrapper = QVBoxLayout()
+        header_wrapper.setSpacing(14)
+
         header = QHBoxLayout()
+        header.setSpacing(16)
 
-        title_label = QLabel(APP_NAME)
-        title_label.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {TEXT_LIGHT};")
-        header.addWidget(title_label)
-
-        header.addStretch(1)
-
+        # Cartão branco simples, sem contorno colorido — a logo já tem
+        # contraste de sobra contra o branco; uma borda laranja por cima só
+        # competia com as cores da própria marca. A sombra suave já basta
+        # para separar o cartão do fundo azul marinho.
+        logo_card = QFrame()
+        logo_card.setStyleSheet("background-color: white; border: none; border-radius: 10px; padding: 6px 16px;")
+        logo_card_layout = QHBoxLayout(logo_card)
+        logo_card_layout.setContentsMargins(0, 0, 0, 0)
         if LOGO_PATH is not None:
             logo_label = QLabel()
             pixmap = QPixmap(LOGO_PATH)
             if not pixmap.isNull():
-                logo_label.setPixmap(pixmap.scaledToHeight(52, Qt.SmoothTransformation))
-                # A logo tem fundo branco (não transparente) — um "cartão"
-                # branco arredondado ao redor evita que pareça um retângulo
-                # solto sobre o fundo azul marinho do cabeçalho.
-                logo_label.setStyleSheet("background-color: white; border-radius: 6px; padding: 6px 10px;")
-                header.addWidget(logo_label, 0, Qt.AlignRight)
+                logo_label.setPixmap(pixmap.scaledToHeight(48, Qt.SmoothTransformation))
         else:
             logo_label = QLabel("AVIBRAS aeroco")
-            logo_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {ORANGE};")
-            header.addWidget(logo_label, 0, Qt.AlignRight)
+            logo_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {NAVY}; background: transparent;")
+        logo_card_layout.addWidget(logo_label)
+        shadow = QGraphicsDropShadowEffect(logo_card)
+        shadow.setBlurRadius(24)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 110))
+        logo_card.setGraphicsEffect(shadow)
+        header.addWidget(logo_card)
 
-        return header
+        title_column = QVBoxLayout()
+        title_column.setSpacing(2)
+        title_label = QLabel(APP_NAME)
+        title_label.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {TEXT_LIGHT};")
+        # Nunca deixa a marca ser espremida abaixo do tamanho do próprio
+        # texto — sem isso, num cabeçalho apertado (janela no tamanho
+        # mínimo), o layout cortava o fim do título ("...Aeroco") em vez de
+        # tirar espaço de outro elemento.
+        title_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+        subtitle_label = QLabel("Monitoramento de Posicionamento")
+        subtitle_label.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED};")
+        title_column.addWidget(title_label)
+        title_column.addWidget(subtitle_label)
+        header.addLayout(title_column)
 
-    def _build_axis_panel(self, title: str) -> dict:
-        """Cartão de um eixo: título, valor grande, aviso opcional e o par de
-        caixas de mínimo/máximo. Devolve os widgets num dicionário, para o
-        resto da janela atualizar os dois eixos pelo mesmo caminho de código.
+        header.addStretch(1)
+
+        # Status de conexão — junto da marca, sempre visível, em vez de
+        # escondido na barra de status lá embaixo.
+        self.connection_label = QLabel()
+        self.connection_label.setAlignment(Qt.AlignCenter)
+        header.addWidget(self.connection_label)
+
+        header.addWidget(self._build_info_card())
+        header.addWidget(self._build_datetime_card())
+
+        # Configurações fica no cabeçalho, junto da marca — fora da barra de
+        # ações operacionais de baixo (Iniciar/Calibrar/etc.), já que ajuste
+        # de conexão é uma etapa de preparação, não uma ação do dia a dia.
+        self.settings_btn = QPushButton(" Configurações")
+        self.settings_btn.setIcon(icons.gear_icon(TEXT_LIGHT))
+        self.settings_btn.setIconSize(QSize(18, 18))
+        self.settings_btn.setStyleSheet(_GHOST_BUTTON_STYLE)
+        self.settings_btn.clicked.connect(self._open_settings)
+        header.addWidget(self.settings_btn)
+
+        header_wrapper.addLayout(header)
+
+        # Linha fina separando o cabeçalho do resto da tela — costura visual
+        # entre a marca e os cartões de eixo abaixo.
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFixedHeight(1)
+        separator.setStyleSheet(f"background-color: {CARD_BORDER}; border: none;")
+        header_wrapper.addWidget(separator)
+
+        return header_wrapper
+
+    def _build_info_card(self) -> QFrame:
+        # Caixa curta de contexto no próprio cabeçalho — porta/dispositivo em
+        # uso e o sensor do equipamento (fixo: é o hardware que o firmware
+        # sempre usa, não depende de nenhuma leitura) — uma linha por dado,
+        # em vez de lado a lado, para caber num cartão estreito.
+        frame = QFrame()
+        frame.setStyleSheet(f"background-color: {NAVY_PANEL}; border: 1px solid {CARD_BORDER}; border-radius: 8px;")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setSpacing(4)
+
+        def _segment(caption: str, value_text: str) -> tuple[QLabel, QHBoxLayout]:
+            caption_label = QLabel(caption + ":")
+            caption_label.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED}; border: none; background: transparent;")
+            value_label = QLabel(value_text)
+            value_label.setStyleSheet(f"font-size: 13px; color: {TEXT_LIGHT}; font-weight: bold; border: none; background: transparent;")
+            pair = QHBoxLayout()
+            pair.setSpacing(6)
+            pair.addWidget(caption_label)
+            pair.addWidget(value_label)
+            pair.addStretch(1)
+            return value_label, pair
+
+        self.info_device_label, device_pair = _segment("Porta", "—")
+        self.info_sensor_label, sensor_pair = _segment("IMU", "MPU6050")
+        layout.addLayout(device_pair)
+        layout.addLayout(sensor_pair)
+        return frame
+
+    def _build_datetime_card(self) -> QFrame:
+        # Data em cima (texto normal) e hora embaixo (em negrito, o dado que
+        # muda a cada segundo) — mesma linguagem visual do cartão de
+        # Porta/IMU ao lado, só com os dois valores empilhados em vez de
+        # rotulados, já que "data" e "hora" já são óbvios pelo formato.
+        frame = QFrame()
+        frame.setStyleSheet(f"background-color: {NAVY_PANEL}; border: 1px solid {CARD_BORDER}; border-radius: 8px;")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setSpacing(2)
+
+        self.date_label = QLabel()
+        self.date_label.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED}; border: none; background: transparent;")
+        self.clock_label = QLabel()
+        self.clock_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {TEXT_LIGHT}; border: none; background: transparent;")
+
+        layout.addWidget(self.date_label)
+        layout.addWidget(self.clock_label)
+        return frame
+
+    def _build_axis_panel(self, title: str, icon_fn, minimum: float, maximum: float) -> dict:
+        """Cartão de um eixo: título, mostrador analógico ao lado da lista de
+        Mínimo/Máximo/Limite, e o valor digital grande abaixo, ocupando a
+        largura toda do cartão. Devolve os widgets num dicionário, para o
+        resto da janela atualizar os dois eixos pelo mesmo caminho de
+        código.
 
         É um QFrame (e não só um layout) de propósito: os dois eixos ficam
         como dois cartões do mesmo tamanho, com a mesma borda usada nas
@@ -279,81 +493,231 @@ class MainWindow(QMainWindow):
         maior — em vez de dois blocos de texto soltos sobre o fundo."""
         frame = QFrame()
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        frame.setMinimumHeight(320)
+        frame.setMinimumHeight(480)
         column = QVBoxLayout(frame)
-        column.setContentsMargins(20, 18, 20, 18)
-        column.setSpacing(10)
+        column.setContentsMargins(20, 16, 20, 16)
+        column.setSpacing(12)
 
+        # Sombra suave por baixo do cartão — a mesma "elevação" da logo, pra
+        # dar profundidade em vez de um contorno chapado.
+        card_shadow = QGraphicsDropShadowEffect(frame)
+        card_shadow.setBlurRadius(28)
+        card_shadow.setOffset(0, 6)
+        card_shadow.setColor(QColor(0, 0, 0, 90))
+        frame.setGraphicsEffect(card_shadow)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        icon_label = QLabel()
+        icon_label.setPixmap(icon_fn(TEXT_LIGHT, 20).pixmap(QSize(20, 20)))
         title_label = QLabel(title)
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet(f"font-size: 17px; font-weight: bold; color: {ORANGE};")
-        column.addWidget(title_label)
+        title_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {TEXT_LIGHT};")
+        title_row.addWidget(icon_label)
+        title_row.addWidget(title_label)
+        title_row.addStretch(1)
+        column.addLayout(title_row)
 
-        # Empurra o valor para o centro vertical do cartão, em vez de deixar
-        # tudo colado no topo enquanto o cartão cresce numa janela maximizada.
-        column.addStretch(1)
+        # Mostrador analógico ao lado da lista vertical de Mínimo/Máximo/
+        # Limite — o ponteiro dá a leitura de relance, a lista ao lado dá o
+        # detalhe (valor e horário de cada extremo).
+        content_row = QHBoxLayout()
+        content_row.setSpacing(16)
 
-        value_label = QLabel("--.--°")
+        gauge = AngleGauge(minimum, maximum)
+        content_row.addWidget(gauge, 2)
+
+        limits_column = QVBoxLayout()
+        limits_column.setSpacing(0)
+        min_value_label = self._build_limit_row(limits_column, "Mínimo", with_divider=True)
+        max_value_label = self._build_limit_row(limits_column, "Máximo", with_divider=True)
+        # "Limite" é a própria faixa mecânica/de medição do eixo (a mesma
+        # que define as pontas do mostrador) — estático, não um novo
+        # conceito de limiar configurável que este app não tem.
+        limit_value_label = self._build_limit_row(limits_column, "Limite", with_divider=False)
+        limit_value_label.setText(f"±{_fmt_num(maximum)}")
+        limits_column.addStretch(1)
+        content_row.addLayout(limits_column, 1)
+
+        column.addLayout(content_row, 1)
+
+        value_label = QLabel(_PLACEHOLDER_DEG)
         value_label.setAlignment(Qt.AlignCenter)
-        value_label.setFont(QFont("Sans Serif", 56, QFont.Bold))
+        value_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        value_label.setStyleSheet(_MAIN_VALUE_STYLE)
         column.addWidget(value_label)
 
         # Normalmente oculto; usado para explicar por que um eixo está sem
-        # valor (ex: firmware antigo, sem azimute). Fica escondido em vez de
-        # só vazio porque a folha de estilo desta janela dá borda a QFrame, e
-        # QLabel herda de QFrame — um rótulo vazio apareceria como uma faixa
-        # com borda no meio do painel.
+        # valor (ex: firmware antigo, sem azimute). Escondido (setVisible)
+        # em vez de só vazio para não reservar uma linha de espaço em branco
+        # quando não há nenhum aviso a mostrar.
         note_label = QLabel("")
         note_label.setAlignment(Qt.AlignCenter)
-        note_label.setStyleSheet("font-size: 12px; color: #9aa5b1;")
+        note_label.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED};")
         note_label.setVisible(False)
         column.addWidget(note_label)
 
-        column.addStretch(1)
-
-        limits_row = QHBoxLayout()
-        limits_row.setSpacing(14)
-        min_frame, min_value_label, min_time_label = self._build_limit_box("Mínimo")
-        max_frame, max_value_label, max_time_label = self._build_limit_box("Máximo")
-        limits_row.addWidget(min_frame, 1)
-        limits_row.addWidget(max_frame, 1)
-        column.addLayout(limits_row)
-
         return {
             "frame": frame,
+            "gauge": gauge,
             "value": value_label,
             "note": note_label,
             "min_value": min_value_label,
-            "min_time": min_time_label,
             "max_value": max_value_label,
-            "max_time": max_time_label,
+            "limit_value": limit_value_label,
         }
 
-    def _build_limit_box(self, title: str) -> tuple[QFrame, QLabel, QLabel]:
-        frame = QFrame()
-        frame.setFrameShape(QFrame.StyledPanel)
-        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        frame.setMinimumHeight(100)
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(4)
+    def _build_limit_row(self, parent_layout: QVBoxLayout, title: str, with_divider: bool) -> QLabel:
+        """Uma linha "Mínimo"/"Máximo"/"Limite" na lista ao lado do
+        mostrador: legenda pequena em cima, valor em negrito embaixo — sem
+        caixa/borda própria (ela ficaria como um cartão dentro do cartão),
+        só uma linha divisória fina abaixo para separar da próxima. O
+        horário de cada extremo continua disponível, só que como dica
+        (tooltip) no valor, em vez de uma terceira linha permanente na
+        lista — a lista listada na referência não tem espaço pra isso."""
+        row = QWidget()
+        if with_divider:
+            row.setObjectName("limitRow")
+            row.setStyleSheet(f"QWidget#limitRow {{ border-bottom: 1px solid {CARD_BORDER}; }}")
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(2)
 
         title_label = QLabel(title)
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        title_label.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED};")
 
-        value_label = QLabel("--.--°")
-        value_label.setAlignment(Qt.AlignCenter)
+        value_label = QLabel(_PLACEHOLDER_DEG)
         value_label.setStyleSheet(_VALUE_STYLE)
-
-        time_label = QLabel("")
-        time_label.setAlignment(Qt.AlignCenter)
-        time_label.setStyleSheet("font-size: 12px; color: #b8c0cb;")
 
         layout.addWidget(title_label)
         layout.addWidget(value_label)
-        layout.addWidget(time_label)
-        return frame, value_label, time_label
+        parent_layout.addWidget(row)
+        return value_label
+
+    def _build_tables_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(24)
+
+        readings_card, self.readings_table = self._build_table_card(
+            "Últimas leituras", ["Horário", "Tilt (°)", "Pan (°)"]
+        )
+        reference_card, self.reference_table = self._build_table_card(
+            "Valores de referência", ["Parâmetro", "Mínimo (°)", "Máximo (°)", "Limite (°)"]
+        )
+        self.reference_table.setRowCount(len(_AXIS_LABEL))
+        for row_idx, axis in enumerate((TILT_AXIS, PAN_AXIS)):
+            self.reference_table.setItem(row_idx, 0, QTableWidgetItem(_AXIS_LABEL[axis]))
+
+        row.addWidget(readings_card, 1)
+        row.addWidget(reference_card, 1)
+        return row
+
+    def _build_table_card(self, title: str, columns: list[str]) -> tuple[QFrame, QTableWidget]:
+        frame = QFrame()
+        frame.setMinimumHeight(200)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(10)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {TEXT_LIGHT};")
+        layout.addWidget(title_label)
+
+        table = QTableWidget(0, len(columns))
+        table.setHorizontalHeaderLabels(columns)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.NoSelection)
+        table.setFocusPolicy(Qt.NoFocus)
+        # Sem cor alternada: sem um `alternate-background-color` explícito
+        # no QSS, o Qt cai no cinza claro padrão da paleta do sistema — uma
+        # faixa branca berrante sobre o fundo escuro. A linha divisória fina
+        # de cada célula (ver QTableWidget::item no QSS) já separa as linhas
+        # sem precisar de uma segunda cor de fundo.
+        table.setAlternatingRowColors(False)
+        table.setShowGrid(False)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(table, 1)
+
+        return frame, table
+
+    def _init_reference_table(self) -> None:
+        for row_idx, axis in enumerate((TILT_AXIS, PAN_AXIS)):
+            _minimum, maximum = _AXIS_RANGE[axis]
+            self._set_reference_row(row_idx, min_text=_PLACEHOLDER_NUM, max_text=_PLACEHOLDER_NUM, limit_text=f"±{_fmt_num(maximum)}")
+
+    def _set_reference_row(self, row_idx: int, *, min_text: str | None = None, max_text: str | None = None, limit_text: str | None = None) -> None:
+        for col, text in ((1, min_text), (2, max_text), (3, limit_text)):
+            if text is None:
+                continue
+            item = QTableWidgetItem(text)
+            item.setTextAlignment(Qt.AlignCenter)
+            self.reference_table.setItem(row_idx, col, item)
+
+    def _push_recent_reading(self, tilt_deg: float | None, pan_deg: float | None, timestamp: float) -> None:
+        table = self.readings_table
+        table.insertRow(0)
+        values = [
+            _fmt_time(timestamp),
+            _fmt_num(tilt_deg) if tilt_deg is not None else "—",
+            _fmt_num(pan_deg) if pan_deg is not None else "—",
+        ]
+        for col, text in enumerate(values):
+            item = QTableWidgetItem(text)
+            item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(0, col, item)
+        while table.rowCount() > _RECENT_READINGS_ROWS:
+            table.removeRow(table.rowCount() - 1)
+
+    def _build_buttons_row(self) -> QHBoxLayout:
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(16)
+
+        self.start_stop_btn = QPushButton()
+        self.start_stop_btn.setIconSize(QSize(18, 18))
+        self.start_stop_btn.clicked.connect(self._toggle_start_stop)
+
+        self.calibrate_btn = QPushButton(" CALIBRAR")
+        self.calibrate_btn.setIcon(icons.target_icon(TEXT_LIGHT))
+        self.calibrate_btn.setIconSize(QSize(18, 18))
+        self.calibrate_btn.clicked.connect(self._calibrate)
+
+        self.reset_btn = QPushButton(" RESETAR LIMITES")
+        self.reset_btn.setIcon(icons.reset_icon(TEXT_LIGHT))
+        self.reset_btn.setIconSize(QSize(18, 18))
+        self.reset_btn.clicked.connect(self._reset_limits)
+
+        self.vibration_btn = QPushButton(" MODO VIBRAÇÃO")
+        self.vibration_btn.setIcon(icons.vibration_icon(TEXT_LIGHT))
+        self.vibration_btn.setIconSize(QSize(18, 18))
+        self.vibration_btn.clicked.connect(self._start_vibration_capture)
+
+        self.report_btn = QPushButton(" GERAR RELATÓRIO")
+        self.report_btn.setIcon(icons.report_icon(TEXT_LIGHT))
+        self.report_btn.setIconSize(QSize(18, 18))
+        self.report_btn.clicked.connect(self._generate_report)
+
+        for btn in (
+            self.start_stop_btn,
+            self.calibrate_btn,
+            self.reset_btn,
+            self.vibration_btn,
+            self.report_btn,
+        ):
+            btn.setMinimumHeight(46)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            buttons_row.addWidget(btn, 1)
+
+        return buttons_row
+
+    def _set_start_stop_style(self, running: bool) -> None:
+        if running:
+            self.start_stop_btn.setText(" PARAR")
+            self.start_stop_btn.setIcon(icons.stop_icon(TEXT_LIGHT))
+            self.start_stop_btn.setStyleSheet(_STOP_BTN_STYLE)
+        else:
+            self.start_stop_btn.setText(" INICIAR")
+            self.start_stop_btn.setIcon(icons.play_icon(TEXT_LIGHT))
+            self.start_stop_btn.setStyleSheet(_START_BTN_STYLE)
 
     def _update_mode_label(self) -> None:
         modo = {
@@ -363,6 +727,19 @@ class MainWindow(QMainWindow):
         }[self._settings.mode]
         estado = "em execução" if self._running else "parado"
         self.mode_label.setText(f"Modo: {modo} — {estado}")
+
+        if self._settings.mode == "real":
+            device_text = self._settings.serial_port or "—"
+        elif self._settings.mode == "ble":
+            device_text = self._settings.ble_address or "—"
+        else:
+            device_text = "—"
+        self.info_device_label.setText(device_text)
+
+    def _update_clock(self) -> None:
+        now = _dt.datetime.now()
+        self.date_label.setText(now.strftime("%d/%m/%Y"))
+        self.clock_label.setText(now.strftime("%H:%M:%S"))
 
     def _set_connection_status(self, status: str) -> None:
         text, style = _CONN_STYLES[status]
@@ -415,7 +792,7 @@ class MainWindow(QMainWindow):
             on_error=lambda msg: self._bridge.error.emit(msg),
         )
         self._running = True
-        self.start_stop_btn.setText("Parar")
+        self._set_start_stop_style(running=True)
         self._update_mode_label()
         self._set_connection_status("simulacao" if self._settings.mode == "simulado" else "conectando")
         self.statusBar().showMessage(f"Conectado: {self._source.label}")
@@ -427,7 +804,7 @@ class MainWindow(QMainWindow):
         self._history.end_session()
         self._running = False
         self._displayed = {TILT_AXIS: None, PAN_AXIS: None}
-        self.start_stop_btn.setText("Iniciar")
+        self._set_start_stop_style(running=False)
         self._update_mode_label()
         self._set_connection_status("parado")
         self.statusBar().showMessage("Parado.")
@@ -438,13 +815,15 @@ class MainWindow(QMainWindow):
         if was_running:
             self._history.end_session()
             self._history.start_session(mode=mode)
-        for axis, tracker in self._trackers.items():
+        for row_idx, axis in enumerate((TILT_AXIS, PAN_AXIS)):
+            tracker = self._trackers[axis]
             tracker.reset()
             widgets = self._axis_widgets[axis]
-            widgets["min_value"].setText("--.--°")
-            widgets["min_time"].setText("")
-            widgets["max_value"].setText("--.--°")
-            widgets["max_time"].setText("")
+            widgets["min_value"].setText(_PLACEHOLDER_DEG)
+            widgets["min_value"].setToolTip("")
+            widgets["max_value"].setText(_PLACEHOLDER_DEG)
+            widgets["max_value"].setToolTip("")
+            self._set_reference_row(row_idx, min_text=_PLACEHOLDER_NUM, max_text=_PLACEHOLDER_NUM)
         self.statusBar().showMessage(
             "Limites resetados (histórico anterior preservado)." if was_running
             else "Limites resetados."
@@ -495,24 +874,31 @@ class MainWindow(QMainWindow):
         self._history.add_reading(reading)
 
         values = {TILT_AXIS: reading.angle_deg, PAN_AXIS: reading.pan_deg}
-        for axis, value in values.items():
+        self._push_recent_reading(values[TILT_AXIS], values[PAN_AXIS], reading.timestamp)
+
+        for row_idx, axis in enumerate((TILT_AXIS, PAN_AXIS)):
+            value = values[axis]
             widgets = self._axis_widgets[axis]
             if value is None:
                 # Firmware anterior à v1.2.0 não mede azimute — deixa claro
                 # que o eixo está sem dado, em vez de mostrar um zero falso.
-                widgets["value"].setText("--.--°")
+                widgets["value"].setText(_PLACEHOLDER_DEG)
+                widgets["gauge"].setValue(None)
                 widgets["note"].setText("firmware sem este eixo")
                 widgets["note"].setVisible(True)
                 continue
-            widgets["value"].setText(f"{self._angle_for_display(axis, value):.2f}°")
+            widgets["value"].setText(_fmt_deg(self._angle_for_display(axis, value)))
+            widgets["gauge"].setValue(value)
             widgets["note"].setVisible(False)
 
             for event in self._trackers[axis].process(reading):
                 self._history.add_limit_event(event)
                 prefix = "min" if event.kind == "min" else "max"
-                widgets[f"{prefix}_value"].setText(f"{event.value_deg:.2f}°")
-                widgets[f"{prefix}_time"].setText(_fmt_time(event.reading.timestamp))
-                self._flash(widgets[f"{prefix}_value"])
+                label = widgets[f"{prefix}_value"]
+                label.setText(_fmt_deg(event.value_deg))
+                label.setToolTip(f"Ocorreu às {_fmt_time(event.reading.timestamp)}")
+                self._flash(label)
+                self._set_reference_row(row_idx, **{f"{prefix}_text": _fmt_num(event.value_deg)})
 
     def _on_error(self, message: str) -> None:
         if self._settings.mode in ("real", "ble"):
