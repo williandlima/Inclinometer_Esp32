@@ -7,10 +7,11 @@ import os
 import threading
 
 from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt5.QtGui import QColor, QFont, QPixmap
 from PyQt5.QtWidgets import (
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -23,7 +24,14 @@ from PyQt5.QtWidgets import (
 )
 
 from app_version import APP_NAME
-from data_source.base import AngleReading, IAngleDataSource
+from data_source.base import (
+    ANGLE_MAX_DEG,
+    ANGLE_MIN_DEG,
+    PAN_MAX_DEG,
+    PAN_MIN_DEG,
+    AngleReading,
+    IAngleDataSource,
+)
 from data_source.ble_source import BleAngleSource
 from data_source.modbus_source import ModbusAngleSource
 from data_source.simulated_source import SimulatedAngleSource
@@ -31,8 +39,17 @@ from limits.history_store import HistoryStore
 from limits.limit_tracker import PAN_AXIS, TILT_AXIS, LimitTracker
 from limits.vibration_stats import analyze_axis, has_pan_samples
 from report.report_generator import generate_report, generate_vibration_report
+from ui.gauge_widget import AngleGauge
 from ui.settings_dialog import AppSettings, SettingsDialog
 from ui.vibration_dialog import VibrationConfigDialog, VibrationResultDialog
+
+# Faixa de cada eixo, usada para desenhar o mostrador analógico (mín./máx.
+# nas duas pontas do arco). A mesma faixa já usada para clamping em
+# data_source/base.py.
+_AXIS_RANGE = {
+    TILT_AXIS: (ANGLE_MIN_DEG, ANGLE_MAX_DEG),
+    PAN_AXIS: (PAN_MIN_DEG, PAN_MAX_DEG),
+}
 
 # Paleta Avibras Aeroco (fundo azul marinho + detalhes laranja). O logo é
 # opcional: se `assets/logo.<ext>` existir (png, jpg ou jpeg), é exibido no
@@ -71,18 +88,64 @@ LOGO_PATH = _find_logo_path()
 DISPLAY_ANGLE_STEP_DEG = 0.25
 DISPLAY_ANGLE_HYSTERESIS_DEG = 0.05
 
-_VALUE_STYLE = f"font-size: 24px; font-weight: bold; color: {TEXT_LIGHT}; padding: 4px;"
-_FLASH_STYLE = f"font-size: 24px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 4px; padding: 4px;"
+_VALUE_BG = "#0D2557"  # navy mais escuro que NAVY_PANEL, para o número "flutuar" dentro da caixa
+_VALUE_STYLE = f"font-size: 24px; font-weight: bold; color: {TEXT_LIGHT}; background-color: {_VALUE_BG}; border-radius: 12px; padding: 6px;"
+_FLASH_STYLE = f"font-size: 24px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 12px; padding: 6px;"
 
-_BADGE_STYLE = "font-size: 15px; font-weight: bold; border-radius: 10px; padding: 6px 16px;"
+# O grande valor central de cada eixo: mesma linguagem visual das caixas de
+# mínimo/máximo (fundo mais escuro, canto arredondado), só maior e com borda
+# — para ler como o "mostrador" principal do cartão.
+_MAIN_VALUE_STYLE = (
+    f"font-size: 56px; font-weight: bold; color: {TEXT_LIGHT}; background-color: {_VALUE_BG}; "
+    f"border: 2px solid {ORANGE}; border-radius: 22px; padding: 6px 24px;"
+)
+
+# `border: none` explícito em todos: QLabel é subclasse de QFrame no Qt, então
+# a borda laranja definida globalmente para QFrame (cartões/caixas) também
+# valeria para qualquer QLabel comum, a menos que a própria regra do label
+# a sobrescreva — sem isso, este indicador (isolado na barra de status,
+# sem um fundo colorido cobrindo tudo) apareceria com uma moldura perdida.
+_BADGE_STYLE = "font-size: 15px; font-weight: bold; border-radius: 12px; padding: 6px 16px; border: none;"
 
 _CONN_STYLES = {
-    "parado": ("○ Parado", f"color: #9aa5b1; background: transparent;"),
-    "conectando": ("◐ Conectando...", f"color: {ORANGE}; background: transparent; font-weight: bold;"),
+    "parado": ("○ Parado", "color: #9aa5b1; background: transparent; border: none;"),
+    "conectando": ("◐ Conectando...", f"color: {ORANGE}; background: transparent; font-weight: bold; border: none;"),
     "conectado": ("● Conectado", f"{_BADGE_STYLE} color: white; background-color: {GREEN};"),
     "erro": ("● Falha de conexão", f"{_BADGE_STYLE} color: white; background-color: {RED};"),
-    "simulacao": ("● Simulação (interna)", f"color: {ORANGE}; background: transparent; font-weight: bold;"),
+    "simulacao": ("● Simulação (interna)", f"color: {ORANGE}; background: transparent; font-weight: bold; border: none;"),
 }
+
+# Botão Iniciar/Parar: verde/vermelho (a mesma linguagem já usada nos badges
+# de conexão) para se destacar como a ação principal entre os botões,
+# todos os outros laranja.
+_START_STYLE = f"""
+QPushButton {{ background-color: {GREEN}; color: white; }}
+QPushButton:hover {{ background-color: #3a9440; }}
+QPushButton:pressed {{ background-color: #245c26; }}
+"""
+_STOP_STYLE = f"""
+QPushButton {{ background-color: {RED}; color: white; }}
+QPushButton:hover {{ background-color: #e14040; }}
+QPushButton:pressed {{ background-color: #931d1d; }}
+"""
+
+# Botão de Configurações: estilo "fantasma" (contorno, sem preenchimento) —
+# fica no cabeçalho, junto da marca, deliberadamente diferente dos botões de
+# ação principal (que são a barra inferior, cheios), para não competir com
+# eles nem parecer mais uma ação operacional do dia a dia.
+_GHOST_BUTTON_STYLE = f"""
+QPushButton {{
+    background-color: transparent;
+    color: {TEXT_LIGHT};
+    border: 2px solid {ORANGE};
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-weight: bold;
+    font-size: 13px;
+}}
+QPushButton:hover {{ background-color: rgba(245, 130, 31, 40); }}
+QPushButton:pressed {{ background-color: rgba(245, 130, 31, 80); }}
+"""
 
 _APP_STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -96,7 +159,7 @@ QPushButton {{
     background-color: {ORANGE};
     color: {NAVY};
     border: none;
-    border-radius: 6px;
+    border-radius: 10px;
     padding: 12px 18px;
     font-weight: bold;
     font-size: 14px;
@@ -114,10 +177,22 @@ QPushButton:disabled {{
 QFrame {{
     background-color: {NAVY_PANEL};
     border: 2px solid {ORANGE};
-    border-radius: 6px;
+    border-radius: 14px;
+}}
+/* QLabel é subclasse de QFrame no Qt — sem esta regra depois da de QFrame
+   (a ordem decide o empate entre dois seletores de mesma especificidade),
+   todo texto simples (títulos, "Modo: ...", etc.) herdaria a borda/fundo dos
+   cartões. Widgets que precisam de um fundo próprio (badges, valores)
+   definem seu style inline, que sempre tem prioridade sobre esta regra. */
+QLabel {{
+    border: none;
+    background: transparent;
 }}
 QStatusBar {{
     color: {TEXT_LIGHT};
+}}
+QStatusBar::item {{
+    border: none;
 }}
 """
 
@@ -145,7 +220,10 @@ class MainWindow(QMainWindow):
         # tamanho só vale para quando o usuário desmaximiza manualmente, daí
         # ser bem maior que o mínimo abaixo.
         self.resize(1280, 800)
-        self.setMinimumSize(1000, 640)
+        # Alto o bastante para o cabeçalho + os dois cartões de eixo (com o
+        # mostrador analógico) + a barra de botões nunca se sobreporem,
+        # mesmo desmaximizada e redimensionada para o menor tamanho possível.
+        self.setMinimumSize(1080, 760)
         self.setStyleSheet(_APP_STYLESHEET)
 
         self._settings = AppSettings()
@@ -184,18 +262,10 @@ class MainWindow(QMainWindow):
 
         root.addLayout(self._build_header())
 
-        status_row = QHBoxLayout()
-        status_row.setSpacing(24)
         self.mode_label = QLabel()
         self.mode_label.setAlignment(Qt.AlignCenter)
         self.mode_label.setStyleSheet("font-size: 14px;")
-        self.connection_label = QLabel()
-        self.connection_label.setAlignment(Qt.AlignCenter)
-        status_row.addStretch(1)
-        status_row.addWidget(self.mode_label)
-        status_row.addWidget(self.connection_label)
-        status_row.addStretch(1)
-        root.addLayout(status_row)
+        root.addWidget(self.mode_label)
 
         # Os dois eixos lado a lado, cada um em um cartão do mesmo tamanho
         # (stretch 1 para os dois), com peso 1 na coluna principal para
@@ -203,47 +273,70 @@ class MainWindow(QMainWindow):
         axes_row = QHBoxLayout()
         axes_row.setSpacing(24)
         self._axis_widgets = {
-            TILT_AXIS: self._build_axis_panel("Inclinação (tilt)"),
-            PAN_AXIS: self._build_axis_panel("Azimute (pan)"),
+            TILT_AXIS: self._build_axis_panel("Inclinação (tilt)", *_AXIS_RANGE[TILT_AXIS]),
+            PAN_AXIS: self._build_axis_panel("Azimute (pan)", *_AXIS_RANGE[PAN_AXIS]),
         }
         axes_row.addWidget(self._axis_widgets[TILT_AXIS]["frame"], 1)
         axes_row.addWidget(self._axis_widgets[PAN_AXIS]["frame"], 1)
         root.addLayout(axes_row, 1)
 
-        buttons_row = QHBoxLayout()
-        buttons_row.setSpacing(16)
-        self.start_stop_btn = QPushButton("Iniciar")
-        self.start_stop_btn.clicked.connect(self._toggle_start_stop)
-        self.reset_btn = QPushButton("Resetar limites")
-        self.reset_btn.clicked.connect(self._reset_limits)
-        self.calibrate_btn = QPushButton("Calibrar")
-        self.calibrate_btn.clicked.connect(self._calibrate)
-        self.vibration_btn = QPushButton("Modo Vibração")
-        self.vibration_btn.clicked.connect(self._start_vibration_capture)
-        self.settings_btn = QPushButton("Configurações...")
-        self.settings_btn.clicked.connect(self._open_settings)
-        self.report_btn = QPushButton("Gerar relatório PDF")
-        self.report_btn.clicked.connect(self._generate_report)
-        # Peso igual (stretch 1) para os seis: preenchem a largura toda de
-        # forma uniforme em vez de ficarem amontoados de um lado só, com o
-        # resto da barra vazio, como numa janela maximizada larga.
-        for btn in (
-            self.start_stop_btn,
-            self.reset_btn,
-            self.calibrate_btn,
-            self.vibration_btn,
-            self.settings_btn,
-            self.report_btn,
-        ):
-            btn.setMinimumHeight(46)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            buttons_row.addWidget(btn, 1)
-        root.addLayout(buttons_row)
+        root.addLayout(self._build_buttons_row())
 
+        # Indicador de conexão embaixo da tela, junto da barra de status —
+        # widget permanente (não é apagado pelas mensagens temporárias de
+        # showMessage()) e fica à direita, convenção usual para indicador de
+        # conexão persistente.
+        self.connection_label = QLabel()
+        self.connection_label.setAlignment(Qt.AlignCenter)
+        self.statusBar().addPermanentWidget(self.connection_label)
         self.statusBar().showMessage("Pronto.")
 
-    def _build_header(self) -> QHBoxLayout:
+    def _build_buttons_row(self) -> QHBoxLayout:
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(16)
+
+        self.start_stop_btn = QPushButton("Iniciar")
+        self.start_stop_btn.clicked.connect(self._toggle_start_stop)
+        self.calibrate_btn = QPushButton("Calibrar")
+        self.calibrate_btn.clicked.connect(self._calibrate)
+        self.reset_btn = QPushButton("Resetar limites")
+        self.reset_btn.clicked.connect(self._reset_limits)
+        self.vibration_btn = QPushButton("Modo Vibração")
+        self.vibration_btn.clicked.connect(self._start_vibration_capture)
+        self.report_btn = QPushButton("Gerar relatório PDF")
+        self.report_btn.clicked.connect(self._generate_report)
+
+        for btn in (self.start_stop_btn, self.calibrate_btn, self.reset_btn, self.vibration_btn, self.report_btn):
+            btn.setMinimumHeight(46)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        # Ordem e agrupamento seguem o fluxo de uso, esquerda->direita:
+        # (1) Iniciar/Parar, a ação principal, em destaque (verde/vermelho,
+        #     e o dobro da largura dos outros); (2) Calibrar + Resetar
+        #     limites, as duas ações de preparação/ajuste da sessão, juntas;
+        #     (3) Modo Vibração, um ensaio especial, isolado; (4) Gerar
+        #     relatório, a ação final ("exportar"), na ponta direita.
+        buttons_row.addWidget(self.start_stop_btn, 2)
+        buttons_row.addSpacing(8)
+        buttons_row.addWidget(self.calibrate_btn, 1)
+        buttons_row.addWidget(self.reset_btn, 1)
+        buttons_row.addSpacing(8)
+        buttons_row.addWidget(self.vibration_btn, 1)
+        buttons_row.addSpacing(8)
+        buttons_row.addWidget(self.report_btn, 1)
+
+        self._set_start_stop_style(running=False)
+        return buttons_row
+
+    def _set_start_stop_style(self, running: bool) -> None:
+        self.start_stop_btn.setStyleSheet(_STOP_STYLE if running else _START_STYLE)
+
+    def _build_header(self) -> QVBoxLayout:
+        header_wrapper = QVBoxLayout()
+        header_wrapper.setSpacing(14)
+
         header = QHBoxLayout()
+        header.setSpacing(16)
 
         title_label = QLabel(APP_NAME)
         title_label.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {TEXT_LIGHT};")
@@ -251,27 +344,57 @@ class MainWindow(QMainWindow):
 
         header.addStretch(1)
 
+        # Configurações fica no cabeçalho, junto da marca — fora da barra de
+        # ações operacionais de baixo (Iniciar/Calibrar/etc.), já que ajuste
+        # de conexão é uma etapa de preparação, não uma ação do dia a dia.
+        self.settings_btn = QPushButton("⚙ Configurações")
+        self.settings_btn.setStyleSheet(_GHOST_BUTTON_STYLE)
+        self.settings_btn.clicked.connect(self._open_settings)
+        header.addWidget(self.settings_btn)
+
+        # A logo ganha a mesma borda laranja arredondada usada nos cartões
+        # do resto da janela (em vez de um retângulo branco solto), e uma
+        # sombra suave para se destacar do fundo azul marinho — a "interação
+        # com as cores e a tela" pedida.
+        logo_card = QFrame()
+        logo_card.setStyleSheet(
+            f"background-color: white; border: 2px solid {ORANGE}; border-radius: 10px; padding: 4px 10px;"
+        )
+        logo_card_layout = QHBoxLayout(logo_card)
+        logo_card_layout.setContentsMargins(6, 4, 6, 4)
         if LOGO_PATH is not None:
             logo_label = QLabel()
             pixmap = QPixmap(LOGO_PATH)
             if not pixmap.isNull():
                 logo_label.setPixmap(pixmap.scaledToHeight(52, Qt.SmoothTransformation))
-                # A logo tem fundo branco (não transparente) — um "cartão"
-                # branco arredondado ao redor evita que pareça um retângulo
-                # solto sobre o fundo azul marinho do cabeçalho.
-                logo_label.setStyleSheet("background-color: white; border-radius: 6px; padding: 6px 10px;")
-                header.addWidget(logo_label, 0, Qt.AlignRight)
         else:
             logo_label = QLabel("AVIBRAS aeroco")
-            logo_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {ORANGE};")
-            header.addWidget(logo_label, 0, Qt.AlignRight)
+            logo_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {ORANGE}; background: transparent;")
+        logo_card_layout.addWidget(logo_label)
+        shadow = QGraphicsDropShadowEffect(logo_card)
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(0, 0, 0, 140))
+        logo_card.setGraphicsEffect(shadow)
+        header.addWidget(logo_card, 0, Qt.AlignRight)
 
-        return header
+        header_wrapper.addLayout(header)
 
-    def _build_axis_panel(self, title: str) -> dict:
-        """Cartão de um eixo: título, valor grande, aviso opcional e o par de
-        caixas de mínimo/máximo. Devolve os widgets num dicionário, para o
-        resto da janela atualizar os dois eixos pelo mesmo caminho de código.
+        # Linha fina separando o cabeçalho do resto da tela — costura visual
+        # entre a marca e os cartões de eixo abaixo.
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFixedHeight(2)
+        separator.setStyleSheet(f"background-color: {ORANGE}; border: none;")
+        header_wrapper.addWidget(separator)
+
+        return header_wrapper
+
+    def _build_axis_panel(self, title: str, minimum: float, maximum: float) -> dict:
+        """Cartão de um eixo: título, mostrador analógico, valor digital
+        grande, aviso opcional e o par de caixas de mínimo/máximo. Devolve
+        os widgets num dicionário, para o resto da janela atualizar os dois
+        eixos pelo mesmo caminho de código.
 
         É um QFrame (e não só um layout) de propósito: os dois eixos ficam
         como dois cartões do mesmo tamanho, com a mesma borda usada nas
@@ -279,7 +402,7 @@ class MainWindow(QMainWindow):
         maior — em vez de dois blocos de texto soltos sobre o fundo."""
         frame = QFrame()
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        frame.setMinimumHeight(320)
+        frame.setMinimumHeight(380)
         column = QVBoxLayout(frame)
         column.setContentsMargins(20, 18, 20, 18)
         column.setSpacing(10)
@@ -289,20 +412,21 @@ class MainWindow(QMainWindow):
         title_label.setStyleSheet(f"font-size: 17px; font-weight: bold; color: {ORANGE};")
         column.addWidget(title_label)
 
-        # Empurra o valor para o centro vertical do cartão, em vez de deixar
-        # tudo colado no topo enquanto o cartão cresce numa janela maximizada.
-        column.addStretch(1)
+        # Mostrador analógico (ponteiro em arco) — a indicação de posição
+        # pedida, além do valor digital abaixo dele.
+        gauge = AngleGauge(minimum, maximum)
+        column.addWidget(gauge)
 
         value_label = QLabel("--.--°")
         value_label.setAlignment(Qt.AlignCenter)
-        value_label.setFont(QFont("Sans Serif", 56, QFont.Bold))
-        column.addWidget(value_label)
+        value_label.setFont(QFont("Sans Serif", 40, QFont.Bold))
+        value_label.setStyleSheet(_MAIN_VALUE_STYLE)
+        column.addWidget(value_label, 0, Qt.AlignCenter)
 
         # Normalmente oculto; usado para explicar por que um eixo está sem
-        # valor (ex: firmware antigo, sem azimute). Fica escondido em vez de
-        # só vazio porque a folha de estilo desta janela dá borda a QFrame, e
-        # QLabel herda de QFrame — um rótulo vazio apareceria como uma faixa
-        # com borda no meio do painel.
+        # valor (ex: firmware antigo, sem azimute). Escondido (setVisible)
+        # em vez de só vazio para não reservar uma linha de espaço em branco
+        # quando não há nenhum aviso a mostrar.
         note_label = QLabel("")
         note_label.setAlignment(Qt.AlignCenter)
         note_label.setStyleSheet("font-size: 12px; color: #9aa5b1;")
@@ -321,6 +445,7 @@ class MainWindow(QMainWindow):
 
         return {
             "frame": frame,
+            "gauge": gauge,
             "value": value_label,
             "note": note_label,
             "min_value": min_value_label,
@@ -416,6 +541,7 @@ class MainWindow(QMainWindow):
         )
         self._running = True
         self.start_stop_btn.setText("Parar")
+        self._set_start_stop_style(running=True)
         self._update_mode_label()
         self._set_connection_status("simulacao" if self._settings.mode == "simulado" else "conectando")
         self.statusBar().showMessage(f"Conectado: {self._source.label}")
@@ -428,6 +554,7 @@ class MainWindow(QMainWindow):
         self._running = False
         self._displayed = {TILT_AXIS: None, PAN_AXIS: None}
         self.start_stop_btn.setText("Iniciar")
+        self._set_start_stop_style(running=False)
         self._update_mode_label()
         self._set_connection_status("parado")
         self.statusBar().showMessage("Parado.")
@@ -501,10 +628,12 @@ class MainWindow(QMainWindow):
                 # Firmware anterior à v1.2.0 não mede azimute — deixa claro
                 # que o eixo está sem dado, em vez de mostrar um zero falso.
                 widgets["value"].setText("--.--°")
+                widgets["gauge"].setValue(None)
                 widgets["note"].setText("firmware sem este eixo")
                 widgets["note"].setVisible(True)
                 continue
             widgets["value"].setText(f"{self._angle_for_display(axis, value):.2f}°")
+            widgets["gauge"].setValue(value)
             widgets["note"].setVisible(False)
 
             for event in self._trackers[axis].process(reading):
