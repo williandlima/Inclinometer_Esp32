@@ -6,8 +6,8 @@ import datetime as _dt
 import os
 import threading
 
-from PyQt5.QtCore import QObject, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt5.QtCore import QObject, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -39,6 +39,9 @@ from limits.history_store import HistoryStore
 from limits.limit_tracker import PAN_AXIS, TILT_AXIS, LimitTracker
 from limits.vibration_stats import analyze_axis, has_pan_samples
 from report.report_generator import generate_report, generate_vibration_report
+from ui import icons
+from ui.action_button import ActionButton
+from ui.equipment_schematic import EquipmentSchematic
 from ui.gauge_widget import AngleGauge
 from ui.settings_dialog import AppSettings, SettingsDialog
 from ui.vibration_dialog import VibrationConfigDialog, VibrationResultDialog
@@ -61,6 +64,7 @@ ORANGE = "#F5821F"
 TEXT_LIGHT = "#F4F6F9"
 GREEN = "#2e7d32"
 RED = "#c62828"
+STEEL_BLUE = "#2E5C8A"  # só para o botão de relatório — sinaliza "categoria diferente" (exportar dado, não operar o equipamento)
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
 
 
@@ -73,43 +77,6 @@ def _find_logo_path() -> str | None:
 
 
 LOGO_PATH = _find_logo_path()
-
-
-def _make_gear_icon(color: str, size: int = 22) -> QIcon:
-    """Desenha uma engrenagem simples com QPainter, em vez de usar o
-    caractere Unicode "⚙" — este é renderizado como emoji colorido (e com
-    proporção/alinhamento inconsistentes em relação ao texto do botão) pela
-    fonte padrão do Windows, o que destoava do resto do ícone plano da
-    aplicação."""
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing)
-    painter.setPen(Qt.NoPen)
-    painter.setBrush(QColor(color))
-
-    center = QPointF(size / 2, size / 2)
-    outer_r = size * 0.46
-    inner_r = size * 0.30
-    tooth_w = size * 0.16
-    tooth_len = outer_r - inner_r + size * 0.04
-    teeth = 8
-
-    for i in range(teeth):
-        painter.save()
-        painter.translate(center)
-        painter.rotate(360.0 / teeth * i)
-        painter.drawRoundedRect(QRectF(-tooth_w / 2, -outer_r, tooth_w, tooth_len), 1.0, 1.0)
-        painter.restore()
-
-    painter.drawEllipse(center, inner_r, inner_r)
-
-    # Furo central: "apaga" um círculo menor por cima do que já foi
-    # desenhado, deixando o miolo da engrenagem vazado.
-    painter.setCompositionMode(QPainter.CompositionMode_Clear)
-    painter.drawEllipse(center, size * 0.13, size * 0.13)
-    painter.end()
-    return QIcon(pixmap)
 
 # Exibição da leitura contínua em degraus de 0,25°. O grosso da estabilidade
 # vem do firmware (filtro interno do MPU6050 + média móvel, ver
@@ -155,20 +122,6 @@ _CONN_STYLES = {
     "erro": ("● Falha de conexão", f"{_BADGE_STYLE} color: white; background-color: {RED};"),
     "simulacao": ("● Simulação (interna)", f"color: {ORANGE}; background: transparent; font-weight: bold; border: none;"),
 }
-
-# Botão Iniciar/Parar: verde/vermelho (a mesma linguagem já usada nos badges
-# de conexão) para se destacar como a ação principal entre os botões,
-# todos os outros laranja.
-_START_STYLE = f"""
-QPushButton {{ background-color: {GREEN}; color: white; }}
-QPushButton:hover {{ background-color: #3a9440; }}
-QPushButton:pressed {{ background-color: #245c26; }}
-"""
-_STOP_STYLE = f"""
-QPushButton {{ background-color: {RED}; color: white; }}
-QPushButton:hover {{ background-color: #e14040; }}
-QPushButton:pressed {{ background-color: #931d1d; }}
-"""
 
 # Botão de Configurações: estilo "fantasma" (contorno, sem preenchimento) —
 # fica no cabeçalho, junto da marca, deliberadamente diferente dos botões de
@@ -288,6 +241,12 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._update_mode_label()
         self._set_connection_status("parado")
+        self._set_start_stop_style(running=False)
+
+        self._clock_timer = QTimer(self)
+        self._clock_timer.timeout.connect(self._update_clock)
+        self._clock_timer.start(1000)
+        self._update_clock()
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -302,24 +261,21 @@ class MainWindow(QMainWindow):
         root.setSpacing(18)
 
         root.addLayout(self._build_header())
+        root.addWidget(self._build_info_bar())
 
-        # Cinza discreto, não branco: é informação secundária (estado/modo),
-        # não deve competir com os números grandes dos cartões abaixo.
-        self.mode_label = QLabel()
-        self.mode_label.setAlignment(Qt.AlignCenter)
-        self.mode_label.setStyleSheet("font-size: 13px; color: #9aa5b1;")
-        root.addWidget(self.mode_label)
-
-        # Os dois eixos lado a lado, cada um em um cartão do mesmo tamanho
-        # (stretch 1 para os dois), com peso 1 na coluna principal para
-        # ocupar o espaço vertical que sobra numa janela maximizada.
+        # Os dois eixos lado a lado, com o esquema do equipamento entre
+        # eles — cada cartão de eixo tem o mesmo tamanho (stretch 1), o
+        # esquema fica no seu próprio tamanho (stretch 0). Peso 1 na coluna
+        # principal para ocupar o espaço vertical que sobra numa janela
+        # maximizada.
         axes_row = QHBoxLayout()
         axes_row.setSpacing(24)
         self._axis_widgets = {
-            TILT_AXIS: self._build_axis_panel("Inclinação (tilt)", *_AXIS_RANGE[TILT_AXIS]),
-            PAN_AXIS: self._build_axis_panel("Azimute (pan)", *_AXIS_RANGE[PAN_AXIS]),
+            TILT_AXIS: self._build_axis_panel("Inclinação (tilt)", icons.tilt_icon, *_AXIS_RANGE[TILT_AXIS]),
+            PAN_AXIS: self._build_axis_panel("Azimute (pan)", icons.pan_icon, *_AXIS_RANGE[PAN_AXIS]),
         }
         axes_row.addWidget(self._axis_widgets[TILT_AXIS]["frame"], 1)
+        axes_row.addLayout(self._build_equipment_column())
         axes_row.addWidget(self._axis_widgets[PAN_AXIS]["frame"], 1)
         root.addLayout(axes_row, 1)
 
@@ -338,28 +294,26 @@ class MainWindow(QMainWindow):
         buttons_row = QHBoxLayout()
         buttons_row.setSpacing(16)
 
-        self.start_stop_btn = QPushButton("Iniciar")
+        self.start_stop_btn = ActionButton("Iniciar", icons.play_icon("white"), GREEN, "white", "#3a9440", "#245c26")
         self.start_stop_btn.clicked.connect(self._toggle_start_stop)
-        self.calibrate_btn = QPushButton("Calibrar")
+        self.calibrate_btn = ActionButton("Calibrar", icons.target_icon(NAVY), ORANGE, NAVY, "#ff9d40", "#cf6a12")
         self.calibrate_btn.clicked.connect(self._calibrate)
-        self.reset_btn = QPushButton("Resetar limites")
+        self.reset_btn = ActionButton("Resetar limites", icons.reset_icon(NAVY), ORANGE, NAVY, "#ff9d40", "#cf6a12")
         self.reset_btn.clicked.connect(self._reset_limits)
-        self.vibration_btn = QPushButton("Modo Vibração")
+        self.vibration_btn = ActionButton("Modo Vibração", icons.vibration_icon(NAVY), ORANGE, NAVY, "#ff9d40", "#cf6a12")
         self.vibration_btn.clicked.connect(self._start_vibration_capture)
-        self.report_btn = QPushButton("Gerar relatório PDF")
+        self.report_btn = ActionButton("Gerar relatório PDF", icons.report_icon("white"), STEEL_BLUE, "white", "#3d74ab", "#1f405c")
         self.report_btn.clicked.connect(self._generate_report)
-
-        for btn in (self.start_stop_btn, self.calibrate_btn, self.reset_btn, self.vibration_btn, self.report_btn):
-            btn.setMinimumHeight(46)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         # Ordem e agrupamento seguem o fluxo de uso, esquerda->direita:
         # (1) Iniciar/Parar, a ação principal, destacada por cor
-        # (verde/vermelho) — mas do mesmo tamanho dos outros, não o dobro,
-        # que ficava desproporcional; (2) Calibrar + Resetar limites, as
-        # duas ações de preparação/ajuste da sessão, juntas; (3) Modo
-        # Vibração, um ensaio especial, isolado; (4) Gerar relatório, a
-        # ação final ("exportar"), na ponta direita.
+        # (verde/vermelho); (2) Calibrar + Resetar limites, as duas ações
+        # de preparação/ajuste da sessão, juntas, em laranja (a cor
+        # "operacional" do resto do app); (3) Modo Vibração, um ensaio
+        # especial, isolado, também laranja; (4) Gerar relatório, a ação
+        # final ("exportar dado"), na ponta direita, na única cor nova
+        # (azul-aço) — sinaliza que é uma categoria diferente de ação, sem
+        # acrescentar mais que isso à paleta.
         buttons_row.addWidget(self.start_stop_btn, 1)
         buttons_row.addSpacing(8)
         buttons_row.addWidget(self.calibrate_btn, 1)
@@ -369,11 +323,15 @@ class MainWindow(QMainWindow):
         buttons_row.addSpacing(8)
         buttons_row.addWidget(self.report_btn, 1)
 
-        self._set_start_stop_style(running=False)
         return buttons_row
 
     def _set_start_stop_style(self, running: bool) -> None:
-        self.start_stop_btn.setStyleSheet(_STOP_STYLE if running else _START_STYLE)
+        if running:
+            self.start_stop_btn.set_content("Parar", icons.stop_icon("white"))
+            self.start_stop_btn.set_colors(RED, "white", "#e14040", "#931d1d")
+        else:
+            self.start_stop_btn.set_content("Iniciar", icons.play_icon("white"))
+            self.start_stop_btn.set_colors(GREEN, "white", "#3a9440", "#245c26")
 
     def _build_header(self) -> QVBoxLayout:
         header_wrapper = QVBoxLayout()
@@ -382,26 +340,12 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.setSpacing(16)
 
-        title_label = QLabel(APP_NAME)
-        title_label.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {TEXT_LIGHT};")
-        header.addWidget(title_label)
-
-        header.addStretch(1)
-
-        # Configurações fica no cabeçalho, junto da marca — fora da barra de
-        # ações operacionais de baixo (Iniciar/Calibrar/etc.), já que ajuste
-        # de conexão é uma etapa de preparação, não uma ação do dia a dia.
-        self.settings_btn = QPushButton(" Configurações")
-        self.settings_btn.setIcon(_make_gear_icon(TEXT_LIGHT))
-        self.settings_btn.setIconSize(QSize(18, 18))
-        self.settings_btn.setStyleSheet(_GHOST_BUTTON_STYLE)
-        self.settings_btn.clicked.connect(self._open_settings)
-        header.addWidget(self.settings_btn)
-
         # Cartão branco simples, sem contorno colorido — a logo já tem
         # contraste de sobra contra o branco; uma borda laranja por cima só
         # competia com as cores da própria marca. A sombra suave já basta
-        # para separar o cartão do fundo azul marinho.
+        # para separar o cartão do fundo azul marinho. Fica à esquerda,
+        # junto do título — é a marca "assinando" a tela, não um selo solto
+        # no canto.
         logo_card = QFrame()
         logo_card.setStyleSheet("background-color: white; border: none; border-radius: 10px; padding: 6px 16px;")
         logo_card_layout = QHBoxLayout(logo_card)
@@ -420,7 +364,37 @@ class MainWindow(QMainWindow):
         shadow.setOffset(0, 4)
         shadow.setColor(QColor(0, 0, 0, 110))
         logo_card.setGraphicsEffect(shadow)
-        header.addWidget(logo_card, 0, Qt.AlignRight)
+        header.addWidget(logo_card)
+
+        title_column = QVBoxLayout()
+        title_column.setSpacing(2)
+        title_label = QLabel(APP_NAME)
+        title_label.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {TEXT_LIGHT};")
+        subtitle_label = QLabel("Monitoramento e Ensaio de Posicionamento")
+        subtitle_label.setStyleSheet("font-size: 12px; color: #9aa5b1;")
+        title_column.addWidget(title_label)
+        title_column.addWidget(subtitle_label)
+        header.addLayout(title_column)
+
+        header.addStretch(1)
+
+        # Configurações fica no cabeçalho, junto da marca — fora da barra de
+        # ações operacionais de baixo (Iniciar/Calibrar/etc.), já que ajuste
+        # de conexão é uma etapa de preparação, não uma ação do dia a dia.
+        self.settings_btn = QPushButton(" Configurações")
+        self.settings_btn.setIcon(icons.gear_icon(TEXT_LIGHT))
+        self.settings_btn.setIconSize(QSize(18, 18))
+        self.settings_btn.setStyleSheet(_GHOST_BUTTON_STYLE)
+        self.settings_btn.clicked.connect(self._open_settings)
+        header.addWidget(self.settings_btn)
+
+        # Relógio — atualizado por QTimer em _update_clock(). Só decorativo
+        # (não afeta nenhum dado/registro, que continuam usando o horário
+        # real do sistema em cada leitura).
+        self.clock_label = QLabel()
+        self.clock_label.setStyleSheet("font-size: 13px; color: #9aa5b1;")
+        self.clock_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header.addWidget(self.clock_label)
 
         header_wrapper.addLayout(header)
 
@@ -434,7 +408,58 @@ class MainWindow(QMainWindow):
 
         return header_wrapper
 
-    def _build_axis_panel(self, title: str, minimum: float, maximum: float) -> dict:
+    def _build_info_bar(self) -> QFrame:
+        # Faixa de contexto entre o cabeçalho e os cartões — modo atual,
+        # sensor (fixo: é o hardware que o firmware sempre usa, não depende
+        # de nenhuma leitura) e porta/dispositivo quando aplicável. Deixada
+        # de fora de propósito: telemetria que este app não recebe de
+        # verdade (taxa de amostragem "vista" pelo app é a do polling, não
+        # os 100Hz internos do firmware; não há leitura de temperatura no
+        # protocolo) — mostrar isso seria inventar dado.
+        frame = QFrame()
+        frame.setStyleSheet(f"background-color: {NAVY_PANEL}; border: 1px solid #234070; border-radius: 8px;")
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(18, 8, 18, 8)
+        layout.setSpacing(24)
+
+        def _segment(label_text: str) -> QLabel:
+            value = QLabel(label_text)
+            value.setStyleSheet(f"font-size: 13px; color: {TEXT_LIGHT}; font-weight: bold; border: none; background: transparent;")
+            return value
+
+        self.info_mode_label = _segment("—")
+        self.info_sensor_label = _segment("MPU6050")
+        self.info_device_label = _segment("—")
+
+        for caption, value_label in (
+            ("Modo", self.info_mode_label),
+            ("Sensor", self.info_sensor_label),
+            ("Porta/Dispositivo", self.info_device_label),
+        ):
+            caption_label = QLabel(caption + ":")
+            caption_label.setStyleSheet("font-size: 12px; color: #9aa5b1; border: none; background: transparent;")
+            pair = QHBoxLayout()
+            pair.setSpacing(6)
+            pair.addWidget(caption_label)
+            pair.addWidget(value_label)
+            layout.addLayout(pair)
+
+        layout.addStretch(1)
+        return frame
+
+    def _build_equipment_column(self) -> QVBoxLayout:
+        column = QVBoxLayout()
+        column.setSpacing(8)
+        title_label = QLabel("Posição do Equipamento")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setWordWrap(True)
+        title_label.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {ORANGE};")
+        column.addWidget(title_label)
+        self._equipment_schematic = EquipmentSchematic()
+        column.addWidget(self._equipment_schematic, 1)
+        return column
+
+    def _build_axis_panel(self, title: str, icon_fn, minimum: float, maximum: float) -> dict:
         """Cartão de um eixo: título, mostrador analógico, valor digital
         grande, aviso opcional e o par de caixas de mínimo/máximo. Devolve
         os widgets num dicionário, para o resto da janela atualizar os dois
@@ -459,10 +484,17 @@ class MainWindow(QMainWindow):
         card_shadow.setColor(QColor(0, 0, 0, 90))
         frame.setGraphicsEffect(card_shadow)
 
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        icon_label = QLabel()
+        icon_label.setPixmap(icon_fn(ORANGE, 22).pixmap(QSize(22, 22)))
         title_label = QLabel(title)
-        title_label.setAlignment(Qt.AlignCenter)
         title_label.setStyleSheet(f"font-size: 17px; font-weight: bold; color: {ORANGE};")
-        column.addWidget(title_label)
+        title_row.addStretch(1)
+        title_row.addWidget(icon_label)
+        title_row.addWidget(title_label)
+        title_row.addStretch(1)
+        column.addLayout(title_row)
 
         # Mostrador analógico (ponteiro em arco) — a indicação de posição
         # pedida, além do valor digital abaixo dele.
@@ -539,7 +571,18 @@ class MainWindow(QMainWindow):
             "ble": "Real (Bluetooth BLE)",
         }[self._settings.mode]
         estado = "em execução" if self._running else "parado"
-        self.mode_label.setText(f"Modo: {modo} — {estado}")
+        self.info_mode_label.setText(f"{modo} ({estado})")
+
+        if self._settings.mode == "real":
+            device_text = self._settings.serial_port or "—"
+        elif self._settings.mode == "ble":
+            device_text = self._settings.ble_address or "—"
+        else:
+            device_text = "—"
+        self.info_device_label.setText(device_text)
+
+    def _update_clock(self) -> None:
+        self.clock_label.setText(_dt.datetime.now().strftime("%d/%m/%Y   %H:%M:%S"))
 
     def _set_connection_status(self, status: str) -> None:
         text, style = _CONN_STYLES[status]
@@ -674,6 +717,7 @@ class MainWindow(QMainWindow):
         self._history.add_reading(reading)
 
         values = {TILT_AXIS: reading.angle_deg, PAN_AXIS: reading.pan_deg}
+        self._equipment_schematic.setValues(values[TILT_AXIS], values[PAN_AXIS])
         for axis, value in values.items():
             widgets = self._axis_widgets[axis]
             if value is None:
