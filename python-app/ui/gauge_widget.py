@@ -2,10 +2,11 @@
 posição atual de um eixo, complementando o valor digital exibido ao lado.
 
 Referência visual: instrumentos de bordo clássicos (indicador de
-velocidade/atitude) — mostrador escuro, aro claro e graduação numerada, em
-vez de um ícone plano. A cor de aviso perto das pontas (o mesmo papel do
-arco vermelho de "não exceder" de um instrumento real, adaptado ao que este
-projeto de fato sabe: os limites configurados em `data_source/base.py` —
+velocidade/atitude) — mostrador escuro, aro claro, arco com halo luminoso
+e graduação numerada densa (a cada 1/6 da faixa), em vez de um ícone
+plano. A cor de aviso perto das pontas (o mesmo papel do arco vermelho de
+"não exceder" de um instrumento real, adaptado ao que este projeto de
+fato sabe: os limites configurados em `data_source/base.py` —
 `ANGLE_MIN_DEG`/`MAX_DEG`, `PAN_MIN_DEG`/`MAX_DEG`, não uma zona de
 segurança validada por ensaio) é discreta e dentro da própria paleta da
 marca (o mesmo laranja escurecido usado no cubo do ponteiro) — nada de
@@ -44,17 +45,24 @@ _TEXT_MUTED = QColor("#9AA5B1")
 # paleta azul/laranja do resto do app (ver docstring do módulo). Nada de
 # verde/âmbar: uma terceira e quarta cor só deixaria o mostrador com cara
 # de painel de brinquedo, não de instrumento.
-_TRACK_COLOR = QColor("#28417A")   # a maior parte do arco (faixa normal)
-_WARN_COLOR = QColor("#8A3B2A")    # laranja bem escurecido/dessaturado, só na ponta
+_TRACK_COLOR = QColor("#2E5C9E")   # a maior parte do arco (faixa normal)
+_WARN_COLOR = QColor("#B84A2E")    # laranja/vermelho escurecido, só na ponta
 _ZONE_WARN_FRACTION = 0.12          # últimos 12% da faixa, de cada lado
+
+# Graduação: a cada 1/6 da faixa (números) e a cada 1/12 (marcas finas sem
+# número) — mais densa que "só as pontas e o meio", para ler como
+# instrumento, não como ícone.
+_TICK_FRACTIONS_MAJOR = (0.0, 1 / 6, 2 / 6, 3 / 6, 4 / 6, 5 / 6, 1.0)
+_TICK_FRACTIONS_MINOR = (1 / 12, 3 / 12, 5 / 12, 7 / 12, 9 / 12, 11 / 12)
 
 # Geometria dos rótulos/marcações — usados tanto para desenhar quanto para
 # calcular, em paintEvent, o maior raio que ainda deixa espaço para eles
 # (ver o comentário lá) sem cortar nada nas bordas do widget.
 _OUTER_FACTOR = 1.08  # marcação maior e "sobra" da pena do arco, além do raio nominal
-_LABEL_GAP = 12
-_SIDE_LABEL_W = 46
+_LABEL_GAP = 10
+_SIDE_LABEL_W = 40
 _TOP_LABEL_H = 16
+_CENTER_LABEL_W = 36
 
 
 class AngleGauge(QWidget):
@@ -80,6 +88,20 @@ class AngleGauge(QWidget):
         self._value = value
         self.update()
 
+    def is_near_limit(self) -> bool | None:
+        """True se o valor atual estiver na faixa de aviso perto de uma das
+        pontas, False se estiver na faixa normal, None sem dado. Usado pelo
+        selo "dentro do limite"/"próximo do limite" ao lado do valor —
+        deriva da mesma fração já usada para colorir o arco, não é um
+        conceito novo."""
+        if self._value is None:
+            return None
+        span = self._maximum - self._minimum
+        if span == 0:
+            return False
+        fraction = (self._value - self._minimum) / span
+        return fraction <= _ZONE_WARN_FRACTION or fraction >= 1.0 - _ZONE_WARN_FRACTION
+
     def sizeHint(self) -> QSize:  # noqa: N802 - override Qt
         return QSize(360, 300)
 
@@ -87,7 +109,7 @@ class AngleGauge(QWidget):
         span = self._maximum - self._minimum
         fraction = 0.0 if span == 0 else (value - self._minimum) / span
         fraction = min(1.0, max(0.0, fraction))
-        return 180.0 - fraction * 180.0  # min->180° (esquerda), max->0° (direita)
+        return self._fraction_to_angle_deg(fraction)
 
     def _fraction_to_angle_deg(self, fraction: float) -> float:
         return 180.0 - fraction * 180.0
@@ -99,11 +121,12 @@ class AngleGauge(QWidget):
         w, h = self.width(), self.height()
 
         # O raio precisa deixar espaço não só para o arco em si, mas para os
-        # rótulos de mínimo/máximo (dos lados) e de zero (por cima) — e para
-        # o cubo do ponteiro (por baixo do centro). `_OUTER_FACTOR` cobre a
-        # marcação maior e a "sobra" da pena do arco, que vão um pouco além
-        # do raio nominal. Sem essas reservas, em janelas menores os rótulos
-        # das pontas saem cortados (aconteceu numa versão anterior).
+        # rótulos ao redor (mín./máx. dos lados, zero em cima, e os
+        # intermediários em diagonal) — e para o cubo do ponteiro (por
+        # baixo do centro). `_OUTER_FACTOR` cobre a marcação maior e a
+        # "sobra" da pena do arco, que vão um pouco além do raio nominal.
+        # Sem essas reservas, em janelas menores os rótulos das pontas saem
+        # cortados (aconteceu numa versão anterior).
         side_allowance = _LABEL_GAP + _SIDE_LABEL_W + 6
         top_allowance = _LABEL_GAP + _TOP_LABEL_H + 6
         bottom_allowance = 30
@@ -155,8 +178,26 @@ class AngleGauge(QWidget):
         # ressalva sobre o significado dessa cor no cabeçalho do módulo.
         bounds = [0.0, _ZONE_WARN_FRACTION, 1.0 - _ZONE_WARN_FRACTION, 1.0]
         colors = [_WARN_COLOR, _TRACK_COLOR, _WARN_COLOR]
+        base_width = max(7.0, radius * 0.15)
+
+        # Halo suave por baixo do arco nítido — duas cópias mais largas e
+        # translúcidas do mesmo arco, imitando o brilho de um mostrador
+        # retroiluminado em vez de uma faixa lisa e chapada.
+        glow_pen = QPen()
+        glow_pen.setCapStyle(Qt.FlatCap)
+        for glow_width, glow_alpha in ((base_width * 2.8, 35), (base_width * 1.8, 65)):
+            glow_pen.setWidthF(glow_width)
+            for i, color in enumerate(colors):
+                start_angle = self._fraction_to_angle_deg(bounds[i])
+                end_angle = self._fraction_to_angle_deg(bounds[i + 1])
+                glow_color = QColor(color)
+                glow_color.setAlpha(glow_alpha)
+                glow_pen.setColor(glow_color)
+                painter.setPen(glow_pen)
+                painter.drawArc(rect, int(start_angle * 16), int((end_angle - start_angle) * 16))
+
         pen = QPen()
-        pen.setWidthF(max(7.0, radius * 0.14))
+        pen.setWidthF(base_width)
         pen.setCapStyle(Qt.FlatCap)
         for i, color in enumerate(colors):
             start_angle = self._fraction_to_angle_deg(bounds[i])
@@ -166,14 +207,10 @@ class AngleGauge(QWidget):
             painter.drawArc(rect, int(start_angle * 16), int((end_angle - start_angle) * 16))
 
     def _draw_ticks(self, painter: QPainter, cx: float, cy: float, radius: float) -> None:
-        # Marcas maiores (e mais claras) no mínimo/quarto/zero/quarto/máximo
-        # — as cinco referências com número — e menores nos oitavos, só
-        # para dar noção de escala fina entre elas (visual de instrumento
-        # de bordo, com muitas graduações).
-        for tick_deg in (180, 135, 90, 45, 0):
-            self._draw_tick(painter, cx, cy, radius, tick_deg, major=True)
-        for tick_deg in (157.5, 112.5, 67.5, 22.5):
-            self._draw_tick(painter, cx, cy, radius, tick_deg, major=False)
+        for frac in _TICK_FRACTIONS_MAJOR:
+            self._draw_tick(painter, cx, cy, radius, self._fraction_to_angle_deg(frac), major=True)
+        for frac in _TICK_FRACTIONS_MINOR:
+            self._draw_tick(painter, cx, cy, radius, self._fraction_to_angle_deg(frac), major=False)
 
     def _draw_tick(self, painter: QPainter, cx: float, cy: float, radius: float, angle_deg: float, major: bool) -> None:
         angle_rad = math.radians(angle_deg)
@@ -181,34 +218,38 @@ class AngleGauge(QWidget):
         inner_r = radius * (0.90 if major else 0.96)
         outer = QPointF(cx + outer_r * math.cos(angle_rad), cy - outer_r * math.sin(angle_rad))
         inner = QPointF(cx + inner_r * math.cos(angle_rad), cy - inner_r * math.sin(angle_rad))
-        pen = QPen(_TEXT_LIGHT if major else _TEXT_MUTED, 2.6 if major else 1.4)
+        pen = QPen(_TEXT_LIGHT if major else _TEXT_MUTED, 2.4 if major else 1.2)
         pen.setCapStyle(Qt.RoundCap)
         painter.setPen(pen)
         painter.drawLine(inner, outer)
 
     def _draw_labels(self, painter: QPainter, cx: float, cy: float, radius: float) -> None:
-        mid = (self._minimum + self._maximum) / 2.0
-        quarter = (self._maximum - self._minimum) / 4.0
-        painter.setFont(QFont("Sans Serif", 10, QFont.DemiBold))
-        painter.setPen(_TEXT_MUTED)
-        self._draw_label(painter, cx, cy, radius, 180, f"{self._minimum:g}°", "left")
-        self._draw_label(painter, cx, cy, radius, 0, f"{self._maximum:g}°", "right")
-        self._draw_label(painter, cx, cy, radius, 135, f"{mid - quarter:g}°", "center")
-        self._draw_label(painter, cx, cy, radius, 45, f"{mid + quarter:g}°", "center")
-        painter.setPen(_TEXT_LIGHT)
-        self._draw_label(painter, cx, cy, radius, 90, "0°", "top")
+        painter.setFont(QFont("Sans Serif", 9, QFont.DemiBold))
+        span = self._maximum - self._minimum
+        for frac in _TICK_FRACTIONS_MAJOR:
+            angle_deg = self._fraction_to_angle_deg(frac)
+            value = self._minimum + frac * span
+            text = f"{value:g}°"
+            if frac == 0.0:
+                side = "left"
+            elif frac == 1.0:
+                side = "right"
+            elif frac == 0.5:
+                side = "top"
+            else:
+                side = "center"
+            painter.setPen(_TEXT_LIGHT if frac == 0.5 else _TEXT_MUTED)
+            self._draw_label(painter, cx, cy, radius, angle_deg, text, side)
 
     def _draw_label(self, painter: QPainter, cx: float, cy: float, radius: float, angle_deg: float, text: str, side: str) -> None:
         # Fica além da ponta da marcação maior e do alcance do ponteiro —
         # sem isso, um valor perto do centro da faixa cobre o rótulo "0°"
         # com a própria agulha (aconteceu numa versão anterior deste
         # widget). As mesmas constantes (`_OUTER_FACTOR`/`_LABEL_GAP`/
-        # `_SIDE_LABEL_W`/`_TOP_LABEL_H`) usadas aqui também reservam espaço
-        # para isso no cálculo do raio em `paintEvent` — mudar um lado sem
-        # o outro volta a cortar rótulo em janelas pequenas. Os rótulos
-        # "center" (nos quartos, em diagonal) cabem com folga dentro dessa
-        # mesma reserva, por ficarem sempre mais próximos do centro do que
-        # os de topo/lado.
+        # `_SIDE_LABEL_W`/`_TOP_LABEL_H`/`_CENTER_LABEL_W`) usadas aqui
+        # também reservam espaço para isso no cálculo do raio em
+        # `paintEvent` — mudar um lado sem o outro volta a cortar rótulo em
+        # janelas pequenas.
         angle_rad = math.radians(angle_deg)
         label_r = radius * _OUTER_FACTOR + _LABEL_GAP
         x = cx + label_r * math.cos(angle_rad)
@@ -222,8 +263,8 @@ class AngleGauge(QWidget):
         elif side == "top":  # zero (90°): centrado e inteiramente acima do ponto
             box_w, box_h = 50, _TOP_LABEL_H
             box = QRectF(x - box_w / 2, y - box_h, box_w, box_h)
-        else:  # "center": rótulos dos quartos (45°/135°), centrados no ponto
-            box_w, box_h = 44, 16
+        else:  # "center": rótulos intermediários (1/6, 2/6, 4/6, 5/6), centrados no ponto
+            box_w, box_h = _CENTER_LABEL_W, 16
             box = QRectF(x - box_w / 2, y - box_h / 2, box_w, box_h)
         painter.drawText(box, Qt.AlignCenter, text)
 
@@ -239,6 +280,14 @@ class AngleGauge(QWidget):
         base_a = QPointF(cx + base_half_w * math.cos(perp), cy - base_half_w * math.sin(perp))
         base_b = QPointF(cx - base_half_w * math.cos(perp), cy + base_half_w * math.sin(perp))
         needle = QPolygonF([tip, base_a, base_b])
+
+        # Brilho suave ao longo da agulha, antes da forma nítida — o mesmo
+        # truque do halo do arco, pra ela ler como iluminada, não desenhada.
+        glow_pen = QPen(QColor(255, 255, 255, 60), base_half_w * 4.5)
+        glow_pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(glow_pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawLine(QPointF(cx, cy), tip)
 
         # Sombra por baixo, levemente deslocada — dá profundidade sem
         # precisar de QGraphicsDropShadowEffect (não se aplica bem dentro de

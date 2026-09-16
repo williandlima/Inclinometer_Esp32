@@ -123,6 +123,12 @@ _CONN_STYLES = {
     "simulacao": ("● Simulação (interna)", f"color: {ORANGE}; background: transparent; font-weight: bold; border: none;"),
 }
 
+# Selo abaixo do valor de cada eixo — mesmo critério de zona de aviso do
+# mostrador (AngleGauge.is_near_limit()), ver o comentário lá.
+_GAUGE_WARN_COLOR = "#B84A2E"  # mesmo tom de ui/gauge_widget.py (_WARN_COLOR)
+_STATUS_OK_STYLE = f"font-size: 12px; font-weight: bold; color: white; background-color: {GREEN}; border-radius: 10px; padding: 4px 12px; border: none;"
+_STATUS_WARN_STYLE = f"font-size: 12px; font-weight: bold; color: white; background-color: {_GAUGE_WARN_COLOR}; border-radius: 10px; padding: 4px 12px; border: none;"
+
 # Botão de Configurações: estilo "fantasma" (contorno, sem preenchimento) —
 # fica no cabeçalho, junto da marca, deliberadamente diferente dos botões de
 # ação principal (que são a barra inferior, cheios), para não competir com
@@ -294,15 +300,30 @@ class MainWindow(QMainWindow):
         buttons_row = QHBoxLayout()
         buttons_row.setSpacing(16)
 
-        self.start_stop_btn = ActionButton("Iniciar", icons.play_icon("white"), GREEN, "white", "#3a9440", "#245c26")
+        self.start_stop_btn = ActionButton(
+            "Iniciar", "Iniciar leitura", icons.play_icon("white"),
+            GREEN, "white", "#3a9440", "#245c26", "#d7ecd9",
+        )
         self.start_stop_btn.clicked.connect(self._toggle_start_stop)
-        self.calibrate_btn = ActionButton("Calibrar", icons.target_icon(NAVY), ORANGE, NAVY, "#ff9d40", "#cf6a12")
+        self.calibrate_btn = ActionButton(
+            "Calibrar", "Zerar posição", icons.target_icon(NAVY),
+            ORANGE, NAVY, "#ff9d40", "#cf6a12", "#1c3a63",
+        )
         self.calibrate_btn.clicked.connect(self._calibrate)
-        self.reset_btn = ActionButton("Resetar limites", icons.reset_icon(NAVY), ORANGE, NAVY, "#ff9d40", "#cf6a12")
+        self.reset_btn = ActionButton(
+            "Resetar limites", "Zerar mín./máx.", icons.reset_icon(NAVY),
+            ORANGE, NAVY, "#ff9d40", "#cf6a12", "#1c3a63",
+        )
         self.reset_btn.clicked.connect(self._reset_limits)
-        self.vibration_btn = ActionButton("Modo Vibração", icons.vibration_icon(NAVY), ORANGE, NAVY, "#ff9d40", "#cf6a12")
+        self.vibration_btn = ActionButton(
+            "Modo Vibração", "Ensaio dinâmico", icons.vibration_icon(NAVY),
+            ORANGE, NAVY, "#ff9d40", "#cf6a12", "#1c3a63",
+        )
         self.vibration_btn.clicked.connect(self._start_vibration_capture)
-        self.report_btn = ActionButton("Gerar relatório PDF", icons.report_icon("white"), STEEL_BLUE, "white", "#3d74ab", "#1f405c")
+        self.report_btn = ActionButton(
+            "Gerar Relatório", "Exportar PDF", icons.report_icon("white"),
+            STEEL_BLUE, "white", "#3d74ab", "#1f405c", "#cfe0f0",
+        )
         self.report_btn.clicked.connect(self._generate_report)
 
         # Ordem e agrupamento seguem o fluxo de uso, esquerda->direita:
@@ -327,11 +348,11 @@ class MainWindow(QMainWindow):
 
     def _set_start_stop_style(self, running: bool) -> None:
         if running:
-            self.start_stop_btn.set_content("Parar", icons.stop_icon("white"))
-            self.start_stop_btn.set_colors(RED, "white", "#e14040", "#931d1d")
+            self.start_stop_btn.set_content("Parar", "Encerrar medição", icons.stop_icon("white"))
+            self.start_stop_btn.set_colors(RED, "white", "#e14040", "#931d1d", "#f6d3d3")
         else:
-            self.start_stop_btn.set_content("Iniciar", icons.play_icon("white"))
-            self.start_stop_btn.set_colors(GREEN, "white", "#3a9440", "#245c26")
+            self.start_stop_btn.set_content("Iniciar", "Iniciar leitura", icons.play_icon("white"))
+            self.start_stop_btn.set_colors(GREEN, "white", "#3a9440", "#245c26", "#d7ecd9")
 
     def _build_header(self) -> QVBoxLayout:
         header_wrapper = QVBoxLayout()
@@ -507,6 +528,15 @@ class MainWindow(QMainWindow):
         value_label.setStyleSheet(_MAIN_VALUE_STYLE)
         column.addWidget(value_label)
 
+        # Selo "dentro do limite"/"próximo do limite" — deriva da mesma
+        # zona de aviso já usada para colorir o arco do mostrador
+        # (AngleGauge.is_near_limit()), só reforçando em texto o que a cor
+        # já mostra. Começa oculto (sem leitura ainda).
+        status_label = QLabel("")
+        status_label.setAlignment(Qt.AlignCenter)
+        status_label.setVisible(False)
+        column.addWidget(status_label)
+
         # Normalmente oculto; usado para explicar por que um eixo está sem
         # valor (ex: firmware antigo, sem azimute). Escondido (setVisible)
         # em vez de só vazio para não reservar uma linha de espaço em branco
@@ -523,14 +553,21 @@ class MainWindow(QMainWindow):
         limits_row.setSpacing(14)
         min_frame, min_value_label, min_time_label = self._build_limit_box("Mínimo")
         max_frame, max_value_label, max_time_label = self._build_limit_box("Máximo")
+        # "Limite" é a própria faixa mecânica/de medição do eixo (a mesma
+        # que define as pontas do mostrador) — estático, não um novo
+        # conceito de limiar configurável que este app não tem.
+        limit_frame, limit_value_label, _limit_time_label = self._build_limit_box("Limite")
+        limit_value_label.setText(f"±{maximum:g}°")
         limits_row.addWidget(min_frame, 1)
         limits_row.addWidget(max_frame, 1)
+        limits_row.addWidget(limit_frame, 1)
         column.addLayout(limits_row)
 
         return {
             "frame": frame,
             "gauge": gauge,
             "value": value_label,
+            "status": status_label,
             "note": note_label,
             "min_value": min_value_label,
             "min_time": min_time_label,
@@ -725,11 +762,19 @@ class MainWindow(QMainWindow):
                 # que o eixo está sem dado, em vez de mostrar um zero falso.
                 widgets["value"].setText("--.--°")
                 widgets["gauge"].setValue(None)
+                widgets["status"].setVisible(False)
                 widgets["note"].setText("firmware sem este eixo")
                 widgets["note"].setVisible(True)
                 continue
             widgets["value"].setText(f"{self._angle_for_display(axis, value):.2f}°")
             widgets["gauge"].setValue(value)
+            if widgets["gauge"].is_near_limit():
+                widgets["status"].setText("⚠ Próximo do limite")
+                widgets["status"].setStyleSheet(_STATUS_WARN_STYLE)
+            else:
+                widgets["status"].setText("✓ Dentro do limite")
+                widgets["status"].setStyleSheet(_STATUS_OK_STYLE)
+            widgets["status"].setVisible(True)
             widgets["note"].setVisible(False)
 
             for event in self._trackers[axis].process(reading):
