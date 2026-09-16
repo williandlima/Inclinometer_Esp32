@@ -6,8 +6,8 @@ import datetime as _dt
 import os
 import threading
 
-from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QPixmap
+from PyQt5.QtCore import QObject, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -73,6 +73,43 @@ def _find_logo_path() -> str | None:
 
 
 LOGO_PATH = _find_logo_path()
+
+
+def _make_gear_icon(color: str, size: int = 22) -> QIcon:
+    """Desenha uma engrenagem simples com QPainter, em vez de usar o
+    caractere Unicode "⚙" — este é renderizado como emoji colorido (e com
+    proporção/alinhamento inconsistentes em relação ao texto do botão) pela
+    fonte padrão do Windows, o que destoava do resto do ícone plano da
+    aplicação."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(color))
+
+    center = QPointF(size / 2, size / 2)
+    outer_r = size * 0.46
+    inner_r = size * 0.30
+    tooth_w = size * 0.16
+    tooth_len = outer_r - inner_r + size * 0.04
+    teeth = 8
+
+    for i in range(teeth):
+        painter.save()
+        painter.translate(center)
+        painter.rotate(360.0 / teeth * i)
+        painter.drawRoundedRect(QRectF(-tooth_w / 2, -outer_r, tooth_w, tooth_len), 1.0, 1.0)
+        painter.restore()
+
+    painter.drawEllipse(center, inner_r, inner_r)
+
+    # Furo central: "apaga" um círculo menor por cima do que já foi
+    # desenhado, deixando o miolo da engrenagem vazado.
+    painter.setCompositionMode(QPainter.CompositionMode_Clear)
+    painter.drawEllipse(center, size * 0.13, size * 0.13)
+    painter.end()
+    return QIcon(pixmap)
 
 # Exibição da leitura contínua em degraus de 0,25°. O grosso da estabilidade
 # vem do firmware (filtro interno do MPU6050 + média móvel, ver
@@ -311,12 +348,13 @@ class MainWindow(QMainWindow):
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         # Ordem e agrupamento seguem o fluxo de uso, esquerda->direita:
-        # (1) Iniciar/Parar, a ação principal, em destaque (verde/vermelho,
-        #     e o dobro da largura dos outros); (2) Calibrar + Resetar
-        #     limites, as duas ações de preparação/ajuste da sessão, juntas;
-        #     (3) Modo Vibração, um ensaio especial, isolado; (4) Gerar
-        #     relatório, a ação final ("exportar"), na ponta direita.
-        buttons_row.addWidget(self.start_stop_btn, 2)
+        # (1) Iniciar/Parar, a ação principal, destacada por cor
+        # (verde/vermelho) — mas do mesmo tamanho dos outros, não o dobro,
+        # que ficava desproporcional; (2) Calibrar + Resetar limites, as
+        # duas ações de preparação/ajuste da sessão, juntas; (3) Modo
+        # Vibração, um ensaio especial, isolado; (4) Gerar relatório, a
+        # ação final ("exportar"), na ponta direita.
+        buttons_row.addWidget(self.start_stop_btn, 1)
         buttons_row.addSpacing(8)
         buttons_row.addWidget(self.calibrate_btn, 1)
         buttons_row.addWidget(self.reset_btn, 1)
@@ -347,7 +385,9 @@ class MainWindow(QMainWindow):
         # Configurações fica no cabeçalho, junto da marca — fora da barra de
         # ações operacionais de baixo (Iniciar/Calibrar/etc.), já que ajuste
         # de conexão é uma etapa de preparação, não uma ação do dia a dia.
-        self.settings_btn = QPushButton("⚙ Configurações")
+        self.settings_btn = QPushButton(" Configurações")
+        self.settings_btn.setIcon(_make_gear_icon(TEXT_LIGHT))
+        self.settings_btn.setIconSize(QSize(18, 18))
         self.settings_btn.setStyleSheet(_GHOST_BUTTON_STYLE)
         self.settings_btn.clicked.connect(self._open_settings)
         header.addWidget(self.settings_btn)
