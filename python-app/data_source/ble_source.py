@@ -85,6 +85,18 @@ VIBRATION_PAN_DATA_CHARACTERISTIC_UUID = "6e6e0009-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 ANGLE_SCALE = 100.0
 PAN_RATE_SCALE = 100.0  # amostra = graus/s * 100 (int16, faixa +-327°/s)
 CONNECT_TIMEOUT_S = 10.0
+
+# Tempo sem nenhuma notificação de tilt (chegam a cada ~200ms em operação
+# normal) até o app desistir de esperar o `disconnected_callback` do sistema
+# e reportar a queda por conta própria. Existe porque esse callback só é
+# acionado quando o backend BLE do SO (BlueZ/WinRT/CoreBluetooth) percebe a
+# queda no nível do link — e isso depende do supervision timeout negociado
+# com o firmware, que em testes de bancada (ESP32 desligado bruscamente) se
+# mostrou bem mais lento que o esperado, deixando a última leitura na tela
+# por um bom tempo sem nenhum aviso. Cinco segundos é generoso (25x o
+# período normal de notify) para não disparar por uma rajada de pacotes
+# perdidos, mas curto o bastante para o usuário perceber a queda na hora.
+NOTIFY_TIMEOUT_S = 5.0
 VIBRATION_TIMEOUT_MARGIN_S = 30.0
 
 
@@ -321,6 +333,10 @@ class BleAngleSource(IAngleDataSource):
         # aqui, já que o transporte é por notify, não por polling.
         disconnected = asyncio.Event()
         disconnected_reported = False
+        # Marcado no início da espera abaixo (não em `time.monotonic()` já
+        # aqui), para o timeout de silêncio só começar a contar depois que a
+        # inscrição no notify realmente aconteceu.
+        last_notify_at: list[float] = [0.0]
 
         def _handle_disconnect(_client) -> None:
             disconnected.set()
@@ -332,6 +348,7 @@ class BleAngleSource(IAngleDataSource):
                 return
 
         def _handle_notify(_characteristic, raw: bytearray) -> None:
+            last_notify_at[0] = time.monotonic()
             try:
                 angle = _decode_angle(raw)
             except Exception:  # noqa: BLE001 - notificação malformada, ignora
@@ -344,6 +361,7 @@ class BleAngleSource(IAngleDataSource):
             ) as client:
                 self._client = client
                 await client.start_notify(ANGLE_CHARACTERISTIC_UUID, _handle_notify)
+                last_notify_at[0] = time.monotonic()
 
                 # Firmware anterior à v1.2.0 não expõe o eixo de pan: seguir
                 # só com o tilt é melhor que derrubar a sessão inteira.
@@ -355,16 +373,30 @@ class BleAngleSource(IAngleDataSource):
                     if on_error:
                         on_error("Firmware sem eixo de azimute (pan) — seguindo só com a inclinação.")
 
+                timed_out = False
                 while not self._stop_event.is_set() and not disconnected.is_set():
                     await asyncio.sleep(0.2)
+                    if time.monotonic() - last_notify_at[0] > NOTIFY_TIMEOUT_S:
+                        timed_out = True
+                        break
 
                 # `_stop_event` tem prioridade: se o usuário pediu parada, o
                 # disconnect que vem a seguir (o `__aexit__` abaixo desliga
                 # de propósito) não é um erro a reportar.
-                if disconnected.is_set() and not self._stop_event.is_set():
+                if (disconnected.is_set() or timed_out) and not self._stop_event.is_set():
                     disconnected_reported = True
                     if on_error:
                         on_error("Conexão Bluetooth perdida — verifique se o ESP32 está ligado e ao alcance.")
+                    if timed_out and not disconnected.is_set():
+                        # O SO ainda não percebeu a queda (ou nunca vai — ex:
+                        # firmware travado mas o link físico segue de pé) —
+                        # força o encerramento em vez de ficar esperando o
+                        # `disconnected_callback` que já se mostrou tarde
+                        # demais para o caso que originou este timeout.
+                        try:
+                            await client.disconnect()
+                        except Exception:  # noqa: BLE001 - já caindo sozinho
+                            pass
                 else:
                     if pan_subscribed:
                         await client.stop_notify(PAN_CHARACTERISTIC_UUID)
