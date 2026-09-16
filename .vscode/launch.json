@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Inclinômetro — App Desktop (PyQt5)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/python-app/main.py",
+            "cwd": "${workspaceFolder}/python-app",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}
