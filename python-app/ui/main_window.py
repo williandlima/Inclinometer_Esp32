@@ -260,11 +260,11 @@ class MainWindow(QMainWindow):
         # A janela abre maximizada (ver main.py, `showMaximized()`); este
         # tamanho só vale para quando o usuário desmaximiza manualmente, daí
         # ser bem maior que o mínimo abaixo.
-        self.resize(1360, 920)
+        self.resize(1400, 970)
         # Alto o bastante para o cabeçalho + os dois cartões de eixo (com o
         # mostrador analógico) + a barra de botões nunca se sobreporem,
         # mesmo desmaximizada e redimensionada para o menor tamanho possível.
-        self.setMinimumSize(1160, 900)
+        self.setMinimumSize(1160, 950)
         self.setStyleSheet(_APP_STYLESHEET)
 
         self._settings = AppSettings()
@@ -446,7 +446,7 @@ class MainWindow(QMainWindow):
         maior — em vez de dois blocos de texto soltos sobre o fundo."""
         frame = QFrame()
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        frame.setMinimumHeight(520)
+        frame.setMinimumHeight(570)
         column = QVBoxLayout(frame)
         column.setContentsMargins(20, 18, 20, 18)
         column.setSpacing(12)
