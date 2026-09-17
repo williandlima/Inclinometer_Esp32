@@ -74,6 +74,16 @@ from data_source.base import (
 # conectar falha com timeout mesmo com o hardware saudável.
 BOARD_RESET_GRACE_S = 2.5
 
+# Quantas vezes tentar abrir a porta antes de desistir, e quanto esperar
+# entre tentativas. Existe porque o sistema operacional pode levar um
+# instante para liberar de verdade uma porta serial que acabou de ser
+# fechada por outra conexão (ex: o teste de "Detectar automaticamente" ou
+# "Testar conexão" rodando poucos segundos antes de clicar em "Iniciar") —
+# sem isso, `connect()` falha com a porta ainda "ocupada" mesmo com o
+# hardware saudável, e a única saída era esperar e tentar novamente à mão.
+CONNECT_RETRY_ATTEMPTS = 3
+CONNECT_RETRY_DELAY_S = 1.0
+
 ANGLE_INPUT_REGISTER = 0
 PAN_INPUT_REGISTER = 1  # contíguo ao de tilt de propósito: os dois saem numa leitura só
 ANGLE_SCALE = 100.0  # registrador = ângulo * 100 (int16, resolução de 0.01°)
@@ -159,7 +169,14 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
 
     client = ModbusSerialClient(port=port, baudrate=baudrate, timeout=timeout_s)
     try:
-        if not client.connect():
+        connected = False
+        for attempt in range(CONNECT_RETRY_ATTEMPTS):
+            if client.connect():
+                connected = True
+                break
+            if attempt < CONNECT_RETRY_ATTEMPTS - 1:
+                time.sleep(CONNECT_RETRY_DELAY_S)
+        if not connected:
             raise IOError(f"Não foi possível abrir a porta serial {port}.")
         time.sleep(BOARD_RESET_GRACE_S)  # ver BOARD_RESET_GRACE_S: a porta abrir já reseta o ESP32
         angle_deg, pan_deg, _ = _read_axes(client, slave_id, pan_supported=True)
@@ -431,8 +448,17 @@ class ModbusAngleSource(IAngleDataSource):
         )
 
         try:
-            if not client.connect():
-                if on_error:
+            connected = False
+            for attempt in range(CONNECT_RETRY_ATTEMPTS):
+                if self._stop_event.is_set():
+                    return
+                if client.connect():
+                    connected = True
+                    break
+                if attempt < CONNECT_RETRY_ATTEMPTS - 1:
+                    self._stop_event.wait(CONNECT_RETRY_DELAY_S)
+            if not connected:
+                if on_error and not self._stop_event.is_set():
                     on_error(f"Não foi possível abrir a porta serial {self._port}.")
                 return
 

@@ -517,7 +517,12 @@ class MainWindow(QMainWindow):
     def _on_error(self, message: str) -> None:
         if self._settings.mode in ("real", "ble"):
             self._set_connection_status("erro")
-        self.statusBar().showMessage(message, 5000)
+        # Sem timeout de propósito: com um timeout, a mensagem de erro some
+        # sozinha depois de alguns segundos e a barra volta a mostrar o
+        # "Conectado: ..." permanente deixado por `_start()` — dando a
+        # impressão enganosa de que o problema se resolveu sozinho, quando
+        # na real o badge "Falha de conexão" continua vermelho.
+        self.statusBar().showMessage(message)
 
     def _calibrate(self) -> None:
         if self._source is None or not self._running:
