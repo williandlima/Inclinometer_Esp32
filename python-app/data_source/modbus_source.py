@@ -174,6 +174,30 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
         client.close()
 
 
+def find_port(baudrate: int, slave_id: int, timeout_s: float = 1.0) -> str | None:
+    """Varre as portas seriais do sistema em busca do ESP32, testando cada
+    uma de verdade com `test_connection` (não dá pra confiar só em VID/PID:
+    o chip USB-serial do hardware confirmado, CH9102X, não tem um
+    VID/PID estável o bastante entre sistema operacional/driver para servir
+    de filtro sem risco de esconder a porta certa numa máquina diferente).
+
+    Devolve o nome da primeira porta que responder como o ESP32, ou `None`
+    se nenhuma responder. Cada porta errada custa até `timeout_s` de espera
+    pela tentativa de leitura; a porta certa custa `BOARD_RESET_GRACE_S`
+    adicionais (o reset que a abertura da porta provoca no ESP32) — por
+    isso esta função é pensada para rodar numa thread de fundo, não na UI.
+    """
+    from serial.tools import list_ports
+
+    for p in list_ports.comports():
+        try:
+            test_connection(p.device, baudrate, slave_id, timeout_s=timeout_s)
+        except Exception:  # noqa: BLE001 - porta errada, ou nada conectado nela
+            continue
+        return p.device
+    return None
+
+
 class ModbusAngleSource(IAngleDataSource):
     def __init__(
         self,
