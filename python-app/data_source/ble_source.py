@@ -48,6 +48,14 @@ consistentes:
 Usa a biblioteca `bleak` (multiplataforma: Windows/Linux/macOS), importada
 localmente para não exigir a dependência quando só o modo simulado ou
 USB/Modbus RTU forem usados.
+
+Detecção de queda de conexão: como a leitura contínua é por notify (e não
+por polling, como no Modbus), uma leitura que falha não é o sinal de que a
+conexão caiu — as notificações simplesmente parariam de chegar, em
+silêncio. Por isso `_run_async` usa o `disconnected_callback` da `bleak`,
+que o backend do sistema operacional (BlueZ/WinRT/CoreBluetooth) aciona
+tão logo detecta a queda (ESP32 desligado, fora de alcance, etc.), e só
+então o app reporta o erro pela UI.
 """
 from __future__ import annotations
 
@@ -77,6 +85,18 @@ VIBRATION_PAN_DATA_CHARACTERISTIC_UUID = "6e6e0009-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 ANGLE_SCALE = 100.0
 PAN_RATE_SCALE = 100.0  # amostra = graus/s * 100 (int16, faixa +-327°/s)
 CONNECT_TIMEOUT_S = 10.0
+
+# Tempo sem nenhuma notificação de tilt (chegam a cada ~200ms em operação
+# normal) até o app desistir de esperar o `disconnected_callback` do sistema
+# e reportar a queda por conta própria. Existe porque esse callback só é
+# acionado quando o backend BLE do SO (BlueZ/WinRT/CoreBluetooth) percebe a
+# queda no nível do link — e isso depende do supervision timeout negociado
+# com o firmware, que em testes de bancada (ESP32 desligado bruscamente) se
+# mostrou bem mais lento que o esperado, deixando a última leitura na tela
+# por um bom tempo sem nenhum aviso. Cinco segundos é generoso (25x o
+# período normal de notify) para não disparar por uma rajada de pacotes
+# perdidos, mas curto o bastante para o usuário perceber a queda na hora.
+NOTIFY_TIMEOUT_S = 5.0
 VIBRATION_TIMEOUT_MARGIN_S = 30.0
 
 
@@ -302,6 +322,25 @@ class BleAngleSource(IAngleDataSource):
         # dentro dos callbacks aninhados sem `nonlocal`.
         last_pan: list[float | None] = [None]
 
+        # Sem isso, o app não tem como notar que o ESP32 desligou ou saiu de
+        # alcance: as notificações simplesmente param de chegar, e o loop
+        # abaixo (que só dorme esperando `_stop_event`) continua rodando
+        # indefinidamente com a última leitura na tela, como se a conexão
+        # ainda estivesse ativa. A `bleak` chama `disconnected_callback`
+        # (síncrono, no loop de eventos do próprio client) tão logo o
+        # backend do sistema (BlueZ/WinRT/CoreBluetooth) detecta a queda —
+        # é esse sinal, e não uma leitura que falha, que expõe a desconexão
+        # aqui, já que o transporte é por notify, não por polling.
+        disconnected = asyncio.Event()
+        disconnected_reported = False
+        # Marcado no início da espera abaixo (não em `time.monotonic()` já
+        # aqui), para o timeout de silêncio só começar a contar depois que a
+        # inscrição no notify realmente aconteceu.
+        last_notify_at: list[float] = [0.0]
+
+        def _handle_disconnect(_client) -> None:
+            disconnected.set()
+
         def _handle_pan_notify(_characteristic, raw: bytearray) -> None:
             try:
                 last_pan[0] = _decode_angle(raw)
@@ -309,6 +348,7 @@ class BleAngleSource(IAngleDataSource):
                 return
 
         def _handle_notify(_characteristic, raw: bytearray) -> None:
+            last_notify_at[0] = time.monotonic()
             try:
                 angle = _decode_angle(raw)
             except Exception:  # noqa: BLE001 - notificação malformada, ignora
@@ -316,9 +356,12 @@ class BleAngleSource(IAngleDataSource):
             on_reading(AngleReading(angle_deg=angle, pan_deg=last_pan[0], timestamp=time.time()))
 
         try:
-            async with BleakClient(self._device_address, timeout=CONNECT_TIMEOUT_S) as client:
+            async with BleakClient(
+                self._device_address, timeout=CONNECT_TIMEOUT_S, disconnected_callback=_handle_disconnect
+            ) as client:
                 self._client = client
                 await client.start_notify(ANGLE_CHARACTERISTIC_UUID, _handle_notify)
+                last_notify_at[0] = time.monotonic()
 
                 # Firmware anterior à v1.2.0 não expõe o eixo de pan: seguir
                 # só com o tilt é melhor que derrubar a sessão inteira.
@@ -330,14 +373,39 @@ class BleAngleSource(IAngleDataSource):
                     if on_error:
                         on_error("Firmware sem eixo de azimute (pan) — seguindo só com a inclinação.")
 
-                while not self._stop_event.is_set():
+                timed_out = False
+                while not self._stop_event.is_set() and not disconnected.is_set():
                     await asyncio.sleep(0.2)
+                    if time.monotonic() - last_notify_at[0] > NOTIFY_TIMEOUT_S:
+                        timed_out = True
+                        break
 
-                if pan_subscribed:
-                    await client.stop_notify(PAN_CHARACTERISTIC_UUID)
-                await client.stop_notify(ANGLE_CHARACTERISTIC_UUID)
+                # `_stop_event` tem prioridade: se o usuário pediu parada, o
+                # disconnect que vem a seguir (o `__aexit__` abaixo desliga
+                # de propósito) não é um erro a reportar.
+                if (disconnected.is_set() or timed_out) and not self._stop_event.is_set():
+                    disconnected_reported = True
+                    if on_error:
+                        on_error("Conexão Bluetooth perdida — verifique se o ESP32 está ligado e ao alcance.")
+                    if timed_out and not disconnected.is_set():
+                        # O SO ainda não percebeu a queda (ou nunca vai — ex:
+                        # firmware travado mas o link físico segue de pé) —
+                        # força o encerramento em vez de ficar esperando o
+                        # `disconnected_callback` que já se mostrou tarde
+                        # demais para o caso que originou este timeout.
+                        try:
+                            await client.disconnect()
+                        except Exception:  # noqa: BLE001 - já caindo sozinho
+                            pass
+                else:
+                    if pan_subscribed:
+                        await client.stop_notify(PAN_CHARACTERISTIC_UUID)
+                    await client.stop_notify(ANGLE_CHARACTERISTIC_UUID)
         except Exception as exc:  # noqa: BLE001
-            if on_error:
+            # Se a queda de conexão já foi reportada acima, evita um segundo
+            # aviso (menos claro) causado pelo próprio `__aexit__` tentando
+            # desconectar um client que já caiu.
+            if on_error and not disconnected_reported:
                 on_error(f"Erro BLE: {exc}")
         finally:
             self._client = None

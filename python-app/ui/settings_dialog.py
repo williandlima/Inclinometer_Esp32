@@ -35,11 +35,13 @@ class AppSettings:
 
 class SettingsDialog(QDialog):
     _devices_found = pyqtSignal(list, str)  # [(endereco, nome)], erro (vazio se ok)
+    _port_detected = pyqtSignal(str, str)  # porta encontrada (vazio se não achou), erro
 
     def __init__(self, current: AppSettings, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Configurações")
         self._devices_found.connect(self._on_devices_found)
+        self._port_detected.connect(self._on_port_detected)
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("Simulação", "simulado")
@@ -56,6 +58,13 @@ class SettingsDialog(QDialog):
         self._populate_ports()
         if current.serial_port:
             self.port_combo.setCurrentText(current.serial_port)
+
+        self.detect_port_btn = QPushButton("Detectar automaticamente")
+        self.detect_port_btn.clicked.connect(self._detect_port)
+
+        port_row = QHBoxLayout()
+        port_row.addWidget(self.port_combo, 1)
+        port_row.addWidget(self.detect_port_btn)
 
         self.baud_combo = QComboBox()
         for baud in (9600, 19200, 38400, 57600, 115200):
@@ -88,7 +97,7 @@ class SettingsDialog(QDialog):
 
         form = QFormLayout()
         form.addRow("Modo:", self.mode_combo)
-        form.addRow(self.usb_port_label, self.port_combo)
+        form.addRow(self.usb_port_label, port_row)
         form.addRow(self.usb_baud_label, self.baud_combo)
         form.addRow(self.usb_slave_label, self.slave_spin)
         form.addRow(self.ble_row_label, ble_row)
@@ -114,8 +123,8 @@ class SettingsDialog(QDialog):
 
     def _update_visible_fields(self) -> None:
         mode = self.mode_combo.currentData()
-        for widget in (self.usb_port_label, self.port_combo, self.usb_baud_label,
-                       self.baud_combo, self.usb_slave_label, self.slave_spin):
+        for widget in (self.usb_port_label, self.port_combo, self.detect_port_btn,
+                       self.usb_baud_label, self.baud_combo, self.usb_slave_label, self.slave_spin):
             widget.setVisible(mode == "real")
         self.ble_row_label.setVisible(mode == "ble")
         self.ble_combo.setVisible(mode == "ble")
@@ -163,6 +172,43 @@ class SettingsDialog(QDialog):
             self.test_result_label.setStyleSheet("color: #c62828; font-weight: bold;")
         finally:
             self.test_btn.setEnabled(True)
+
+    def _detect_port(self) -> None:
+        import threading
+
+        baudrate = self.baud_combo.currentData()
+        slave_id = self.slave_spin.value()
+
+        self.detect_port_btn.setEnabled(False)
+        self.test_result_label.setText("Detectando porta do ESP32...")
+        self.test_result_label.setStyleSheet("color: #888;")
+
+        def worker() -> None:
+            try:
+                from data_source.modbus_source import find_port
+
+                port = find_port(baudrate, slave_id)
+                self._port_detected.emit(port or "", "")
+            except Exception as exc:  # noqa: BLE001
+                self._port_detected.emit("", str(exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_port_detected(self, port: str, error: str) -> None:
+        self.detect_port_btn.setEnabled(True)
+        if error:
+            self.test_result_label.setText(f"✗ Falha ao detectar: {error}")
+            self.test_result_label.setStyleSheet("color: #c62828; font-weight: bold;")
+            return
+        if not port:
+            self.test_result_label.setText(
+                "Nenhum ESP32 respondeu em nenhuma porta serial (confira o cabo USB e o baud rate)."
+            )
+            self.test_result_label.setStyleSheet("color: #c62828; font-weight: bold;")
+            return
+        self.port_combo.setCurrentText(port)
+        self.test_result_label.setText(f"✓ ESP32 encontrado em {port}.")
+        self.test_result_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
 
     def _scan_ble_devices(self) -> None:
         import threading
