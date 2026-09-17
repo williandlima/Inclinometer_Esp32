@@ -74,6 +74,16 @@ from data_source.base import (
 # conectar falha com timeout mesmo com o hardware saudável.
 BOARD_RESET_GRACE_S = 2.5
 
+# Quantas vezes tentar abrir a porta antes de desistir, e quanto esperar
+# entre tentativas. Existe porque o sistema operacional pode levar um
+# instante para liberar de verdade uma porta serial que acabou de ser
+# fechada por outra conexão (ex: o teste de "Detectar automaticamente" ou
+# "Testar conexão" rodando poucos segundos antes de clicar em "Iniciar") —
+# sem isso, `connect()` falha com a porta ainda "ocupada" mesmo com o
+# hardware saudável, e a única saída era esperar e tentar novamente à mão.
+CONNECT_RETRY_ATTEMPTS = 3
+CONNECT_RETRY_DELAY_S = 1.0
+
 ANGLE_INPUT_REGISTER = 0
 PAN_INPUT_REGISTER = 1  # contíguo ao de tilt de propósito: os dois saem numa leitura só
 ANGLE_SCALE = 100.0  # registrador = ângulo * 100 (int16, resolução de 0.01°)
@@ -159,7 +169,14 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
 
     client = ModbusSerialClient(port=port, baudrate=baudrate, timeout=timeout_s)
     try:
-        if not client.connect():
+        connected = False
+        for attempt in range(CONNECT_RETRY_ATTEMPTS):
+            if client.connect():
+                connected = True
+                break
+            if attempt < CONNECT_RETRY_ATTEMPTS - 1:
+                time.sleep(CONNECT_RETRY_DELAY_S)
+        if not connected:
             raise IOError(f"Não foi possível abrir a porta serial {port}.")
         time.sleep(BOARD_RESET_GRACE_S)  # ver BOARD_RESET_GRACE_S: a porta abrir já reseta o ESP32
         angle_deg, pan_deg, _ = _read_axes(client, slave_id, pan_supported=True)
@@ -174,27 +191,78 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
         client.close()
 
 
+# Teto de tempo para testar UMA porta, usado por `_probe_port` abaixo.
+# Generoso o bastante para cobrir BOARD_RESET_GRACE_S + as leituras reais
+# (com folga), mas existe sobretudo para as portas erradas: sem ele, uma
+# porta "fantasma" (ver `_looks_like_bluetooth_port`) pode travar a busca
+# inteira por dezenas de segundos ou mais.
+PORT_PROBE_TIMEOUT_S = 6.0
+
+
+def _looks_like_bluetooth_port(port_info) -> bool:
+    """Portas seriais virtuais criadas pela pilha Bluetooth do Windows (ex:
+    "Standard Serial over Bluetooth link", uma para cada dispositivo já
+    pareado, mesmo sem estar por perto) aparecem em `list_ports.comports()`
+    junto com portas USB de verdade. Não são o ESP32, e tentar abri-las é a
+    causa mais comum de a detecção automática travar por muito tempo — em
+    alguns casos o próprio `open()` do sistema operacional demora dezenas de
+    segundos pra desistir de um dispositivo pareado que não está conectado,
+    o que nenhum parâmetro de timeout do pyserial/pymodbus consegue limitar
+    (o bloqueio acontece antes, na camada do SO). Descartadas aqui, antes de
+    sequer tentar abrir — mais rápido e mais confiável do que só confiar no
+    teto de tempo de `_probe_port`."""
+    haystack = " ".join(
+        str(v) for v in (getattr(port_info, "description", None), getattr(port_info, "hwid", None)) if v
+    ).lower()
+    return "bluetooth" in haystack
+
+
+def _probe_port(port: str, baudrate: int, slave_id: int, timeout_s: float) -> bool:
+    """Testa uma porta com um teto de tempo total (`PORT_PROBE_TIMEOUT_S`),
+    porque uma porta problemática pode travar antes mesmo do timeout que o
+    pymodbus/pyserial aplicam às leituras — o bloqueio acontece no próprio
+    `open()` da porta, numa chamada de sistema que o Python não tem como
+    interromper de fora. Roda a tentativa numa thread separada e, se ela não
+    voltar a tempo, desiste e segue para a próxima porta, deixando a thread
+    travada morrer sozinha em segundo plano (é `daemon`, não impede o app de
+    fechar)."""
+    result: list[bool] = [False]
+
+    def attempt() -> None:
+        try:
+            test_connection(port, baudrate, slave_id, timeout_s=timeout_s)
+            result[0] = True
+        except Exception:  # noqa: BLE001 - porta errada, ou nada conectado nela
+            result[0] = False
+
+    thread = threading.Thread(target=attempt, daemon=True)
+    thread.start()
+    thread.join(PORT_PROBE_TIMEOUT_S)
+    return result[0]
+
+
 def find_port(baudrate: int, slave_id: int, timeout_s: float = 1.0) -> str | None:
     """Varre as portas seriais do sistema em busca do ESP32, testando cada
     uma de verdade com `test_connection` (não dá pra confiar só em VID/PID:
     o chip USB-serial do hardware confirmado, CH9102X, não tem um
     VID/PID estável o bastante entre sistema operacional/driver para servir
-    de filtro sem risco de esconder a porta certa numa máquina diferente).
+    de filtro sem risco de esconder a porta certa numa máquina diferente) —
+    exceto as que claramente não são candidatas, como as portas Bluetooth
+    virtuais (ver `_looks_like_bluetooth_port`).
 
     Devolve o nome da primeira porta que responder como o ESP32, ou `None`
-    se nenhuma responder. Cada porta errada custa até `timeout_s` de espera
-    pela tentativa de leitura; a porta certa custa `BOARD_RESET_GRACE_S`
-    adicionais (o reset que a abertura da porta provoca no ESP32) — por
-    isso esta função é pensada para rodar numa thread de fundo, não na UI.
+    se nenhuma responder. Cada porta errada custa até `PORT_PROBE_TIMEOUT_S`
+    de espera; a porta certa custa `BOARD_RESET_GRACE_S` adicionais (o reset
+    que a abertura da porta provoca no ESP32) — por isso esta função é
+    pensada para rodar numa thread de fundo, não na UI.
     """
     from serial.tools import list_ports
 
     for p in list_ports.comports():
-        try:
-            test_connection(p.device, baudrate, slave_id, timeout_s=timeout_s)
-        except Exception:  # noqa: BLE001 - porta errada, ou nada conectado nela
+        if _looks_like_bluetooth_port(p):
             continue
-        return p.device
+        if _probe_port(p.device, baudrate, slave_id, timeout_s):
+            return p.device
     return None
 
 
@@ -380,8 +448,17 @@ class ModbusAngleSource(IAngleDataSource):
         )
 
         try:
-            if not client.connect():
-                if on_error:
+            connected = False
+            for attempt in range(CONNECT_RETRY_ATTEMPTS):
+                if self._stop_event.is_set():
+                    return
+                if client.connect():
+                    connected = True
+                    break
+                if attempt < CONNECT_RETRY_ATTEMPTS - 1:
+                    self._stop_event.wait(CONNECT_RETRY_DELAY_S)
+            if not connected:
+                if on_error and not self._stop_event.is_set():
                     on_error(f"Não foi possível abrir a porta serial {self._port}.")
                 return
 

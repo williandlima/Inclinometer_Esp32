@@ -148,7 +148,12 @@ class SettingsDialog(QDialog):
 
                 result = test_connection(port, self.baud_combo.currentData(), self.slave_spin.value())
             elif mode == "ble":
-                address = self.ble_combo.currentText().strip()
+                # currentData() guarda o endereço puro (ex: "00:70:07:25:60:8A")
+                # quando o item veio do "Escanear"; currentText() nesse caso é o
+                # rótulo exibido "Nome (endereço)" inteiro, que o bleak não
+                # reconhece como endereço válido — daí cair para currentText()
+                # só quando não há currentData (usuário digitou o endereço à mão).
+                address = self.ble_combo.currentData() or self.ble_combo.currentText().strip()
                 if not address:
                     raise ValueError("Selecione ou informe um endereço BLE.")
                 from data_source.ble_source import test_connection

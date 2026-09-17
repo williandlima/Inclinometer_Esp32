@@ -371,15 +371,23 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- ações
     def _open_settings(self) -> None:
+        # Para a conexão ANTES de abrir o diálogo (não só depois de aceitar):
+        # senão, com uma conexão Real já em andamento (mesmo que falhando nas
+        # leituras), a porta serial continua aberta pela thread de fundo
+        # enquanto o diálogo está na tela, e "Detectar automaticamente"/
+        # "Testar conexão" tentam abrir essa mesma porta já ocupada pelo
+        # próprio app — reportando "nenhum ESP32 encontrado" mesmo com o
+        # hardware são. Reinicia ao fechar o diálogo (aceito ou cancelado)
+        # para não deixar o usuário precisando clicar em "Iniciar" de novo.
+        was_running = self._running
+        if was_running:
+            self._stop()
         dialog = SettingsDialog(self._settings, self)
         if dialog.exec_() == SettingsDialog.Accepted:
-            was_running = self._running
-            if was_running:
-                self._stop()
             self._settings = dialog.result_settings()
             self._update_mode_label()
-            if was_running:
-                self._start()
+        if was_running:
+            self._start()
 
     def _toggle_start_stop(self) -> None:
         if self._running:
@@ -517,7 +525,12 @@ class MainWindow(QMainWindow):
     def _on_error(self, message: str) -> None:
         if self._settings.mode in ("real", "ble"):
             self._set_connection_status("erro")
-        self.statusBar().showMessage(message, 5000)
+        # Sem timeout de propósito: com um timeout, a mensagem de erro some
+        # sozinha depois de alguns segundos e a barra volta a mostrar o
+        # "Conectado: ..." permanente deixado por `_start()` — dando a
+        # impressão enganosa de que o problema se resolveu sozinho, quando
+        # na real o badge "Falha de conexão" continua vermelho.
+        self.statusBar().showMessage(message)
 
     def _calibrate(self) -> None:
         if self._source is None or not self._running:
