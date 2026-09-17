@@ -371,15 +371,23 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- ações
     def _open_settings(self) -> None:
+        # Para a conexão ANTES de abrir o diálogo (não só depois de aceitar):
+        # senão, com uma conexão Real já em andamento (mesmo que falhando nas
+        # leituras), a porta serial continua aberta pela thread de fundo
+        # enquanto o diálogo está na tela, e "Detectar automaticamente"/
+        # "Testar conexão" tentam abrir essa mesma porta já ocupada pelo
+        # próprio app — reportando "nenhum ESP32 encontrado" mesmo com o
+        # hardware são. Reinicia ao fechar o diálogo (aceito ou cancelado)
+        # para não deixar o usuário precisando clicar em "Iniciar" de novo.
+        was_running = self._running
+        if was_running:
+            self._stop()
         dialog = SettingsDialog(self._settings, self)
         if dialog.exec_() == SettingsDialog.Accepted:
-            was_running = self._running
-            if was_running:
-                self._stop()
             self._settings = dialog.result_settings()
             self._update_mode_label()
-            if was_running:
-                self._start()
+        if was_running:
+            self._start()
 
     def _toggle_start_stop(self) -> None:
         if self._running:
