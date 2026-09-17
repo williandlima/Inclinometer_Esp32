@@ -25,6 +25,14 @@ public:
     // num único burst I2C. Retorna false em falha de I2C.
     bool readMotion(float &ax, float &ay, float &az, float &gxDps, float &gyDps, float &gzDps);
 
+    // Ajusta a banda do filtro interno (DLPF) à taxa de amostragem pedida,
+    // mantendo-a bem abaixo de Nyquist para servir de anti-aliasing sem
+    // cortar o que se quer medir. Chamado pelo Modo Vibração no início da
+    // captura; `restoreDefaultDlpf()` devolve a banda estreita (21Hz) usada
+    // pela leitura contínua, que precisa de estabilidade, não de banda.
+    bool setDlpfForSampleRate(uint16_t rateHz);
+    bool restoreDefaultDlpf();
+
 private:
     static constexpr uint8_t I2C_ADDRESS = 0x68;
     static constexpr uint8_t REG_PWR_MGMT_1 = 0x6B;
@@ -55,6 +63,14 @@ private:
     // Ainda deixa passar com folga as frequências de interesse do ensaio
     // (balanço de mastro sob vento, tipicamente 1-5Hz).
     static constexpr uint8_t DLPF_CFG_21HZ = 0x04;
+
+    // Demais bandas do mesmo filtro, usadas pelo Modo Vibração em taxas de
+    // amostragem altas (ver setDlpfForSampleRate). Em 500 amostras/s,
+    // Nyquist é 250Hz e manter a banda em 21Hz jogaria fora justamente o
+    // que a taxa alta foi feita para enxergar: o sinal sairia do chip já
+    // filtrado a 21Hz e a taxa maior não mediria nada de novo.
+    static constexpr uint8_t DLPF_CFG_44HZ = 0x03;
+    static constexpr uint8_t DLPF_CFG_94HZ = 0x02;
 
     // Fundo de escala do acelerômetro: +-2g (o mais sensível, ideal para
     // inclinação). É o padrão de fábrica, mas fica explícito para o driver

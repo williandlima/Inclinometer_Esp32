@@ -79,6 +79,7 @@ CALIBRATE_CHARACTERISTIC_UUID = "6e6e0003-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_CONFIG_CHARACTERISTIC_UUID = "6e6e0004-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_STATUS_CHARACTERISTIC_UUID = "6e6e0005-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_DATA_CHARACTERISTIC_UUID = "6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f"
+VIBRATION_RESEND_CHARACTERISTIC_UUID = "6e6e000a-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 FIRMWARE_VERSION_CHARACTERISTIC_UUID = "6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 PAN_CHARACTERISTIC_UUID = "6e6e0008-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 VIBRATION_PAN_DATA_CHARACTERISTIC_UUID = "6e6e0009-3c17-4a2e-8f4b-1a2b3c4d5e6f"
@@ -98,6 +99,22 @@ CONNECT_TIMEOUT_S = 10.0
 # perdidos, mas curto o bastante para o usuário perceber a queda na hora.
 NOTIFY_TIMEOUT_S = 5.0
 VIBRATION_TIMEOUT_MARGIN_S = 30.0
+
+# Retransmissão de amostras perdidas na captura de vibração (firmware >=
+# 1.4.0). Notificação BLE não tem confirmação: se a fila do rádio do ESP32
+# encher, o pacote some em silêncio. Antes, o app montava a série ignorando o
+# buraco — o que deslocava no tempo todas as amostras seguintes e falseava o
+# espectro inteiro, sem nenhum aviso. Agora o buraco é detectado e o pedaço
+# que faltou é pedido de novo.
+VIBRATION_RESEND_ATTEMPTS = 5
+VIBRATION_RESEND_TIMEOUT_S = 20.0
+
+# Reconexão automática após uma queda durante a leitura contínua — ver
+# `BleAngleSource._run_with_reconnect`. O contador é zerado sempre que uma
+# sessão chega a conectar de fato, então uma queda ocasional depois de horas
+# de operação não consome o orçamento de tentativas da queda seguinte.
+RECONNECT_ATTEMPTS = 5
+RECONNECT_DELAY_S = 3.0
 
 
 def _decode_angle(raw: bytearray | bytes) -> float:
@@ -171,6 +188,9 @@ class BleAngleSource(IAngleDataSource):
         self._stop_event = threading.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client = None
+        # Suspende o watchdog de silêncio enquanto uma captura de vibração
+        # está em andamento — ver NOTIFY_TIMEOUT_S e `_run_async`.
+        self._vibration_active = False
 
     @property
     def label(self) -> str:
@@ -243,14 +263,27 @@ class BleAngleSource(IAngleDataSource):
                 raw_value = payload[i] | (payload[i + 1] << 8)
                 target[start_index + i // 2] = _to_signed16(raw_value)
 
+        def _report_transfer_progress() -> None:
+            # A transferência é a fase mais longa de uma captura em taxa alta
+            # (os dados saem em pacotes de 8 amostras): sem progresso aqui, a
+            # barra ficava cravada em 100% e parecia travamento.
+            expected = total_expected[0] if total_expected else 0
+            if expected:
+                received = len(samples) + len(pan_samples)
+                on_progress(min(100.0, 100.0 * received / (2 * expected)),
+                            "Transferindo amostras do ESP32...")
+
         def _on_data(_characteristic, raw: bytearray) -> None:
             _decode_packet_into(samples, raw)
+            _report_transfer_progress()
 
         def _on_pan_data(_characteristic, raw: bytearray) -> None:
             _decode_packet_into(pan_samples, raw)
+            _report_transfer_progress()
 
         client = self._client
         pan_subscribed = False
+        self._vibration_active = True
         try:
             await client.start_notify(VIBRATION_STATUS_CHARACTERISTIC_UUID, _on_status)
             await client.start_notify(VIBRATION_DATA_CHARACTERISTIC_UUID, _on_data)
@@ -274,15 +307,26 @@ class BleAngleSource(IAngleDataSource):
                 return
 
             sample_count = total_expected[0] if total_expected else len(samples)
+
+            missing = await self._recover_missing_samples(
+                client, sample_count, samples, pan_samples if pan_subscribed else None, done_event
+            )
+            if missing:
+                on_done(None, missing)
+                return
+
             t_start = time.time() - sample_count / rate_hz
-            angles = [samples[i] / ANGLE_SCALE for i in sorted(samples)]
+            angles = [samples[i] / ANGLE_SCALE for i in range(sample_count)]
             pan_rates = (
-                [pan_samples[i] / PAN_RATE_SCALE for i in sorted(pan_samples)] if pan_samples else None
+                [pan_samples[i] / PAN_RATE_SCALE for i in range(sample_count)]
+                if pan_subscribed and pan_samples
+                else None
             )
             on_done(build_vibration_readings(angles, pan_rates, rate_hz, t_start), None)
         except Exception as exc:  # noqa: BLE001
             on_done(None, f"Erro BLE na captura de vibração: {exc}")
         finally:
+            self._vibration_active = False
             try:
                 await client.stop_notify(VIBRATION_STATUS_CHARACTERISTIC_UUID)
                 await client.stop_notify(VIBRATION_DATA_CHARACTERISTIC_UUID)
@@ -290,6 +334,79 @@ class BleAngleSource(IAngleDataSource):
                     await client.stop_notify(VIBRATION_PAN_DATA_CHARACTERISTIC_UUID)
             except Exception:  # noqa: BLE001 - já desconectado/encerrando
                 pass
+
+    async def _recover_missing_samples(
+        self,
+        client,
+        sample_count: int,
+        samples: dict[int, int],
+        pan_samples: dict[int, int] | None,
+        done_event: "asyncio.Event",
+    ) -> str | None:
+        """Completa buracos deixados por notificações BLE perdidas, pedindo ao
+        firmware que retransmita a partir do primeiro índice faltante de cada
+        eixo. Devolve `None` quando as duas séries ficaram completas, ou a
+        mensagem de erro a reportar quando não foi possível completá-las.
+
+        Notificação BLE não é confirmada: com a fila do rádio cheia, o pacote
+        some sem aviso. A versão anterior deste código montava a série com
+        `sorted(samples)`, o que ignorava o buraco e ADIANTAVA no tempo todas
+        as amostras seguintes — corrompendo o espectro em silêncio. Preferir
+        um erro explícito a um resultado plausível e errado é o ponto todo
+        desta função.
+        """
+
+        def first_missing(target: dict[int, int]) -> int | None:
+            for i in range(sample_count):
+                if i not in target:
+                    return i
+            return None
+
+        for _ in range(VIBRATION_RESEND_ATTEMPTS):
+            pending: list[tuple[int, bool]] = []
+            idx = first_missing(samples)
+            if idx is not None:
+                pending.append((idx, False))
+            if pan_samples is not None:
+                idx = first_missing(pan_samples)
+                if idx is not None:
+                    pending.append((idx, True))
+            if not pending:
+                return None
+
+            done_event.clear()
+            for start_index, is_pan in pending:
+                try:
+                    await client.write_gatt_char(
+                        VIBRATION_RESEND_CHARACTERISTIC_UUID,
+                        struct.pack("<HB", start_index, 1 if is_pan else 0),
+                        response=True,
+                    )
+                except Exception:  # noqa: BLE001 - firmware anterior à v1.4.0 não tem essa característica
+                    return (
+                        "A captura chegou incompleta (pacotes perdidos no Bluetooth) e o firmware "
+                        "conectado é anterior à v1.4.0, que não suporta retransmissão. Atualize o "
+                        "firmware, aproxime o ESP32 do computador ou use o modo USB/Modbus RTU."
+                    )
+            try:
+                await asyncio.wait_for(done_event.wait(), timeout=VIBRATION_RESEND_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                break
+
+        faltando_tilt = sum(1 for i in range(sample_count) if i not in samples)
+        faltando_pan = (
+            sum(1 for i in range(sample_count) if i not in pan_samples)
+            if pan_samples is not None
+            else 0
+        )
+        if faltando_tilt == 0 and faltando_pan == 0:
+            return None
+        return (
+            f"A captura chegou incompleta mesmo após {VIBRATION_RESEND_ATTEMPTS} tentativas de "
+            f"retransmissão ({faltando_tilt} amostras de inclinação e {faltando_pan} de azimute "
+            f"faltando de {sample_count}). Aproxime o ESP32 do computador e repita, ou use o modo "
+            f"USB/Modbus RTU, que não perde pacotes."
+        )
 
     def start(self, on_reading: ReadingCallback, on_error: ErrorCallback | None = None) -> None:
         if self._thread is not None:
@@ -309,12 +426,62 @@ class BleAngleSource(IAngleDataSource):
         asyncio.set_event_loop(loop)
         self._loop = loop
         try:
-            loop.run_until_complete(self._run_async(on_reading, on_error))
+            loop.run_until_complete(self._run_with_reconnect(on_reading, on_error))
         finally:
             self._loop = None
             loop.close()
+            # Sem isto, `_thread` continuava apontando para a thread já
+            # encerrada e `start()` — que retorna cedo quando `_thread` não é
+            # None — virava um no-op silencioso: depois de uma queda, clicar
+            # em "Iniciar" de novo não fazia nada.
+            if self._thread is threading.current_thread():
+                self._thread = None
 
-    async def _run_async(self, on_reading: ReadingCallback, on_error: ErrorCallback | None) -> None:
+    async def _run_with_reconnect(
+        self, on_reading: ReadingCallback, on_error: ErrorCallback | None
+    ) -> None:
+        """Mantém a sessão BLE viva: depois de uma queda, tenta reconectar
+        sozinho em vez de encerrar a leitura de vez.
+
+        Antes, qualquer queda (ESP32 desligado, fora de alcance por um
+        instante) terminava a thread: a tela ficava com o aviso de conexão
+        perdida e nada voltava a acontecer nem quando o ESP32 retornava —
+        era preciso parar e iniciar de novo na mão."""
+        attempt = 0
+        while not self._stop_event.is_set():
+            reconnecting = attempt > 0
+            connected = await self._run_async(on_reading, on_error, suppress_error=reconnecting)
+            if self._stop_event.is_set():
+                return
+            # Uma sessão que chegou a conectar zera o orçamento: o limite de
+            # tentativas vale para uma queda específica, não para a vida
+            # inteira da sessão.
+            attempt = 1 if connected else attempt + 1
+            if attempt > RECONNECT_ATTEMPTS:
+                if on_error:
+                    on_error(
+                        f"Não foi possível reconectar ao ESP32 após {RECONNECT_ATTEMPTS} "
+                        f"tentativas — verifique se ele está ligado e ao alcance, e use "
+                        f"\"Iniciar\" para tentar de novo."
+                    )
+                return
+            if on_error:
+                on_error(f"Reconectando ao ESP32 (tentativa {attempt} de {RECONNECT_ATTEMPTS})...")
+            # wait() em vez de sleep() para "Parar" continuar responsivo.
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._stop_event.wait, RECONNECT_DELAY_S
+            )
+
+    async def _run_async(
+        self,
+        on_reading: ReadingCallback,
+        on_error: ErrorCallback | None,
+        suppress_error: bool = False,
+    ) -> bool:
+        """Roda uma sessão BLE até ela cair ou ser parada. Devolve `True` se
+        chegou a conectar (usado por `_run_with_reconnect` para saber se a
+        tentativa valeu). `suppress_error` cala os avisos de falha durante as
+        retentativas de reconexão, que já têm mensagem própria."""
         from bleak import BleakClient
 
         # Último pan recebido, para ser anexado à próxima notificação de tilt
@@ -333,6 +500,7 @@ class BleAngleSource(IAngleDataSource):
         # aqui, já que o transporte é por notify, não por polling.
         disconnected = asyncio.Event()
         disconnected_reported = False
+        connected_ok = False
         # Marcado no início da espera abaixo (não em `time.monotonic()` já
         # aqui), para o timeout de silêncio só começar a contar depois que a
         # inscrição no notify realmente aconteceu.
@@ -360,6 +528,7 @@ class BleAngleSource(IAngleDataSource):
                 self._device_address, timeout=CONNECT_TIMEOUT_S, disconnected_callback=_handle_disconnect
             ) as client:
                 self._client = client
+                connected_ok = True
                 await client.start_notify(ANGLE_CHARACTERISTIC_UUID, _handle_notify)
                 last_notify_at[0] = time.monotonic()
 
@@ -376,6 +545,19 @@ class BleAngleSource(IAngleDataSource):
                 timed_out = False
                 while not self._stop_event.is_set() and not disconnected.is_set():
                     await asyncio.sleep(0.2)
+                    if self._vibration_active:
+                        # Durante uma captura de vibração o firmware está
+                        # ocupado amostrando em alta taxa e despejando
+                        # pacotes de dados, e a notificação de ângulo
+                        # contínuo pode atrasar bem mais que o normal. Sem
+                        # esta exceção o watchdog concluía "conexão perdida"
+                        # no meio da captura e DERRUBAVA a conexão por conta
+                        # própria — matando justamente a captura que estava
+                        # em andamento. A captura tem o próprio tempo limite
+                        # (VIBRATION_TIMEOUT_MARGIN_S), então nada fica sem
+                        # cobertura aqui.
+                        last_notify_at[0] = time.monotonic()
+                        continue
                     if time.monotonic() - last_notify_at[0] > NOTIFY_TIMEOUT_S:
                         timed_out = True
                         break
@@ -385,7 +567,7 @@ class BleAngleSource(IAngleDataSource):
                 # de propósito) não é um erro a reportar.
                 if (disconnected.is_set() or timed_out) and not self._stop_event.is_set():
                     disconnected_reported = True
-                    if on_error:
+                    if on_error and not suppress_error:
                         on_error("Conexão Bluetooth perdida — verifique se o ESP32 está ligado e ao alcance.")
                     if timed_out and not disconnected.is_set():
                         # O SO ainda não percebeu a queda (ou nunca vai — ex:
@@ -405,7 +587,8 @@ class BleAngleSource(IAngleDataSource):
             # Se a queda de conexão já foi reportada acima, evita um segundo
             # aviso (menos claro) causado pelo próprio `__aexit__` tentando
             # desconectar um client que já caiu.
-            if on_error and not disconnected_reported:
+            if on_error and not disconnected_reported and not suppress_error:
                 on_error(f"Erro BLE: {exc}")
         finally:
             self._client = None
+        return connected_ok

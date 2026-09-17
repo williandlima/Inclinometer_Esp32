@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.3.1`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.4.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -109,6 +109,7 @@ ponto de vista do `pyserial`).
 | `6e6e0007-...` (versão firmware) | read | `FIRMWARE_VERSION_CODE` (uint16 LE, ver acima) — valor fixo, sem notify |
 | `6e6e0008-...` (pan) | read/notify | Ângulo de pan * 100 (int16 LE, com sinal), na mesma cadência do tilt |
 | `6e6e0009-...` (dados vibração pan) | notify | Amostras de pan em pacotes (índice + até 8 int16 LE), em **velocidade angular** °/s * 100 |
+| `6e6e000a-...` (retransmissão) | write | 3 bytes: índice inicial (uint16 LE) + eixo (0=tilt, 1=pan) → reenvia as amostras a partir dali |
 
 O pan entrou numa characteristic própria, e não anexado à de tilt, de
 propósito: os apps já instalados esperam exatamente 2 bytes em
@@ -274,7 +275,52 @@ estatísticas). Depois da correção: 0 falsos positivos em 48 capturas de
 ruído puro em 4 durações diferentes, mantendo 30/30 de detecção de sinal
 real, inclusive com amplitude de 0,02°.
 
+## Taxa de amostragem alta no Modo Vibração (v1.4.0)
+
+A captura passou a aceitar até `VIBRATION_MAX_RATE_HZ` = **500 amostras/s**
+(antes o app limitava em 200). Três coisas tiveram que mudar juntas para
+que essa taxa medisse algo de verdade:
+
+1. **Temporização em microssegundos.** O período era `1000/rateHz` em
+   milissegundos, truncado por divisão inteira: 300Hz viravam 3ms, ou seja,
+   333Hz de verdade. Como os apps calculam todas as frequências do espectro a
+   partir da taxa *pedida*, esse desvio deslocava o espectro inteiro. Em
+   microssegundos o erro fica abaixo de 0,1% em toda a faixa. O instante-alvo
+   também passou a avançar pelo período exato, em vez de reancorar em "agora"
+   a cada amostra — assim o atraso de uma amostra não se acumula nas
+   seguintes.
+2. **I2C a 400kHz** (`Wire.setClock`). Cada amostra faz duas transações de 14
+   bytes (tilt e pan), que a 100kHz custam ~2,8ms somadas — mais que o
+   período de 2ms de uma captura a 500Hz. A 400kHz o mesmo par custa ~0,7ms.
+3. **Banda do DLPF conforme a taxa.** O filtro interno do MPU6050 ficava
+   cravado em 21Hz, o que é ótimo para a leitura contínua mas tornaria os
+   500Hz inúteis: o sinal sairia do chip já filtrado a 21Hz e a taxa maior
+   não mediria nada de novo. Agora a banda é aberta no início da captura
+   conforme a taxa (94Hz a partir de 400 amostras/s, 44Hz a partir de 200) e
+   volta para 21Hz ao final, mantendo folga para o filtro seguir servindo de
+   anti-aliasing.
+
+O teto de `VIBRATION_MAX_SAMPLES` continua em 6000 amostras por eixo (limite
+de RAM), então a 500Hz a captura é truncada em ~12s — o app avisa isso na
+tela de configuração, em vez de truncar em silêncio.
+
 ## Limitações conhecidas / próximos passos
+
+- **[1.4.0]** O Modo Vibração via BLE entregava séries corrompidas em
+  silêncio. Notificação BLE não tem confirmação: com a fila do rádio cheia, o
+  pacote some sem aviso, e o app montava a série ignorando o buraco — o que
+  adiantava no tempo todas as amostras seguintes e falseava o espectro
+  inteiro. Agora o app detecta o buraco e pede retransmissão pela
+  characteristic `6e6e000a-...`; se ainda assim não completar, reporta erro em
+  vez de entregar um resultado plausível e errado. O intervalo entre pacotes
+  caiu de 20ms para 5ms (400 → 1600 amostras/s), o que só é seguro porque a
+  perda agora é recuperável.
+
+- **[1.4.0]** `VibrationCapture::start()` era chamado de dentro do callback de
+  escrita do BLE, que roda na task do stack BLE, enquanto `update()` mexe nos
+  mesmos campos no loop principal. Agora o callback só agenda
+  (`requestStart()`) e quem inicia é o loop — mesmo padrão já usado para
+  reiniciar o anúncio BLE.
 
 - **[1.3.1]** O ESP32 não voltava a anunciar por BLE depois que um cliente
   desconectava. O rádio para de anunciar sozinho ao aceitar uma conexão, e a

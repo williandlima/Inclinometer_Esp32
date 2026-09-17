@@ -7,6 +7,7 @@ import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.sin
 
 /**
@@ -27,6 +28,14 @@ internal object Fft {
 
     /** Piso absoluto de SNR, mesmo com poucos bins. */
     private const val SNR_FLOOR_DB = 6.0
+
+    /**
+     * Janela usada para medir o piso de ruído em torno do pico: uma fração
+     * do espectro, com um mínimo absoluto para a mediana continuar
+     * estatisticamente significativa em capturas curtas.
+     */
+    private const val NOISE_WINDOW_DIVISOR = 16
+    private const val NOISE_WINDOW_MIN_BINS = 16
 
     data class DominantPeak(
         val freqHz: Double,
@@ -91,24 +100,48 @@ internal object Fft {
         var peakFreq = freqs[peakIdx]
         var peakAmp = magnitudes[peakIdx]
         if (peakIdx in (startIdx + 1) until (magnitudes.size - 1)) {
-            val alpha = magnitudes[peakIdx - 1]
-            val beta = magnitudes[peakIdx]
-            val gamma = magnitudes[peakIdx + 1]
+            // Interpolação parabólica sobre a magnitude em DECIBÉIS, não
+            // sobre a magnitude linear: o lóbulo principal da janela de Hann
+            // é quase gaussiano, e gaussiana em escala log é exatamente uma
+            // parábola, então o ajuste em dB acerta o vértice (frequência e
+            // amplitude) muito melhor. Sem isso, o zero-padding faz o tom
+            // cair entre bins e a amplitude reportada fica até 12,5% baixa
+            // (perda de scalloping); o ajuste linear ainda erra até 5,6%,
+            // contra 2,9% do ajuste em dB. Equivalente a
+            // `vibration_stats.find_dominant_peak` no app desktop.
+            val alpha = 20.0 * log10(max(magnitudes[peakIdx - 1], 1e-12))
+            val beta = 20.0 * log10(max(magnitudes[peakIdx], 1e-12))
+            val gamma = 20.0 * log10(max(magnitudes[peakIdx + 1], 1e-12))
             val denom = alpha - 2 * beta + gamma
             if (denom != 0.0) {
                 val p = (0.5 * (alpha - gamma) / denom).coerceIn(-1.0, 1.0)
                 peakFreq = freqs[peakIdx] + p * freqStep
-                peakAmp = beta - 0.25 * (alpha - gamma) * p
+                peakAmp = 10.0.pow((beta - 0.25 * (alpha - gamma) * p) / 20.0)
             }
         }
 
-        // Piso de ruído: mediana do espectro na faixa de busca, excluindo os
-        // bins do próprio pico.
+        // Piso de ruído: mediana numa JANELA LOCAL em torno do pico,
+        // excluindo os bins do próprio pico. Local, e não o espectro
+        // inteiro, porque a comparação com a mediana só é justa se o piso
+        // for plano — e o filtro interno do MPU6050 (DLPF) derruba o ruído
+        // acima da sua banda, puxando a mediana global para baixo e
+        // inflando o SNR de qualquer ondulação de ruído na parte não
+        // filtrada (falso positivo garantido em taxas de amostragem altas).
+        val halfWidth = max(NOISE_WINDOW_MIN_BINS, magnitudes.size / NOISE_WINDOW_DIVISOR)
+        val windowLo = max(startIdx, peakIdx - halfWidth)
+        val windowHi = min(magnitudes.size, peakIdx + halfWidth + 1)
         val excludeLo = max(startIdx, peakIdx - 2)
         val excludeHi = min(magnitudes.size - 1, peakIdx + 2)
         val noiseValues = mutableListOf<Double>()
-        for (i in startIdx until magnitudes.size) {
+        for (i in windowLo until windowHi) {
             if (i < excludeLo || i > excludeHi) noiseValues.add(magnitudes[i])
+        }
+        if (noiseValues.size < NOISE_WINDOW_MIN_BINS) {
+            // Espectro curto demais para uma janela local: usa a faixa toda.
+            noiseValues.clear()
+            for (i in startIdx until magnitudes.size) {
+                if (i < excludeLo || i > excludeHi) noiseValues.add(magnitudes[i])
+            }
         }
         val noiseFloor = if (noiseValues.isNotEmpty()) median(noiseValues) else 0.0
 

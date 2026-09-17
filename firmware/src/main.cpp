@@ -20,7 +20,7 @@
 Mpu6050 mpu;
 AngleSensor angleSensor(mpu);
 PanSensor panSensor(mpu);
-VibrationCapture vibrationCapture(angleSensor, panSensor);
+VibrationCapture vibrationCapture(angleSensor, panSensor, mpu);
 ModbusSlave modbusSlave(angleSensor, panSensor, vibrationCapture);
 BleServer bleServer(angleSensor, panSensor, vibrationCapture);
 

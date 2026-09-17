@@ -6,6 +6,13 @@
 
 bool Mpu6050::begin() {
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+    // 400kHz (fast mode, suportado pelo MPU6050) em vez dos 100kHz padrão.
+    // Necessário para o Modo Vibração em taxa alta: cada amostra faz duas
+    // transações de 14 bytes (uma por eixo), que a 100kHz custam ~2,8ms
+    // somadas — mais que o período de 2ms de uma captura a 500 amostras/s,
+    // ou seja, o barramento simplesmente não daria conta. A 400kHz o mesmo
+    // par custa ~0,7ms, com folga confortável.
+    Wire.setClock(I2C_CLOCK_HZ);
     // Sai do modo sleep (padrão de fábrica) e usa o clock interno.
     if (!writeRegister(REG_PWR_MGMT_1, 0x00)) {
         return false;
@@ -19,6 +26,24 @@ bool Mpu6050::begin() {
         return false;
     }
     return writeRegister(REG_GYRO_CONFIG, GYRO_RANGE_250DPS);
+}
+
+bool Mpu6050::setDlpfForSampleRate(uint16_t rateHz) {
+    // Banda do filtro escolhida bem abaixo de Nyquist (rateHz/2), para ele
+    // continuar servindo de anti-aliasing, mas alta o bastante para não
+    // apagar o que a taxa maior foi feita para medir. As bandas disponíveis
+    // no chip são discretas (21/44/94/184/260Hz).
+    uint8_t cfg = DLPF_CFG_21HZ;
+    if (rateHz >= 400) {
+        cfg = DLPF_CFG_94HZ;  // Nyquist >= 200Hz: 2,1x de margem
+    } else if (rateHz >= 200) {
+        cfg = DLPF_CFG_44HZ;  // Nyquist >= 100Hz: 2,3x de margem
+    }
+    return writeRegister(REG_CONFIG, cfg);
+}
+
+bool Mpu6050::restoreDefaultDlpf() {
+    return writeRegister(REG_CONFIG, DLPF_CFG_21HZ);
 }
 
 bool Mpu6050::writeRegister(uint8_t reg, uint8_t value) {

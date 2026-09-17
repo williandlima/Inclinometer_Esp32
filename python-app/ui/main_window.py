@@ -129,7 +129,7 @@ class _SignalBridge(QObject):
     reading = pyqtSignal(object)  # AngleReading
     error = pyqtSignal(str)
     calibration_done = pyqtSignal(bool, str)
-    vibration_progress = pyqtSignal(float)
+    vibration_progress = pyqtSignal(float, str)  # percentual, rótulo da fase
     vibration_done = pyqtSignal(object, str, float, float)  # amostras|None, erro, duration_s, rate_hz
 
 
@@ -587,16 +587,18 @@ class MainWindow(QMainWindow):
         self.vibration_btn.setEnabled(False)
         self.statusBar().showMessage("Captura de vibração em andamento...")
 
-        def on_progress(percent: float) -> None:
-            self._bridge.vibration_progress.emit(percent)
+        def on_progress(percent: float, phase: str = "") -> None:
+            self._bridge.vibration_progress.emit(percent, phase)
 
         def on_done(readings: list[AngleReading] | None, error: str | None) -> None:
             self._bridge.vibration_done.emit(readings if readings is not None else [], error or "", duration_s, rate_hz)
 
         source.start_vibration_capture(duration_s, rate_hz, on_progress, on_done)
 
-    def _on_vibration_progress(self, percent: float) -> None:
+    def _on_vibration_progress(self, percent: float, phase: str = "") -> None:
         if self._vibration_progress_dialog is not None:
+            if phase:
+                self._vibration_progress_dialog.setLabelText(phase)
             self._vibration_progress_dialog.setValue(int(percent))
 
     def _on_vibration_done(self, readings: list, error: str, duration_s: float, rate_hz: float) -> None:
