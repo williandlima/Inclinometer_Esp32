@@ -55,6 +55,18 @@ class VibrationConfigCallbacks : public BLECharacteristicCallbacks {
         self->handleVibrationConfigWrite(durationS, rateHz);
     }
 };
+
+class VibrationResendCallbacks : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *characteristic) override {
+        std::string value = characteristic->getValue();
+        if (value.size() < 3 || self == nullptr) {
+            return;
+        }
+        uint16_t startIndex = static_cast<uint8_t>(value[0]) | (static_cast<uint16_t>(static_cast<uint8_t>(value[1])) << 8);
+        bool pan = static_cast<uint8_t>(value[2]) != 0;
+        self->handleVibrationResendWrite(startIndex, pan);
+    }
+};
 }  // namespace
 
 void BleServer::begin() {
@@ -96,6 +108,10 @@ void BleServer::begin() {
         service->createCharacteristic(CHAR_VIBRATION_PAN_DATA_UUID, BLECharacteristic::PROPERTY_NOTIFY);
     vibrationPanDataChar->addDescriptor(new BLE2902());
 
+    BLECharacteristic *vibrationResendChar =
+        service->createCharacteristic(CHAR_VIBRATION_RESEND_UUID, BLECharacteristic::PROPERTY_WRITE);
+    vibrationResendChar->setCallbacks(new VibrationResendCallbacks());
+
     BLECharacteristic *firmwareVersionChar =
         service->createCharacteristic(CHAR_FIRMWARE_VERSION_UUID, BLECharacteristic::PROPERTY_READ);
     uint8_t versionPayload[2] = {
@@ -119,11 +135,19 @@ void BleServer::handleCalibrateWrite() {
 }
 
 void BleServer::handleVibrationConfigWrite(uint16_t durationS, uint16_t rateHz) {
-    if (_vibration.start(durationS, rateHz)) {
-        _vibrationDataCursor = 0;
-        _vibrationPanDataCursor = 0;
-        _lastReportedVibrationStatus = VibrationCapture::Status::Capturing;
-    }
+    // Só agenda: quem inicia de fato é o loop principal, via
+    // VibrationCapture::update() — este callback roda na task do stack BLE
+    // e start() mexe nos mesmos campos que update() usa.
+    _vibration.requestStart(durationS, rateHz);
+    _vibrationDataCursor = 0;
+    _vibrationPanDataCursor = 0;
+    _lastReportedVibrationStatus = VibrationCapture::Status::Capturing;
+}
+
+void BleServer::handleVibrationResendWrite(uint16_t startIndex, bool pan) {
+    _resendStartIndex = startIndex;
+    _resendPan = pan;
+    _resendPending = true;
 }
 
 void BleServer::notifyAngles() {
@@ -244,6 +268,26 @@ void BleServer::update() {
     if (restartAdvertisingPending) {
         restartAdvertisingPending = false;
         BLEDevice::startAdvertising();
+    }
+    if (_resendPending) {
+        _resendPending = false;
+        // Rebobina o cursor do eixo pedido: a fase de envio recomeça dali e
+        // o app recebe de novo tudo a partir daquele índice. Reenviar em
+        // excesso é inofensivo — o app acumula as amostras por índice, então
+        // repetição é idempotente —, e é bem mais simples (e mais robusto)
+        // do que enviar exatamente um bloco isolado.
+        //
+        // Também limpa o "pronto" já reportado: sem isso, o guard de
+        // _lastReportedVibrationStatus impediria a nova notificação de
+        // conclusão no fim da retransmissão, e o app ficaria esperando para
+        // sempre.
+        uint16_t &cursor = _resendPan ? _vibrationPanDataCursor : _vibrationDataCursor;
+        if (_resendStartIndex < cursor) {
+            cursor = _resendStartIndex;
+        }
+        if (_lastReportedVibrationStatus == VibrationCapture::Status::Ready) {
+            _lastReportedVibrationStatus = VibrationCapture::Status::Capturing;
+        }
     }
     notifyAngles();
     updateVibrationNotify();

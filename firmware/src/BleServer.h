@@ -29,6 +29,11 @@ public:
     // Chamados pelos callbacks de escrita GATT (ver BleServer.cpp).
     void handleCalibrateWrite();
     void handleVibrationConfigWrite(uint16_t durationS, uint16_t rateHz);
+    // Pedido de retransmissão a partir de `startIndex` no eixo indicado —
+    // o app usa isto quando detecta um buraco na série recebida, já que
+    // notificação BLE não tem confirmação e um pacote pode sumir em
+    // silêncio se a fila do rádio encher.
+    void handleVibrationResendWrite(uint16_t startIndex, bool pan);
 
 private:
     AngleSensor &_sensor;
@@ -41,6 +46,11 @@ private:
     uint16_t _vibrationPanDataCursor = 0;
     uint32_t _lastVibrationStatusNotifyMs = 0;
     uint32_t _lastVibrationChunkMs = 0;
+    // Escritos pela task do BLE (callback de retransmissão) e consumidos
+    // pelo loop principal, como o resto dos pedidos vindos de callbacks.
+    volatile bool _resendPending = false;
+    volatile uint16_t _resendStartIndex = 0;
+    volatile bool _resendPan = false;
 
     // Envia um pacote de amostras a partir de `cursor` (que é avançado) na
     // characteristic indicada. `pan` escolhe de qual dos dois buffers ler.

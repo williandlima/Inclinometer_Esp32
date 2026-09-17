@@ -4,6 +4,7 @@
 
 #include "AngleSensor.h"
 #include "Config.h"
+#include "Mpu6050.h"
 #include "PanSensor.h"
 
 // Motor de captura de vibração compartilhado pelos dois transportes
@@ -31,13 +32,25 @@ class VibrationCapture {
 public:
     enum class Status : uint8_t { Idle = 0, Capturing = 1, Ready = 2, Error = 3 };
 
-    VibrationCapture(AngleSensor &sensor, PanSensor &pan) : _sensor(sensor), _pan(pan) {}
+    VibrationCapture(AngleSensor &sensor, PanSensor &pan, Mpu6050 &mpu)
+        : _sensor(sensor), _pan(pan), _mpu(mpu) {}
 
     // Inicia uma nova captura. `durationS`/`rateHz` são clampados a
     // VIBRATION_MAX_SAMPLES amostras no total, se necessário (limite de
     // memória do buffer). Retorna false se já houver captura em andamento
     // ou os parâmetros forem inválidos (nesse caso, status vira Error).
+    //
+    // ATENÇÃO: deve ser chamado a partir do loop principal, nunca de dentro
+    // de um callback do BLE — ver requestStart().
     bool start(uint16_t durationS, uint16_t rateHz);
+
+    // Agenda uma captura para ser iniciada na próxima chamada de update().
+    // É o que os callbacks do BLE devem usar: eles rodam na task do stack
+    // BLE, e start() mexe nos mesmos campos que update() usa no loop
+    // principal (contador de amostras, buffers, status) — chamá-lo dali
+    // abriria uma corrida entre as duas tasks. Mesmo motivo pelo qual o
+    // reinício do anúncio BLE já é adiado para o loop (ver BleServer.cpp).
+    void requestStart(uint16_t durationS, uint16_t rateHz);
 
     // Chamar a cada iteração do loop() — faz a amostragem não-bloqueante.
     void update();
@@ -58,13 +71,27 @@ public:
 private:
     AngleSensor &_sensor;
     PanSensor &_pan;
-    Status _status = Status::Idle;
-    uint8_t _progressPercent = 0;
+    Mpu6050 &_mpu;
+    // volatile: lido pela task do BLE (status/notificação) enquanto o loop
+    // principal o escreve.
+    volatile Status _status = Status::Idle;
+    volatile uint8_t _progressPercent = 0;
+
+    // Pedido de início vindo de outra task, consumido por update().
+    volatile bool _startPending = false;
+    volatile uint16_t _pendingDurationS = 0;
+    volatile uint16_t _pendingRateHz = 0;
 
     uint16_t _totalSamples = 0;
-    uint16_t _sampleCount = 0;
-    uint32_t _intervalMs = 0;
-    uint32_t _lastSampleMs = 0;
+    volatile uint16_t _sampleCount = 0;
+    // Período em MICROSSEGUNDOS, não milissegundos: com milissegundos, o
+    // período de uma taxa alta era truncado por divisão inteira (300Hz
+    // viravam 3ms = 333Hz de verdade), e o app calcula todas as frequências
+    // do espectro a partir da taxa PEDIDA — um desvio ali desloca o espectro
+    // inteiro. Em microssegundos o erro de quantização fica abaixo de 0,1%
+    // em toda a faixa até VIBRATION_MAX_RATE_HZ.
+    uint32_t _intervalUs = 0;
+    uint32_t _lastSampleUs = 0;
 
     // Arredonda e satura para int16, o formato das amostras no protocolo.
     static int16_t toInt16(float scaledValue);

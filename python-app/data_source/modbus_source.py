@@ -84,6 +84,27 @@ BOARD_RESET_GRACE_S = 2.5
 CONNECT_RETRY_ATTEMPTS = 3
 CONNECT_RETRY_DELAY_S = 1.0
 
+# Quantas leituras seguidas precisam falhar antes de o app fechar a porta e
+# reabri-la. Existe porque uma falha de leitura persistente (cabo USB
+# removido e recolocado, ESP32 resetado, driver que largou a porta) deixava a
+# leitura contínua num estado sem saída: o laço abaixo seguia tentando ler de
+# um cliente morto para sempre, repetindo o mesmo erro a cada 250ms, e a
+# única saída era o usuário parar e iniciar de novo na mão. Reconectar
+# recupera sozinho assim que o hardware volta.
+#
+# Cinco falhas (~1,25s no poll padrão) é tolerante o bastante para não
+# reconectar por causa de um timeout isolado — reabrir a porta reseta o
+# ESP32 (ver BOARD_RESET_GRACE_S), então não é uma operação barata.
+READ_FAILURES_BEFORE_RECONNECT = 5
+
+# Quantas reconexões seguidas tentar antes de desistir e deixar a leitura
+# parada com uma mensagem clara. O contador zera assim que uma leitura volta a
+# dar certo, então uma falha ocasional depois de horas de operação não consome
+# o orçamento da próxima. Sem esse teto, um ESP32 que nunca mais responde
+# (mas cuja porta serial continua existindo) deixaria o app reabrindo a porta
+# para sempre — e cada reabertura reseta a placa.
+RECONNECT_ATTEMPTS = 5
+
 ANGLE_INPUT_REGISTER = 0
 PAN_INPUT_REGISTER = 1  # contíguo ao de tilt de propósito: os dois saem numa leitura só
 ANGLE_SCALE = 100.0  # registrador = ângulo * 100 (int16, resolução de 0.01°)
@@ -411,6 +432,11 @@ class ModbusAngleSource(IAngleDataSource):
                             _to_signed16(raw) / PAN_RATE_SCALE for raw in pan_result.registers
                         )
                 index += block_size
+                # A transferência leva quase tanto tempo quanto a captura em
+                # taxas altas (a 9600 bauds, 32 amostras por transação): sem
+                # reportar progresso aqui, a barra ficava cravada em 100% e
+                # parecia travamento.
+                on_progress(100.0 * index / sample_count, "Transferindo amostras do ESP32...")
 
             on_done(
                 build_vibration_readings(
@@ -436,9 +462,9 @@ class ModbusAngleSource(IAngleDataSource):
             self._thread.join(timeout=2.0)
             self._thread = None
 
-    def _run(self, on_reading: ReadingCallback, on_error: ErrorCallback | None) -> None:
-        # Import local para não exigir pymodbus/pyserial quando só o modo
-        # simulado for usado (ex: ambiente de desenvolvimento sem o ESP32 conectado).
+    def _open_client(self):
+        """Abre a porta e devolve um cliente conectado, ou `None` se não
+        conseguiu (ou se pediram parada no meio das tentativas)."""
         from pymodbus.client import ModbusSerialClient
 
         client = ModbusSerialClient(
@@ -446,43 +472,90 @@ class ModbusAngleSource(IAngleDataSource):
             baudrate=self._baudrate,
             timeout=self._timeout,
         )
+        for attempt in range(CONNECT_RETRY_ATTEMPTS):
+            if self._stop_event.is_set():
+                client.close()
+                return None
+            if client.connect():
+                # Ver BOARD_RESET_GRACE_S: abrir a porta já reseta o ESP32 —
+                # sem essa folga, a primeira leitura falha com timeout mesmo
+                # com o hardware saudável. Usa wait() em vez de sleep() para
+                # "Parar" continuar responsivo durante a espera.
+                self._stop_event.wait(BOARD_RESET_GRACE_S)
+                return client
+            if attempt < CONNECT_RETRY_ATTEMPTS - 1:
+                self._stop_event.wait(CONNECT_RETRY_DELAY_S)
+        client.close()
+        return None
 
+    def _run(self, on_reading: ReadingCallback, on_error: ErrorCallback | None) -> None:
+        def report(message: str) -> None:
+            if on_error and not self._stop_event.is_set():
+                on_error(message)
+
+        client = None
         try:
-            connected = False
-            for attempt in range(CONNECT_RETRY_ATTEMPTS):
-                if self._stop_event.is_set():
-                    return
-                if client.connect():
-                    connected = True
-                    break
-                if attempt < CONNECT_RETRY_ATTEMPTS - 1:
-                    self._stop_event.wait(CONNECT_RETRY_DELAY_S)
-            if not connected:
-                if on_error and not self._stop_event.is_set():
-                    on_error(f"Não foi possível abrir a porta serial {self._port}.")
+            client = self._open_client()
+            if client is None:
+                report(f"Não foi possível abrir a porta serial {self._port}.")
                 return
 
             with self._client_lock:
                 self._client = client
 
-            # Ver BOARD_RESET_GRACE_S: a porta abrir já reseta o ESP32 — sem
-            # essa folga, a primeira leitura falharia com timeout mesmo com o
-            # hardware saudável. Usa wait() em vez de sleep() pra "Parar"
-            # continuar responsivo mesmo durante essa espera inicial.
-            self._stop_event.wait(BOARD_RESET_GRACE_S)
-
+            consecutive_failures = 0
+            reconnects = 0
             while not self._stop_event.is_set():
                 try:
                     with self._client_lock:
                         angle, pan, self._pan_supported = _read_axes(
                             client, self._slave_id, self._pan_supported
                         )
+                    if consecutive_failures or reconnects:
+                        report("Comunicação com o ESP32 restabelecida.")
+                    consecutive_failures = 0
+                    reconnects = 0
                     on_reading(AngleReading(angle_deg=angle, pan_deg=pan, timestamp=time.time()))
-                except Exception as exc:  # noqa: BLE001 - reporta e segue tentando
-                    if on_error:
-                        on_error(f"Erro de leitura Modbus: {exc}")
+                except Exception as exc:  # noqa: BLE001 - reporta e tenta se recuperar
+                    consecutive_failures += 1
+                    # Só reporta a primeira falha da sequência: sem isso, a
+                    # mesma mensagem era reescrita na barra de status quatro
+                    # vezes por segundo enquanto o problema durasse.
+                    if consecutive_failures == 1:
+                        report(f"Erro de leitura Modbus: {exc}")
+                    if consecutive_failures >= READ_FAILURES_BEFORE_RECONNECT:
+                        reconnects += 1
+                        if reconnects > RECONNECT_ATTEMPTS:
+                            report(
+                                f"O ESP32 parou de responder na porta {self._port} e não voltou "
+                                f"após {RECONNECT_ATTEMPTS} reconexões — verifique o cabo USB e a "
+                                f"alimentação, e use \"Iniciar\" para tentar de novo."
+                            )
+                            return
+                        report(f"Reconectando à porta {self._port} ({reconnects}/{RECONNECT_ATTEMPTS})...")
+                        with self._client_lock:
+                            self._client = None
+                        client.close()
+                        client = self._open_client()
+                        if client is None:
+                            report(
+                                f"Não foi possível reabrir a porta serial {self._port} — "
+                                f"verifique o cabo USB e se o ESP32 está ligado."
+                            )
+                            return
+                        with self._client_lock:
+                            self._client = client
+                        consecutive_failures = 0
+                        continue
                 self._stop_event.wait(self._poll_interval)
         finally:
             with self._client_lock:
                 self._client = None
-            client.close()
+            if client is not None:
+                client.close()
+            # Sem isto, uma falha de conexão deixava `_thread` apontando para
+            # a thread já encerrada, e `start()` — que retorna cedo quando
+            # `_thread` não é None — virava um no-op silencioso: clicar em
+            # "Iniciar" de novo não fazia absolutamente nada.
+            if self._thread is threading.current_thread():
+                self._thread = None
