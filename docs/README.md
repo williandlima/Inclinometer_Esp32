@@ -36,7 +36,8 @@ problemas.
 | Documento | Tipo | Rev. | Conteúdo |
 |---|---|---|---|
 | [procedimento-teste-funcional-bancada.docx](procedimento-teste-funcional-bancada.docx) | PTE | 00 | Teste funcional completo em bancada: instalação do software desktop (modo notebook), setup de teste e verificação de todos os modos de conexão e funcionalidades, com tabela de registro de resultados e resolução de problemas. |
-| [procedimento-instalacao-software.docx](procedimento-instalacao-software.docx) | PTI | 00 | Instalação e verificação dos dois softwares de supervisão: desktop (Python/PyQt5) e aplicativo Android (Kotlin/Jetpack Compose). |
+| [procedimento-instalacao-software-python.docx](procedimento-instalacao-software-python.docx) | PTI | 00 | Instalação e verificação do software desktop (Python/PyQt5) em PC. |
+| [procedimento-instalacao-software-android.docx](procedimento-instalacao-software-android.docx) | PTI | 00 | Compilação e instalação do aplicativo Android (Kotlin/Jetpack Compose). |
 | [procedimento-gravacao-firmware.docx](procedimento-gravacao-firmware.docx) | PTG | 00 | Compilação e gravação (upload) do firmware do ESP32 via PlatformIO. |
 
 Os códigos de tipo (PTE/PTI/PTG), revisão, folha, código e PN nas caixas de
