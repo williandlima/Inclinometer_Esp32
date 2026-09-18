@@ -10,6 +10,7 @@ capa, folha de rosto, histórico de revisões, sumário automático, margens
 | [lista-de-materiais-hardware.docx](lista-de-materiais-hardware.docx) | 00 | Lista de materiais (BOM): componentes, especificações técnicas, datasheets dos fabricantes, ligações elétricas do sensor e opções de alimentação em avaliação. |
 | [procedimento-instalacao-software.docx](procedimento-instalacao-software.docx) | 00 | Procedimento técnico de instalação e verificação dos dois softwares de supervisão: desktop (Python/PyQt5) e aplicativo Android (Kotlin/Jetpack Compose). |
 | [procedimento-gravacao-firmware.docx](procedimento-gravacao-firmware.docx) | 00 | Procedimento técnico de compilação e gravação (upload) do firmware do ESP32 via PlatformIO. |
+| [procedimento-teste-funcional-bancada.docx](procedimento-teste-funcional-bancada.docx) | 00 | Procedimento de teste funcional completo em bancada: instalação do software desktop (modo notebook), setup de teste e verificação de todos os modos de conexão e funcionalidades, com tabela de registro de resultados. |
 
 A revisão 01 do relatório técnico acompanha o firmware **1.4.0**: taxa de
 amostragem do Modo Vibração de até 500 Hz, retransmissão de amostras perdidas
