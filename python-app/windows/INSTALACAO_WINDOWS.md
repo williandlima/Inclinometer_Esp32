@@ -27,6 +27,30 @@ Não é necessário rodar `install.bat` de novo, a menos que o
 `requirements.txt` mude (nesse caso, rode novamente para atualizar as
 dependências).
 
+### Instalação sem internet (uso normal em campo/fábrica)
+
+A instalação em campo/fábrica é sempre feita em Windows e **sem conexão à
+internet** — a mídia (DVD/CD) vem pronta do repositório físico da fábrica.
+`install.bat` detecta isso automaticamente: se existir a pasta
+`windows\offline_packages` (com os `.whl` de todas as dependências), ele
+instala a partir dela, sem tentar acessar a rede.
+
+Essa pasta é preparada **uma vez**, numa máquina com internet (normalmente
+no ambiente de desenvolvimento), antes de gravar a mídia:
+
+1. Numa máquina com Python e internet, dê duplo clique em
+   `windows\build_offline_bundle.bat`. Ele baixa todos os `.whl` de
+   `requirements.txt` para `windows\offline_packages`.
+2. Grave a pasta `python-app` inteira (já incluindo `windows\offline_packages`)
+   no DVD/CD, e arquive no repositório físico da fábrica.
+3. Na máquina de destino (Windows, sem internet), copie a pasta do
+   DVD/CD e rode `windows\install.bat` normalmente — ele reconhece a
+   pasta offline e instala sem rede.
+
+Se `windows\offline_packages` não existir, `install.bat` cai de volta na
+instalação pela internet (útil em desenvolvimento, mas não é o caminho de
+uso em campo).
+
 ## Opção 2 — Gerar um executável autônomo (não precisa de Python instalado)
 
 Útil para instalar em computadores onde não se quer/pode instalar Python
@@ -143,5 +167,6 @@ dados de uma não aparecem na outra e desinstalar uma não apaga os da outra.
 | Problema | Causa provável | Solução |
 |---|---|---|
 | `'python' não é reconhecido como um comando...` | Python não está no PATH | Reinstale o Python marcando "Add python.exe to PATH" |
-| Falha ao instalar dependências (`pip install`) | Sem internet ou proxy corporativo bloqueando | Verifique a conexão; em rede corporativa, configure o proxy do `pip` ou peça liberação de acesso ao PyPI |
+| Falha ao instalar a partir do pacote offline (`windows\offline_packages`) | Mídia gravada com pacotes incompletos/desatualizados em relação a `requirements.txt` | Gerar novamente `windows\offline_packages` com `build_offline_bundle.bat`, numa máquina com internet, e regravar a mídia |
+| Falha ao instalar dependências pela internet (Opção 1, sem mídia offline) | Sem internet ou proxy corporativo bloqueando | Verifique a conexão; em rede corporativa, configure o proxy do `pip` ou peça liberação de acesso ao PyPI — ou use a instalação offline acima |
 | Executável não abre / fecha sozinho | Antivírus bloqueou ou faltou gerar em máquina Windows | Veja "Antivírus/SmartScreen" acima; gere o `.exe` novamente em um Windows |
