@@ -45,6 +45,15 @@ identificação são inferência própria a partir do modelo mostrado (campos
 deixados em branco no original) — ajustar conforme a numeração real da
 empresa antes de uso formal.
 
+**Instalação e gravação são sempre em Windows (10/11) e sem internet**, a
+partir de mídia (DVD/CD) arquivada no repositório físico da fábrica — não
+compilação no local. A compilação em si (Python offline via
+`python-app/windows/build_offline_bundle.bat`, o `.apk` do Android, e os
+binários do firmware via PlatformIO) é feita à parte, com internet, por
+quem mantém cada software, e o resultado é o que vai para a mídia. O
+procedimento de teste funcional traz um diagrama em blocos do setup de
+bancada (seção 3).
+
 ## Documentação técnica de referência
 
 Mantida junto ao código, e atualizada primeiro (é a fonte da verdade de
