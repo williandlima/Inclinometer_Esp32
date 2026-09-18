@@ -62,14 +62,20 @@ mesma estrutura:
   final do documento, fora da sequência numerada — nunca é confundida com
   um passo da instalação.
 
-O CD(1) DAD do software Python inclui, prontos, uma distribuição **Python
-3.10 portátil (sem instalador)** e o instalador do **VS Code** — nenhum dos
-dois precisa ser baixado no computador de destino nem em nenhum outro
-lugar, exceto quando a mídia for gerada de novo (ANEXO A). O CD(3) DSE do
-aplicativo Android deve incluir, junto com o `.apk`, a pasta do **Android
-Platform Tools** (`adb.exe`) pelo mesmo motivo — mídias antigas sem essa
-pasta ainda funcionam pela instalação manual do `.apk` (sem `adb`), descrita
-como alternativa no próprio procedimento.
+O CD(2) DSF do software Python (usado na instalação para desenvolvimento
+e manutenção, seção 4.3 do procedimento) inclui, prontos, uma distribuição
+**Python 3.10 portátil (sem instalador)** e o instalador do **VS Code** —
+nenhum dos dois precisa ser baixado no computador de destino nem em
+nenhum outro lugar, exceto quando a mídia for gerada de novo (ANEXO A).
+**O CD(1) DAD não é usado em nenhum passo da instalação**: é uma mídia
+arquivada só como garantia/regra da fábrica (registro de que o ambiente
+de desenvolvimento existe e está preservado, com o mesmo conteúdo do
+CD(2) DSF), retirada do repositório físico apenas em auditoria — nunca
+durante a instalação. O CD(3) DSE do aplicativo Android deve incluir,
+junto com o `.apk`, a pasta do **Android Platform Tools** (`adb.exe`) pelo
+mesmo motivo — mídias antigas sem essa pasta ainda funcionam pela
+instalação manual do `.apk` (sem `adb`), descrita como alternativa no
+próprio procedimento.
 
 **Para o operador final (sem conhecimento de programação), o único
 caminho de instalação do software Python é o CD(3) DSE via instalador

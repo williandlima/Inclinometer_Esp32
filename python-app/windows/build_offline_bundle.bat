@@ -44,17 +44,22 @@ echo ============================================
 echo  Pacote offline gerado com sucesso em:
 echo    windows\offline_packages
 echo.
-echo  Isso e so a pasta offline_packages do CD(1) DAD. Antes de gravar
-echo  o CD(1), baixar tambem (uma vez, nesta mesma maquina com internet)
-echo  e copiar para a raiz do CD(1):
-echo    - Instalador do Python 3.10+ (python.org/downloads/windows)
-echo    - Instalador do VS Code, "User Installer" x64
-echo      (code.visualstudio.com/download) - editor usado no
-echo      desenvolvimento do software, alem do proprio Python.
+echo  Isso e so a pasta offline_packages do CD(2) DSF. Antes de gravar
+echo  o CD(2), baixar tambem (uma vez, nesta mesma maquina com internet)
+echo  e copiar para windows\python-portable e para a raiz do CD(2):
+echo    - Distribuicao Python 3.10+ portatil, sem instalador
+echo      (ex.: python-build-standalone, install_only, para Windows)
+echo    - Instalador do VSCodium ou VS Code, "User Installer" x64
+echo      (editor usado no desenvolvimento do software, alem do
+echo      proprio Python)
 echo.
-echo  Depois: copiar a pasta python-app INTEIRA para o CD(2) DSF (sem
-echo  a pasta offline_packages, que fica so no CD1). Na maquina de
-echo  destino (sem internet), windows\install.bat detecta a pasta
-echo  offline_packages copiada do CD(1) e instala a partir dela.
+echo  Depois: copiar a pasta python-app INTEIRA (com windows\offline_packages
+echo  e windows\python-portable ja dentro) para o CD(2) DSF. Na maquina de
+echo  destino (sem internet), windows\install.bat detecta essas pastas
+echo  automaticamente e instala a partir delas.
+echo.
+echo  O CD(1) DAD e so uma copia idêntica desta mesma pasta, arquivada
+echo  como garantia/regra da fabrica - nunca usado na instalacao (ver
+echo  ANEXO A do procedimento de instalacao, em docs/).
 echo ============================================
 pause
