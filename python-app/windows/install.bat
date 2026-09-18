@@ -11,26 +11,40 @@ echo  Inclinometro Avibras Aeroco - Instalador
 echo ============================================
 echo.
 
+REM Python PORTATIL: se windows\python-portable\python.exe existir (copiado
+REM do CD(1) DAD - distribuicao Python 3.10 "install_only" para Windows, sem
+REM instalador), usa ele direto, sem exigir Python ja instalado no sistema
+REM nem tocar no PATH da maquina. E o caminho normal em campo/fabrica.
+set "PYTHON_EXE=python"
+if exist "windows\python-portable\python.exe" (
+    echo Usando o Python portatil do CD^(1^) DAD ^(windows\python-portable^)...
+    set "PYTHON_EXE=%CD%\windows\python-portable\python.exe"
+    goto :python_ok
+)
+
 where python >nul 2>nul
 if errorlevel 1 (
-    echo [ERRO] Python nao foi encontrado no PATH.
+    echo [ERRO] Python nao foi encontrado no PATH, e windows\python-portable
+    echo tambem nao existe nesta pasta.
     echo.
-    echo Instale o Python 3.10 ou superior em:
+    echo Copie a pasta "python" do CD^(1^) DAD para windows\python-portable,
+    echo ou instale o Python 3.10 ou superior em:
     echo   https://www.python.org/downloads/
     echo.
-    echo IMPORTANTE: na tela de instalacao do Python, marque a opcao
-    echo "Add python.exe to PATH" antes de clicar em Install.
+    echo IMPORTANTE, se for instalar: na tela de instalacao do Python, marque
+    echo a opcao "Add python.exe to PATH" antes de clicar em Install.
     echo.
     pause
     exit /b 1
 )
 
+:python_ok
 echo Verificando versao do Python...
-python --version
+"%PYTHON_EXE%" --version
 
 echo.
 echo Criando ambiente virtual em ".venv"...
-python -m venv .venv
+"%PYTHON_EXE%" -m venv .venv
 if errorlevel 1 (
     echo [ERRO] Falha ao criar o ambiente virtual.
     pause
