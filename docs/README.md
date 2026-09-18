@@ -47,8 +47,9 @@ empresa antes de uso formal.
 
 **Instalação e gravação são sempre em Windows (10/11) e sem internet**, a
 partir de mídia arquivada no repositório físico da fábrica, no padrão de
-identificação da empresa — CD(1) DAD (Ambiente de Desenvolvimento: Python +
-pacotes offline), CD(2) DSF (Código Fonte) e CD(3) DSE (Executável) — não
+identificação da empresa — CD(1) DAD (Ambiente de Desenvolvimento: Python,
+VS Code e pacotes offline), CD(2) DSF (Código Fonte) e CD(3) DSE
+(Executável) — não
 compilação no local. A compilação em si (Python offline via
 `python-app/windows/build_offline_bundle.bat`, o `.apk` do Android, e os
 binários do firmware via PlatformIO) é feita à parte, com internet, por
