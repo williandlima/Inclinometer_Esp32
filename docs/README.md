@@ -1,8 +1,14 @@
-# Doc
+# docs
 
-Relatórios e procedimentos técnicos do projeto, em padrão ABNT (NBR 14724):
-capa, folha de rosto, histórico de revisões, sumário automático, margens
-3-2-3-2cm, fonte Times New Roman 12pt, espaçamento 1,5.
+Documentação do projeto do inclinômetro/azimutímetro eletrônico ESP32,
+reunida numa única pasta: os entregáveis formais em padrão ABNT e a
+documentação técnica de referência mantida junto ao código.
+
+## Entregáveis formais (padrão ABNT — NBR 14724)
+
+Relatórios e procedimentos técnicos com capa, folha de rosto, histórico de
+revisões, sumário automático, margens 3-2-3-2cm, fonte Times New Roman 12pt,
+espaçamento 1,5.
 
 | Documento | Rev. | Conteúdo |
 |---|---|---|
@@ -16,11 +22,20 @@ A revisão 01 do relatório técnico acompanha o firmware **1.4.0**: taxa de
 amostragem do Modo Vibração de até 500 Hz, retransmissão de amostras perdidas
 na transferência via BLE e os dois refinamentos do pipeline de análise
 espectral (interpolação do pico em decibéis e piso de ruído medido em janela
-local).
+local). O firmware evoluiu desde então para a **1.6.0** (extremos medidos no
+próprio firmware e filtro adaptativo da leitura contínua — ver
+`firmware/README.md`); os relatórios ainda não foram revisados para refletir
+essa mudança.
 
-Documentação técnica de referência mantida junto ao código — README de cada
-módulo, pinagem ([`docs/pinout.md`](../docs/pinout.md)), fluxograma e a versão
-de consulta rápida da lista de materiais
-([`HARDWARE/README.md`](../HARDWARE/README.md)) — permanece nas respectivas
-pastas. Os documentos desta pasta são os entregáveis formais; aqueles são a
-fonte da verdade de engenharia, e devem ser atualizados primeiro.
+## Documentação técnica de referência
+
+Mantida junto ao código, e atualizada primeiro (é a fonte da verdade de
+engenharia — os entregáveis formais acima devem refletir o que está aqui, não
+o contrário):
+
+| Documento | Conteúdo |
+|---|---|
+| [pinout.md](pinout.md) | Mapeamento completo de pinos do ESP32 (MPU6050 via I²C, comunicação USB). |
+| [fluxograma-python-app.md](fluxograma-python-app.md) | Arquitetura e fluxos de execução do software desktop (`python-app/`, PyQt5). |
+| [`HARDWARE/README.md`](../HARDWARE/README.md) | Versão de consulta rápida da lista de materiais (BOM), com datasheets linkados. |
+| README de cada módulo (`python-app/`, `android-app/`, `firmware/`) | Instalação, uso e detalhes de implementação específicos de cada software. |
