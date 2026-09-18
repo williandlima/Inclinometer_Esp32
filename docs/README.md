@@ -12,7 +12,7 @@ espaçamento 1,5.
 
 | Documento | Rev. | Conteúdo |
 |---|---|---|
-| [relatorio-tecnico-inclinometro.docx](relatorio-tecnico-inclinometro.docx) | 01 | Relatório técnico do projeto: fundamentação teórica, arquitetura do sistema, cálculos e modelagem matemática, protocolos de comunicação, modos de operação e resultados/validação. |
+| [relatorio-tecnico-inclinometro.docx](relatorio-tecnico-inclinometro.docx) | 02 | Relatório técnico do projeto: fundamentação teórica, arquitetura do sistema, cálculos e modelagem matemática, protocolos de comunicação, modos de operação e resultados/validação. |
 | [lista-de-materiais-hardware.docx](lista-de-materiais-hardware.docx) | 00 | Lista de materiais (BOM): componentes, especificações técnicas, datasheets dos fabricantes, ligações elétricas do sensor e opções de alimentação em avaliação. |
 | [procedimento-instalacao-software.docx](procedimento-instalacao-software.docx) | 00 | Procedimento técnico de instalação e verificação dos dois softwares de supervisão: desktop (Python/PyQt5) e aplicativo Android (Kotlin/Jetpack Compose). |
 | [procedimento-gravacao-firmware.docx](procedimento-gravacao-firmware.docx) | 00 | Procedimento técnico de compilação e gravação (upload) do firmware do ESP32 via PlatformIO. |
@@ -22,10 +22,10 @@ A revisão 01 do relatório técnico acompanha o firmware **1.4.0**: taxa de
 amostragem do Modo Vibração de até 500 Hz, retransmissão de amostras perdidas
 na transferência via BLE e os dois refinamentos do pipeline de análise
 espectral (interpolação do pico em decibéis e piso de ruído medido em janela
-local). O firmware evoluiu desde então para a **1.6.0** (extremos medidos no
-próprio firmware e filtro adaptativo da leitura contínua — ver
-`firmware/README.md`); os relatórios ainda não foram revisados para refletir
-essa mudança.
+local). A revisão 02 acompanha o firmware **1.6.0**: filtro adaptativo
+"1-euro" na leitura contínua exibida na tela, e extremos (mín./máx.) medidos
+pelo próprio firmware a 100 Hz, em caminho de filtragem separado do caminho
+de exibição — ver `firmware/README.md`.
 
 ## Documentação técnica de referência
 
