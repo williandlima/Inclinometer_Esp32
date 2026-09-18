@@ -49,9 +49,9 @@ empresa antes de uso formal.
 nenhum dos três procedimentos (Python, Android, firmware) — a mídia sempre
 traz tudo. O padrão de identificação da empresa é CD(1) DAD (Ambiente de
 Desenvolvimento — só o IDE e as ferramentas usadas para criar/editar o
-software, ex.: VSCodium/VS Code), CD(2) DSF (Código Fonte) e CD(3) DSE
-(Executável). Para deixar isso à prova de leitura apressada, os três
-procedimentos seguem a mesma estrutura:
+software, ex.: VSCodium/VS Code e um Python completo para desenvolvimento),
+CD(2) DSF (Código Fonte) e CD(3) DSE (Executável). Para deixar isso à
+prova de leitura apressada, os três procedimentos seguem a mesma estrutura:
 
 - um **RESUMO RÁPIDO** (caixa de destaque) logo no início, com o fluxo do
   caso comum em 2-3 frases;
@@ -70,11 +70,12 @@ rodar o software a partir do código-fonte — sem precisar ser baixado no
 computador de destino, exceto quando a mídia for gerada de novo (ANEXO A).
 **O CD(1) DAD não é usado em nenhum passo da instalação**, nem mesmo no
 caminho de desenvolvimento/manutenção: contém só o(s) instalador(es) do
-IDE e demais ferramentas usadas para criar/editar o software (ex.:
-VSCodium/VS Code) — sem código-fonte e sem os arquivos do CD(2) DSF —,
-arquivado como garantia/regra da fábrica e retirado do repositório físico
-apenas em auditoria, nunca durante a instalação (instalar e rodar o
-software não exige um IDE). O CD(3) DSE do aplicativo Android deve incluir,
+IDE (ex.: VSCodium/VS Code) e um instalador completo do Python — ambos
+necessários para desenvolver/editar o software, mas não para apenas
+instalá-lo e rodá-lo — sem código-fonte e sem os arquivos do CD(2) DSF.
+Fica arquivado como garantia/regra da fábrica e é retirado do repositório
+físico apenas em auditoria, nunca durante a instalação. O CD(3) DSE do
+aplicativo Android deve incluir,
 junto com o `.apk`, a pasta do **Android Platform Tools** (`adb.exe`) pelo
 mesmo motivo — mídias antigas sem essa pasta ainda funcionam pela
 instalação manual do `.apk` (sem `adb`), descrita como alternativa no
