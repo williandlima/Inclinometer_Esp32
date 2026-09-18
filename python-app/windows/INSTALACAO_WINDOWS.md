@@ -5,9 +5,16 @@ Avibras Aeroco em qualquer computador Windows 10/11 (64 bits), sem mexer
 na instalação global do Python da máquina (tudo fica isolado em um
 ambiente virtual dentro da própria pasta `python-app`).
 
-Existem dois caminhos, dependendo da necessidade:
+Existem três caminhos, dependendo de quem vai usar o resultado:
 
-## Opção 1 — Instalar e rodar a partir do código-fonte (recomendado)
+> **Para o operador final do software (sem conhecimento de programação),
+> use sempre a Opção 3 (instalador Setup.exe).** É a única que cria um
+> ícone na Área de Trabalho e no Menu Iniciar, com a logo da Avibras
+> Aeroco — o software abre por duplo clique, como qualquer programa do
+> Windows, sem terminal, sem arquivo `.bat` e sem editor de código. As
+> Opções 1 e 2 abaixo são só para quem desenvolve/mantém o software.
+
+## Opção 1 — Instalar e rodar a partir do código-fonte (uso: desenvolvimento)
 
 Requisito: **Python 3.10 ou superior** instalado no computador.
 Se não tiver, baixe em https://www.python.org/downloads/ e, na tela de
@@ -51,7 +58,7 @@ Se `windows\offline_packages` não existir, `install.bat` cai de volta na
 instalação pela internet (útil em desenvolvimento, mas não é o caminho de
 uso em campo).
 
-## Opção 2 — Gerar um executável autônomo (não precisa de Python instalado)
+## Opção 2 — Gerar um executável autônomo (uso: desenvolvimento/manutenção — sem ícone de atalho)
 
 Útil para instalar em computadores onde não se quer/pode instalar Python
 (ex: máquina de produção/chão de fábrica). Gera uma pasta com um
@@ -75,7 +82,7 @@ Passos (em um Windows com Python instalado):
    destino (pendrive, rede, etc.) e rode `Inclinometro2Eixos.exe` diretamente
    — não precisa instalar nada nesse computador.
 
-## Opção 3 — Gerar um instalador (Setup.exe) com atalhos e desinstalador
+## Opção 3 — Gerar um instalador (Setup.exe) com atalhos e desinstalador (USE ESTA para o operador final)
 
 A forma mais próxima de um "programa instalado de verdade": um único
 arquivo `Inclinometro-2Eixos-Setup-2.0.0.exe` que, ao ser executado no computador

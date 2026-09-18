@@ -44,9 +44,17 @@ echo ============================================
 echo  Pacote offline gerado com sucesso em:
 echo    windows\offline_packages
 echo.
-echo  Proximo passo: copiar a pasta python-app INTEIRA (incluindo essa
-echo  pasta offline_packages) para o DVD/CD do repositorio fisico da
-echo  fabrica. Na maquina de destino (sem internet), windows\install.bat
-echo  detecta a pasta automaticamente e instala a partir dela.
+echo  Isso e so a pasta offline_packages do CD(1) DAD. Antes de gravar
+echo  o CD(1), baixar tambem (uma vez, nesta mesma maquina com internet)
+echo  e copiar para a raiz do CD(1):
+echo    - Instalador do Python 3.10+ (python.org/downloads/windows)
+echo    - Instalador do VS Code, "User Installer" x64
+echo      (code.visualstudio.com/download) - editor usado no
+echo      desenvolvimento do software, alem do proprio Python.
+echo.
+echo  Depois: copiar a pasta python-app INTEIRA para o CD(2) DSF (sem
+echo  a pasta offline_packages, que fica so no CD1). Na maquina de
+echo  destino (sem internet), windows\install.bat detecta a pasta
+echo  offline_packages copiada do CD(1) e instala a partir dela.
 echo ============================================
 pause

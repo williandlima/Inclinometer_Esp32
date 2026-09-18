@@ -46,13 +46,25 @@ deixados em branco no original) — ajustar conforme a numeração real da
 empresa antes de uso formal.
 
 **Instalação e gravação são sempre em Windows (10/11) e sem internet**, a
-partir de mídia (DVD/CD) arquivada no repositório físico da fábrica — não
+partir de mídia arquivada no repositório físico da fábrica, no padrão de
+identificação da empresa — CD(1) DAD (Ambiente de Desenvolvimento: Python,
+VS Code e pacotes offline), CD(2) DSF (Código Fonte) e CD(3) DSE
+(Executável) — não
 compilação no local. A compilação em si (Python offline via
 `python-app/windows/build_offline_bundle.bat`, o `.apk` do Android, e os
 binários do firmware via PlatformIO) é feita à parte, com internet, por
-quem mantém cada software, e o resultado é o que vai para a mídia. O
-procedimento de teste funcional traz um diagrama em blocos do setup de
-bancada (seção 3).
+quem mantém cada software, e o resultado é o que vai em cada mídia. O
+procedimento de instalação do software Python (seção 4) detalha o
+conteúdo de cada CD e como combiná-los. O procedimento de teste funcional
+traz um diagrama em blocos do setup de bancada (seção 3).
+
+**Para o operador final (sem conhecimento de programação), o único
+caminho de instalação do software Python é o CD(3) DSE via instalador
+(Setup.exe)** — cria ícone na Área de Trabalho e no Menu Iniciar, com a
+logo da Avibras Aeroco, abrindo por duplo clique como qualquer programa
+do Windows. Os caminhos por código-fonte (CD1+CD2) ou pasta executável
+solta são só para desenvolvimento/manutenção do software — nenhum dos
+dois cria ícone de atalho.
 
 Na gravação de firmware, o `esptool` (standalone, na mídia) precisa estar
 acessível pelo **PATH do Windows** na máquina de gravação — o procedimento
