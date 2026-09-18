@@ -23,7 +23,7 @@ no projeto) ou **em avaliação** (opção considerada, ainda não decidida).
 
 ## 2. Fonte de alimentação — opções em avaliação (não decidido)
 
-O relatório técnico do projeto ([`Doc/relatorio-tecnico-inclinometro.docx`](../Doc/relatorio-tecnico-inclinometro.docx),
+O relatório técnico do projeto ([`docs/relatorio-tecnico-inclinometro.docx`](../docs/relatorio-tecnico-inclinometro.docx),
 seção 4.5) traz um exemplo de dimensionamento de energia para operação em
 campo, a **90 mA de consumo médio** (ESP32 com BLE ativo + sensor em
 operação contínua), comparando fontes candidatas. A fonte primária (bateria)
