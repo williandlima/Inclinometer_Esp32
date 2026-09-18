@@ -45,18 +45,31 @@ identificação são inferência própria a partir do modelo mostrado (campos
 deixados em branco no original) — ajustar conforme a numeração real da
 empresa antes de uso formal.
 
-**Instalação e gravação são sempre em Windows (10/11) e sem internet**, a
-partir de mídia arquivada no repositório físico da fábrica, no padrão de
-identificação da empresa — CD(1) DAD (Ambiente de Desenvolvimento: Python,
-VS Code e pacotes offline), CD(2) DSF (Código Fonte) e CD(3) DSE
-(Executável) — não
-compilação no local. A compilação em si (Python offline via
-`python-app/windows/build_offline_bundle.bat`, o `.apk` do Android, e os
-binários do firmware via PlatformIO) é feita à parte, com internet, por
-quem mantém cada software, e o resultado é o que vai em cada mídia. O
-procedimento de instalação do software Python (seção 4) detalha o
-conteúdo de cada CD e como combiná-los. O procedimento de teste funcional
-traz um diagrama em blocos do setup de bancada (seção 3).
+**Instalação e gravação nunca usam internet no computador de destino**, em
+nenhum dos três procedimentos (Python, Android, firmware) — a mídia sempre
+traz tudo. O padrão de identificação da empresa é CD(1) DAD (Ambiente de
+Desenvolvimento), CD(2) DSF (Código Fonte) e CD(3) DSE (Executável). Para
+deixar isso à prova de leitura apressada, os três procedimentos seguem a
+mesma estrutura:
+
+- um **RESUMO RÁPIDO** (caixa de destaque) logo no início, com o fluxo do
+  caso comum em 2-3 frases;
+- os passos da instalação/gravação em si, sempre offline, com o caminho do
+  operador final em primeiro lugar quando existe um caminho separado
+  (Python: seção 4.1 = instalador Setup.exe; os caminhos de
+  desenvolvimento/manutenção vêm depois, claramente rotulados como tais);
+- a preparação da mídia (que exige internet) mora só no **ANEXO A**, ao
+  final do documento, fora da sequência numerada — nunca é confundida com
+  um passo da instalação.
+
+O CD(1) DAD do software Python inclui, prontos, uma distribuição **Python
+3.10 portátil (sem instalador)** e o instalador do **VS Code** — nenhum dos
+dois precisa ser baixado no computador de destino nem em nenhum outro
+lugar, exceto quando a mídia for gerada de novo (ANEXO A). O CD(3) DSE do
+aplicativo Android deve incluir, junto com o `.apk`, a pasta do **Android
+Platform Tools** (`adb.exe`) pelo mesmo motivo — mídias antigas sem essa
+pasta ainda funcionam pela instalação manual do `.apk` (sem `adb`), descrita
+como alternativa no próprio procedimento.
 
 **Para o operador final (sem conhecimento de programação), o único
 caminho de instalação do software Python é o CD(3) DSE via instalador
@@ -71,6 +84,12 @@ acessível pelo **PATH do Windows** na máquina de gravação — o procedimento
 traz o passo com `setx PATH` para isso (seção 3, passo 5); sem isso, o
 comando `esptool` só funciona se o terminal for aberto exatamente na pasta
 onde o executável foi copiado.
+
+O procedimento de teste funcional (seção 3) e o de instalação do software
+Python (seção 3) trazem cada um um diagrama em blocos do respectivo setup,
+com fonte editável em vetor (SVG) em [`diagramas/`](diagramas/) — abre e
+edita em Inkscape, Illustrator, ou colado no PowerPoint/Word como imagem
+editável.
 
 ## Documentação técnica de referência
 
