@@ -110,6 +110,20 @@ def _build_chart_image(
         ax.scatter(mins_x, mins_y, color="#d62728", marker="v", zorder=3, label="Novo mínimo")
         ax.scatter(maxs_x, maxs_y, color="#2ca02c", marker="^", zorder=3, label="Novo máximo")
 
+        # A escala fixa acima é só um valor confortável para variações
+        # pequenas (ver comentário de _AXIS_CHART_CONFIG); se a leitura real
+        # (ou um evento de mínimo/máximo) ultrapassar essa faixa, mantê-la
+        # fixa faria o `set_ylim` abaixo CORTAR a curva no limite — aparecendo
+        # como se o sinal tivesse "saturado" no topo/fundo do gráfico, mesmo
+        # com o valor medido correto. Por isso a faixa é expandida (nunca
+        # encolhida) para sempre cobrir os dados reais dessa sessão.
+        all_y = ys + mins_y + maxs_y
+        data_min, data_max = min(all_y), max(all_y)
+        fixed_lo, fixed_hi = y_limits
+        if data_min < fixed_lo or data_max > fixed_hi:
+            margin = max((data_max - data_min) * 0.05, 1.0)
+            y_limits = (min(fixed_lo, data_min - margin), max(fixed_hi, data_max + margin))
+
     ax.set_xlabel("Tempo (s)")
     ax.set_ylabel(y_label)
     ax.set_ylim(*y_limits)

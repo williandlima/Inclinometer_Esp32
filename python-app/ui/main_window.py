@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -76,10 +77,10 @@ LOGO_PATH = _find_logo_path()
 DISPLAY_ANGLE_STEP_DEG = 0.25
 DISPLAY_ANGLE_HYSTERESIS_DEG = 0.05
 
-_VALUE_STYLE = f"font-size: 20px; font-weight: bold; color: {TEXT_LIGHT};"
-_FLASH_STYLE = f"font-size: 20px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 4px;"
+_VALUE_STYLE = f"font-size: 24px; font-weight: bold; color: {TEXT_LIGHT}; padding: 4px;"
+_FLASH_STYLE = f"font-size: 24px; font-weight: bold; background-color: {ORANGE}; color: {NAVY}; border-radius: 4px; padding: 4px;"
 
-_BADGE_STYLE = "font-size: 13px; font-weight: bold; border-radius: 10px; padding: 4px 12px;"
+_BADGE_STYLE = "font-size: 15px; font-weight: bold; border-radius: 10px; padding: 6px 16px;"
 
 _CONN_STYLES = {
     "parado": ("○ Parado", f"color: #9aa5b1; background: transparent;"),
@@ -101,9 +102,10 @@ QPushButton {{
     background-color: {ORANGE};
     color: {NAVY};
     border: none;
-    border-radius: 4px;
-    padding: 8px 14px;
+    border-radius: 6px;
+    padding: 12px 18px;
     font-weight: bold;
+    font-size: 14px;
 }}
 QPushButton:hover {{
     background-color: #ff9d40;
@@ -133,7 +135,7 @@ class _SignalBridge(QObject):
     reading = pyqtSignal(object)  # AngleReading
     error = pyqtSignal(str)
     calibration_done = pyqtSignal(bool, str)
-    vibration_progress = pyqtSignal(float)
+    vibration_progress = pyqtSignal(float, str)  # percentual, rótulo da fase
     vibration_done = pyqtSignal(object, str, float, float)  # amostras|None, erro, duration_s, rate_hz
 
 
@@ -145,7 +147,11 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} — Painel Desktop")
-        self.resize(900, 520)
+        # A janela abre maximizada (ver main.py, `showMaximized()`); este
+        # tamanho só vale para quando o usuário desmaximiza manualmente, daí
+        # ser bem maior que o mínimo abaixo.
+        self.resize(1280, 800)
+        self.setMinimumSize(1000, 640)
         self.setStyleSheet(_APP_STYLESHEET)
 
         self._settings = AppSettings()
@@ -175,29 +181,43 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+        # Margens generosas e espaçamento maior: numa janela maximizada, sem
+        # isso o conteúdo fica colado nas bordas e amontoado no topo,
+        # deixando um vão vazio embaixo — a origem da impressão de
+        # "desproporcional" relatada.
+        root.setContentsMargins(28, 20, 28, 20)
+        root.setSpacing(18)
 
         root.addLayout(self._build_header())
 
+        status_row = QHBoxLayout()
+        status_row.setSpacing(24)
         self.mode_label = QLabel()
         self.mode_label.setAlignment(Qt.AlignCenter)
-        root.addWidget(self.mode_label)
-
+        self.mode_label.setStyleSheet("font-size: 14px;")
         self.connection_label = QLabel()
         self.connection_label.setAlignment(Qt.AlignCenter)
-        root.addWidget(self.connection_label)
+        status_row.addStretch(1)
+        status_row.addWidget(self.mode_label)
+        status_row.addWidget(self.connection_label)
+        status_row.addStretch(1)
+        root.addLayout(status_row)
 
-        # Os dois eixos lado a lado, cada um com seu valor grande e seu par de
-        # extremos. Inclinação à esquerda por ser o eixo principal do produto.
+        # Os dois eixos lado a lado, cada um em um cartão do mesmo tamanho
+        # (stretch 1 para os dois), com peso 1 na coluna principal para
+        # ocupar o espaço vertical que sobra numa janela maximizada.
         axes_row = QHBoxLayout()
+        axes_row.setSpacing(24)
         self._axis_widgets = {
             TILT_AXIS: self._build_axis_panel("Inclinação (tilt)"),
             PAN_AXIS: self._build_axis_panel("Azimute (pan)"),
         }
-        axes_row.addLayout(self._axis_widgets[TILT_AXIS]["layout"])
-        axes_row.addLayout(self._axis_widgets[PAN_AXIS]["layout"])
-        root.addLayout(axes_row)
+        axes_row.addWidget(self._axis_widgets[TILT_AXIS]["frame"], 1)
+        axes_row.addWidget(self._axis_widgets[PAN_AXIS]["frame"], 1)
+        root.addLayout(axes_row, 1)
 
         buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(16)
         self.start_stop_btn = QPushButton("Iniciar")
         self.start_stop_btn.clicked.connect(self._toggle_start_stop)
         self.reset_btn = QPushButton("Resetar limites")
@@ -210,6 +230,9 @@ class MainWindow(QMainWindow):
         self.settings_btn.clicked.connect(self._open_settings)
         self.report_btn = QPushButton("Gerar relatório PDF")
         self.report_btn.clicked.connect(self._generate_report)
+        # Peso igual (stretch 1) para os seis: preenchem a largura toda de
+        # forma uniforme em vez de ficarem amontoados de um lado só, com o
+        # resto da barra vazio, como numa janela maximizada larga.
         for btn in (
             self.start_stop_btn,
             self.reset_btn,
@@ -218,7 +241,9 @@ class MainWindow(QMainWindow):
             self.settings_btn,
             self.report_btn,
         ):
-            buttons_row.addWidget(btn)
+            btn.setMinimumHeight(46)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            buttons_row.addWidget(btn, 1)
         root.addLayout(buttons_row)
 
         self.statusBar().showMessage("Pronto.")
@@ -227,7 +252,7 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
 
         title_label = QLabel(APP_NAME)
-        title_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {TEXT_LIGHT};")
+        title_label.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {TEXT_LIGHT};")
         header.addWidget(title_label)
 
         header.addStretch(1)
@@ -236,7 +261,7 @@ class MainWindow(QMainWindow):
             logo_label = QLabel()
             pixmap = QPixmap(LOGO_PATH)
             if not pixmap.isNull():
-                logo_label.setPixmap(pixmap.scaledToHeight(40, Qt.SmoothTransformation))
+                logo_label.setPixmap(pixmap.scaledToHeight(52, Qt.SmoothTransformation))
                 # A logo tem fundo branco (não transparente) — um "cartão"
                 # branco arredondado ao redor evita que pareça um retângulo
                 # solto sobre o fundo azul marinho do cabeçalho.
@@ -250,19 +275,33 @@ class MainWindow(QMainWindow):
         return header
 
     def _build_axis_panel(self, title: str) -> dict:
-        """Coluna de um eixo: título, valor grande, aviso opcional e o par de
+        """Cartão de um eixo: título, valor grande, aviso opcional e o par de
         caixas de mínimo/máximo. Devolve os widgets num dicionário, para o
-        resto da janela atualizar os dois eixos pelo mesmo caminho de código."""
-        column = QVBoxLayout()
+        resto da janela atualizar os dois eixos pelo mesmo caminho de código.
+
+        É um QFrame (e não só um layout) de propósito: os dois eixos ficam
+        como dois cartões do mesmo tamanho, com a mesma borda usada nas
+        caixas de mínimo/máximo — o mesmo padrão visual, só numa escala
+        maior — em vez de dois blocos de texto soltos sobre o fundo."""
+        frame = QFrame()
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        frame.setMinimumHeight(320)
+        column = QVBoxLayout(frame)
+        column.setContentsMargins(20, 18, 20, 18)
+        column.setSpacing(10)
 
         title_label = QLabel(title)
         title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {ORANGE};")
+        title_label.setStyleSheet(f"font-size: 17px; font-weight: bold; color: {ORANGE};")
         column.addWidget(title_label)
+
+        # Empurra o valor para o centro vertical do cartão, em vez de deixar
+        # tudo colado no topo enquanto o cartão cresce numa janela maximizada.
+        column.addStretch(1)
 
         value_label = QLabel("--.--°")
         value_label.setAlignment(Qt.AlignCenter)
-        value_label.setFont(QFont("Sans Serif", 46, QFont.Bold))
+        value_label.setFont(QFont("Sans Serif", 56, QFont.Bold))
         column.addWidget(value_label)
 
         # Normalmente oculto; usado para explicar por que um eixo está sem
@@ -272,19 +311,22 @@ class MainWindow(QMainWindow):
         # com borda no meio do painel.
         note_label = QLabel("")
         note_label.setAlignment(Qt.AlignCenter)
-        note_label.setStyleSheet("font-size: 11px; color: #9aa5b1;")
+        note_label.setStyleSheet("font-size: 12px; color: #9aa5b1;")
         note_label.setVisible(False)
         column.addWidget(note_label)
 
+        column.addStretch(1)
+
         limits_row = QHBoxLayout()
+        limits_row.setSpacing(14)
         min_frame, min_value_label, min_time_label = self._build_limit_box("Mínimo")
         max_frame, max_value_label, max_time_label = self._build_limit_box("Máximo")
-        limits_row.addWidget(min_frame)
-        limits_row.addWidget(max_frame)
+        limits_row.addWidget(min_frame, 1)
+        limits_row.addWidget(max_frame, 1)
         column.addLayout(limits_row)
 
         return {
-            "layout": column,
+            "frame": frame,
             "value": value_label,
             "note": note_label,
             "min_value": min_value_label,
@@ -296,11 +338,15 @@ class MainWindow(QMainWindow):
     def _build_limit_box(self, title: str) -> tuple[QFrame, QLabel, QLabel]:
         frame = QFrame()
         frame.setFrameShape(QFrame.StyledPanel)
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        frame.setMinimumHeight(100)
         layout = QVBoxLayout(frame)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(4)
 
         title_label = QLabel(title)
         title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet("font-weight: bold;")
+        title_label.setStyleSheet("font-size: 13px; font-weight: bold;")
 
         value_label = QLabel("--.--°")
         value_label.setAlignment(Qt.AlignCenter)
@@ -308,6 +354,7 @@ class MainWindow(QMainWindow):
 
         time_label = QLabel("")
         time_label.setAlignment(Qt.AlignCenter)
+        time_label.setStyleSheet("font-size: 12px; color: #b8c0cb;")
 
         layout.addWidget(title_label)
         layout.addWidget(value_label)
@@ -330,15 +377,23 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- ações
     def _open_settings(self) -> None:
+        # Para a conexão ANTES de abrir o diálogo (não só depois de aceitar):
+        # senão, com uma conexão Real já em andamento (mesmo que falhando nas
+        # leituras), a porta serial continua aberta pela thread de fundo
+        # enquanto o diálogo está na tela, e "Detectar automaticamente"/
+        # "Testar conexão" tentam abrir essa mesma porta já ocupada pelo
+        # próprio app — reportando "nenhum ESP32 encontrado" mesmo com o
+        # hardware são. Reinicia ao fechar o diálogo (aceito ou cancelado)
+        # para não deixar o usuário precisando clicar em "Iniciar" de novo.
+        was_running = self._running
+        if was_running:
+            self._stop()
         dialog = SettingsDialog(self._settings, self)
         if dialog.exec_() == SettingsDialog.Accepted:
-            was_running = self._running
-            if was_running:
-                self._stop()
             self._settings = dialog.result_settings()
             self._update_mode_label()
-            if was_running:
-                self._start()
+        if was_running:
+            self._start()
 
     def _toggle_start_stop(self) -> None:
         if self._running:
@@ -493,7 +548,12 @@ class MainWindow(QMainWindow):
     def _on_error(self, message: str) -> None:
         if self._settings.mode in ("real", "ble"):
             self._set_connection_status("erro")
-        self.statusBar().showMessage(message, 5000)
+        # Sem timeout de propósito: com um timeout, a mensagem de erro some
+        # sozinha depois de alguns segundos e a barra volta a mostrar o
+        # "Conectado: ..." permanente deixado por `_start()` — dando a
+        # impressão enganosa de que o problema se resolveu sozinho, quando
+        # na real o badge "Falha de conexão" continua vermelho.
+        self.statusBar().showMessage(message)
 
     def _calibrate(self) -> None:
         if self._source is None or not self._running:
@@ -550,16 +610,18 @@ class MainWindow(QMainWindow):
         self.vibration_btn.setEnabled(False)
         self.statusBar().showMessage("Captura de vibração em andamento...")
 
-        def on_progress(percent: float) -> None:
-            self._bridge.vibration_progress.emit(percent)
+        def on_progress(percent: float, phase: str = "") -> None:
+            self._bridge.vibration_progress.emit(percent, phase)
 
         def on_done(readings: list[AngleReading] | None, error: str | None) -> None:
             self._bridge.vibration_done.emit(readings if readings is not None else [], error or "", duration_s, rate_hz)
 
         source.start_vibration_capture(duration_s, rate_hz, on_progress, on_done)
 
-    def _on_vibration_progress(self, percent: float) -> None:
+    def _on_vibration_progress(self, percent: float, phase: str = "") -> None:
         if self._vibration_progress_dialog is not None:
+            if phase:
+                self._vibration_progress_dialog.setLabelText(phase)
             self._vibration_progress_dialog.setValue(int(percent))
 
     def _on_vibration_done(self, readings: list, error: str, duration_s: float, rate_hz: float) -> None:

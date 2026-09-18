@@ -16,14 +16,19 @@
 constexpr int PIN_I2C_SDA = 21;
 constexpr int PIN_I2C_SCL = 22;
 
+// Velocidade do barramento I2C. 400kHz (fast mode) em vez dos 100kHz padrão
+// do Arduino — o MPU6050 suporta, e o Modo Vibração em taxa alta depende
+// disso (ver Mpu6050::begin).
+constexpr uint32_t I2C_CLOCK_HZ = 400000;
+
 // ============================================================================
 // Versão do firmware — bump manual a cada mudança relevante de contrato ou
 // comportamento. FIRMWARE_VERSION_CODE codifica a mesma versão como inteiro
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.5.0";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10500;
+constexpr char FIRMWARE_VERSION[] = "1.6.0";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10600;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -81,18 +86,33 @@ constexpr char CHAR_PAN_UUID[] = "6e6e0008-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 // mudança ser aditiva: um app que não a conhece continua recebendo a captura
 // de tilt exatamente como antes.
 constexpr char CHAR_VIBRATION_PAN_DATA_UUID[] = "6e6e0009-3c17-4a2e-8f4b-1a2b3c4d5e6f";
-// Extremos do peak-hold, num pacote só de 8 bytes (int16 LE, x ANGLE_SCALE):
-// tiltMin, tiltMax, panMin, panMax. Os quatro juntos numa characteristic
-// porque são sempre lidos juntos e mudam devagar — e, como sempre, aditivo:
-// um app antigo simplesmente não a assina.
-constexpr char CHAR_PEAKS_UUID[] = "6e6e000a-3c17-4a2e-8f4b-1a2b3c4d5e6f";
+// Pedido de retransmissão de amostras da captura de vibração (v1.4.0).
+// Write de 3 bytes: índice inicial (uint16 LE) + eixo (0 = tilt, 1 = pan).
+// Existe porque notificação BLE não tem confirmação: se a fila do rádio
+// encher, o pacote some em silêncio e o app fica com um buraco na série.
+// Sem isto, o app não tinha como pedir o pedaço que faltou — e, pior,
+// montava a série ignorando o buraco, o que deslocava todas as amostras
+// seguintes no tempo e falseava o espectro inteiro.
+constexpr char CHAR_VIBRATION_RESEND_UUID[] = "6e6e000a-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 // Write de 0x01 -> esquece os extremos dos dois eixos. Separada da de
 // calibração porque são ações diferentes: calibrar move o zero, resetar os
 // extremos não mexe na leitura.
 constexpr char CHAR_RESET_PEAKS_UUID[] = "6e6e000b-3c17-4a2e-8f4b-1a2b3c4d5e6f";
+// Extremos do peak-hold, num pacote só de 8 bytes (int16 LE, x ANGLE_SCALE):
+// tiltMin, tiltMax, panMin, panMax. Os quatro juntos numa characteristic
+// porque são sempre lidos juntos e mudam devagar — e, como sempre, aditivo:
+// um app antigo simplesmente não a assina. UUID ...000c (não ...000a: já
+// usado pela retransmissão de vibração acima).
+constexpr char CHAR_PEAKS_UUID[] = "6e6e000c-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 constexpr uint32_t BLE_NOTIFY_INTERVAL_MS = 200;  // taxa de notificação do ângulo em modo contínuo
 constexpr uint32_t BLE_VIBRATION_STATUS_NOTIFY_INTERVAL_MS = 300;  // limita notify() de status/progresso durante a captura
-constexpr uint32_t BLE_VIBRATION_CHUNK_INTERVAL_MS = 20;  // intervalo entre pacotes de dados da captura (evita congestionar o BLE)
+// Intervalo entre pacotes de dados da captura. Cada pacote leva 8 amostras,
+// então 20ms davam só 400 amostras/s: uma captura de 500Hz por 12s (6000
+// amostras em cada eixo, o teto do buffer) levaria 30s só para transferir,
+// estourando o tempo limite do app. Em 5ms são 1600 amostras/s, e a perda
+// eventual de pacote por fila cheia agora é recuperável (ver
+// CHAR_VIBRATION_RESEND_UUID), em vez de corromper a série em silêncio.
+constexpr uint32_t BLE_VIBRATION_CHUNK_INTERVAL_MS = 5;
 
 // ============================================================================
 // Compartilhados entre os dois transportes
@@ -174,6 +194,14 @@ constexpr float ANGLE_PEAK_CUTOFF_HZ = 3.0f;
 constexpr uint8_t ANGLE_PEAK_PERSIST_SAMPLES = 10;  // 10 amostras a 100 Hz = 100 ms
 
 constexpr uint16_t VIBRATION_MAX_SAMPLES = 6000;  // limite de memória do buffer de captura
+
+// Taxa máxima aceita numa captura de vibração. O limite real é o barramento
+// I2C: cada amostra faz duas transações de 14 bytes (tilt e pan), que a
+// 400kHz custam ~0,7ms somadas — em 500 amostras/s (2ms de período) a
+// ocupação fica em torno de 35%, com folga para o resto do loop (Modbus,
+// BLE). Acima disso o loop não fecha o período de forma confiável e as
+// amostras sairiam com espaçamento irregular, o que distorceria o espectro.
+constexpr uint16_t VIBRATION_MAX_RATE_HZ = 500;
 
 // ============================================================================
 // Eixo de azimute (pan) — medido pelo GIROSCÓPIO do MPU6050 (ver PanSensor.h).

@@ -23,9 +23,15 @@ from pathlib import Path
 
 APP_VERSION = "2.0.0"
 
-# Nome exibido na janela e nos atalhos. O sufixo é o que deixa óbvio, na
-# barra de tarefas e no menu Iniciar, qual das duas versões está aberta.
-APP_NAME = "Inclinômetro 2 Eixos"
+# Nome exibido na janela principal (título e cabeçalho da tela).
+#
+# Diferente de APP_VARIANT abaixo (que continua "2Eixos" — usado só para
+# identificar arquivos/pastas internos e não deve mudar, sob risco de o app
+# parar de achar o histórico já salvo) e do nome do instalador Windows
+# (`windows/Inclinometro.iss`, MyAppName — ainda "Inclinometro 2 Eixos
+# (Avibras Aeroco)", usado nos atalhos/Menu Iniciar/Painel de Controle),
+# este é só o texto amigável mostrado dentro do próprio app.
+APP_NAME = "Inclinômetro Avibras Aeroco"
 
 # Sufixo usado em nomes de pasta/arquivo. Sem acento nem espaço de propósito.
 APP_VARIANT = "2Eixos"

@@ -30,6 +30,11 @@ public:
     void handleCalibrateWrite();
     void handleResetPeaksWrite();
     void handleVibrationConfigWrite(uint16_t durationS, uint16_t rateHz);
+    // Pedido de retransmissão a partir de `startIndex` no eixo indicado —
+    // o app usa isto quando detecta um buraco na série recebida, já que
+    // notificação BLE não tem confirmação e um pacote pode sumir em
+    // silêncio se a fila do rádio encher.
+    void handleVibrationResendWrite(uint16_t startIndex, bool pan);
 
 private:
     AngleSensor &_sensor;
@@ -42,6 +47,11 @@ private:
     uint16_t _vibrationPanDataCursor = 0;
     uint32_t _lastVibrationStatusNotifyMs = 0;
     uint32_t _lastVibrationChunkMs = 0;
+    // Escritos pela task do BLE (callback de retransmissão) e consumidos
+    // pelo loop principal, como o resto dos pedidos vindos de callbacks.
+    volatile bool _resendPending = false;
+    volatile uint16_t _resendStartIndex = 0;
+    volatile bool _resendPan = false;
 
     // Último pacote de extremos enviado, para notificar só quando muda.
     uint16_t _lastSentPeaks[4] = {0, 0, 0, 0};

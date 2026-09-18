@@ -26,6 +26,18 @@ computador Windows sem precisar instalar Python.
 python main.py
 ```
 
+**No VSCode**: abra a pasta raiz do repositório (`Inclinometer_Esp32`) e use
+**F5** (Run and Debug) — já existe uma configuração pronta em
+`.vscode/launch.json` que sempre executa `python-app/main.py`, independente
+de qual arquivo esteja aberto no editor. **Não use o botão ▶ "Run Python
+File"** enquanto estiver editando um arquivo dentro de `ui/`, `data_source/`,
+`limits/` ou `report/` — esse botão roda o arquivo em foco, não o `main.py`,
+e como esses módulos usam import absoluto a partir de `python-app/`
+(`from data_source... `, `from ui...`), rodar um deles isoladamente falha com
+erro de import (ex.: `No module named 'app_version'`). O `main.py` sempre
+funciona porque insere a própria pasta no `sys.path` antes de importar
+qualquer módulo do projeto.
+
 Na tela, use **Configurações** para escolher entre:
 - **Modo Simulação**: gera ângulos sintéticos (oscilação suave em torno de 60°),
   útil para desenvolver/testar sem o hardware pronto.

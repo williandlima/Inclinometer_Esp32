@@ -98,7 +98,11 @@ def build_vibration_readings(
 
 ReadingCallback = Callable[[AngleReading], None]
 ErrorCallback = Callable[[str], None]
-VibrationProgressCallback = Callable[[float], None]  # percentual 0-100
+# Percentual 0-100 e, opcionalmente, o rótulo da fase atual. A captura tem
+# duas fases de duração comparável em taxas altas — amostrar e depois
+# transferir as amostras do ESP32 — e sem o rótulo a segunda parecia
+# travamento: a barra ficava cravada em 100% por dezenas de segundos.
+VibrationProgressCallback = Callable[..., None]
 VibrationDoneCallback = Callable[[list[AngleReading] | None, str | None], None]  # amostras, erro
 
 
