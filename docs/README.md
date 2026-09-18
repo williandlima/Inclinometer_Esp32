@@ -54,6 +54,12 @@ quem mantém cada software, e o resultado é o que vai para a mídia. O
 procedimento de teste funcional traz um diagrama em blocos do setup de
 bancada (seção 3).
 
+Na gravação de firmware, o `esptool` (standalone, na mídia) precisa estar
+acessível pelo **PATH do Windows** na máquina de gravação — o procedimento
+traz o passo com `setx PATH` para isso (seção 3, passo 5); sem isso, o
+comando `esptool` só funciona se o terminal for aberto exatamente na pasta
+onde o executável foi copiado.
+
 ## Documentação técnica de referência
 
 Mantida junto ao código, e atualizada primeiro (é a fonte da verdade de
