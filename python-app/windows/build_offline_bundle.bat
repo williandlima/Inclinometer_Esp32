@@ -46,20 +46,20 @@ echo    windows\offline_packages
 echo.
 echo  Isso e so a pasta offline_packages do CD(2) DSF. Antes de gravar
 echo  o CD(2), baixar tambem (uma vez, nesta mesma maquina com internet)
-echo  e copiar para windows\python-portable e para a raiz do CD(2):
+echo  e copiar para windows\python-portable, na raiz do CD(2):
 echo    - Distribuicao Python 3.10+ portatil, sem instalador
 echo      (ex.: python-build-standalone, install_only, para Windows)
-echo    - Instalador do VSCodium ou VS Code, "User Installer" x64
-echo      (editor usado no desenvolvimento do software, alem do
-echo      proprio Python)
+echo      - e' o runtime usado so para RODAR o software, nao um IDE.
 echo.
 echo  Depois: copiar a pasta python-app INTEIRA (com windows\offline_packages
 echo  e windows\python-portable ja dentro) para o CD(2) DSF. Na maquina de
 echo  destino (sem internet), windows\install.bat detecta essas pastas
 echo  automaticamente e instala a partir delas.
 echo.
-echo  O CD(1) DAD e so uma copia idêntica desta mesma pasta, arquivada
-echo  como garantia/regra da fabrica - nunca usado na instalacao (ver
-echo  ANEXO A do procedimento de instalacao, em docs/).
+echo  O CD(1) DAD e' outra midia, com o(s) instalador(es) do IDE e demais
+echo  ferramentas usadas para CRIAR/editar o software (ex.: VSCodium ou
+echo  VS Code) - nao tem codigo-fonte nem os arquivos do CD(2), e e'
+echo  arquivado so como garantia/regra da fabrica, nunca usado na
+echo  instalacao (ver ANEXO A do procedimento de instalacao, em docs/).
 echo ============================================
 pause
