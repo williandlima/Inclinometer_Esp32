@@ -6,7 +6,7 @@ documentação técnica de referência mantida junto ao código.
 
 ## Entregáveis formais (padrão ABNT — NBR 14724)
 
-Relatórios e procedimentos técnicos com capa, folha de rosto, histórico de
+Relatório e lista de materiais, com capa, folha de rosto, histórico de
 revisões, sumário automático, margens 3-2-3-2cm, fonte Times New Roman 12pt,
 espaçamento 1,5.
 
@@ -14,9 +14,6 @@ espaçamento 1,5.
 |---|---|---|
 | [relatorio-tecnico-inclinometro.docx](relatorio-tecnico-inclinometro.docx) | 02 | Relatório técnico do projeto: fundamentação teórica, arquitetura do sistema, cálculos e modelagem matemática, protocolos de comunicação, modos de operação e resultados/validação. |
 | [lista-de-materiais-hardware.docx](lista-de-materiais-hardware.docx) | 00 | Lista de materiais (BOM): componentes, especificações técnicas, datasheets dos fabricantes, ligações elétricas do sensor e opções de alimentação em avaliação. |
-| [procedimento-instalacao-software.docx](procedimento-instalacao-software.docx) | 00 | Procedimento técnico de instalação e verificação dos dois softwares de supervisão: desktop (Python/PyQt5) e aplicativo Android (Kotlin/Jetpack Compose). |
-| [procedimento-gravacao-firmware.docx](procedimento-gravacao-firmware.docx) | 00 | Procedimento técnico de compilação e gravação (upload) do firmware do ESP32 via PlatformIO. |
-| [procedimento-teste-funcional-bancada.docx](procedimento-teste-funcional-bancada.docx) | 00 | Procedimento de teste funcional completo em bancada: instalação do software desktop (modo notebook), setup de teste e verificação de todos os modos de conexão e funcionalidades, com tabela de registro de resultados. |
 
 A revisão 01 do relatório técnico acompanha o firmware **1.4.0**: taxa de
 amostragem do Modo Vibração de até 500 Hz, retransmissão de amostras perdidas
@@ -26,6 +23,27 @@ local). A revisão 02 acompanha o firmware **1.6.0**: filtro adaptativo
 "1-euro" na leitura contínua exibida na tela, e extremos (mín./máx.) medidos
 pelo próprio firmware a 100 Hz, em caminho de filtragem separado do caminho
 de exibição — ver `firmware/README.md`.
+
+## Procedimentos de teste e instalação (formulário padrão da empresa)
+
+Caixa de identificação (título/tipo/revisão/folha/código/PN) e rodapé de
+aprovação (feito por/aprovado por/projeto-contrato/página) em todas as
+páginas, fonte Arial, sem capa/sumário separados — modelo fornecido pelo
+usuário. Estrutura fixa em 5 seções: Objetivo, Equipamentos e materiais
+utilizados, Setup, o procedimento propriamente dito, e Resolução de
+problemas.
+
+| Documento | Tipo | Rev. | Conteúdo |
+|---|---|---|---|
+| [procedimento-teste-funcional-bancada.docx](procedimento-teste-funcional-bancada.docx) | PTE | 00 | Teste funcional completo em bancada: instalação do software desktop (modo notebook), setup de teste e verificação de todos os modos de conexão e funcionalidades, com tabela de registro de resultados e resolução de problemas. |
+| [procedimento-instalacao-software-python.docx](procedimento-instalacao-software-python.docx) | PTI | 00 | Instalação e verificação do software desktop (Python/PyQt5) em PC. |
+| [procedimento-instalacao-software-android.docx](procedimento-instalacao-software-android.docx) | PTI | 00 | Compilação e instalação do aplicativo Android (Kotlin/Jetpack Compose). |
+| [procedimento-gravacao-firmware.docx](procedimento-gravacao-firmware.docx) | PTG | 00 | Compilação e gravação (upload) do firmware do ESP32 via PlatformIO. |
+
+Os códigos de tipo (PTE/PTI/PTG), revisão, folha, código e PN nas caixas de
+identificação são inferência própria a partir do modelo mostrado (campos
+deixados em branco no original) — ajustar conforme a numeração real da
+empresa antes de uso formal.
 
 ## Documentação técnica de referência
 
