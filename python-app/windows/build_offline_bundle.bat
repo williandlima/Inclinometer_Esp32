@@ -56,9 +56,11 @@ echo  e windows\python-portable ja dentro) para o CD(2) DSF. Na maquina de
 echo  destino (sem internet), windows\install.bat detecta essas pastas
 echo  automaticamente e instala a partir delas.
 echo.
-echo  O CD(1) DAD e' outra midia, com o(s) instalador(es) do IDE e demais
-echo  ferramentas usadas para CRIAR/editar o software (ex.: VSCodium ou
-echo  VS Code) - nao tem codigo-fonte nem os arquivos do CD(2), e e'
+echo  O CD(1) DAD e' outra midia, com o(s) instalador(es) do IDE (ex.:
+echo  VSCodium ou VS Code) e um instalador completo do Python para
+echo  Windows (python.org/downloads/windows) - ambos necessarios para
+echo  desenvolver/editar o software, mas nao para so instalar/rodar
+echo  ele. Nao tem codigo-fonte nem os arquivos do CD(2), e e'
 echo  arquivado so como garantia/regra da fabrica, nunca usado na
 echo  instalacao (ver ANEXO A do procedimento de instalacao, em docs/).
 echo ============================================
