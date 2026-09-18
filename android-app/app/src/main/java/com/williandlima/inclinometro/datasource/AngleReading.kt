@@ -33,6 +33,22 @@ data class AngleReading(
      * [com.williandlima.inclinometro.limits.VibrationStatsCalculator.analyzeAxis].
      */
     val panRateDps: Double? = null,
+    /**
+     * Extremos medidos pelo próprio firmware desde a última calibração/reset,
+     * a partir da v1.5.0. Ficam `null` com firmware mais antigo, e aí o app
+     * calcula os extremos por conta própria a partir das leituras (ver
+     * [com.williandlima.inclinometro.limits.LimitTracker]).
+     *
+     * Por que o firmware faz isso melhor que o app: ele amostra a 100 Hz,
+     * enquanto o notify BLE chega a 5 Hz e ainda traz o valor suavizado para
+     * a tela. Uma rajada de vento real de 2° durando meio segundo chegava
+     * aqui como 0,78°; medida no firmware, chega como 1,76°. Ver o bloco
+     * ANGLE_PEAK_* em `firmware/src/Config.h`.
+     */
+    val angleMinDeg: Double? = null,
+    val angleMaxDeg: Double? = null,
+    val panMinDeg: Double? = null,
+    val panMaxDeg: Double? = null,
 )
 
 enum class ConnectionMode {

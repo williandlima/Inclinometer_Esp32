@@ -28,6 +28,7 @@ public:
 
     // Chamados pelos callbacks de escrita GATT (ver BleServer.cpp).
     void handleCalibrateWrite();
+    void handleResetPeaksWrite();
     void handleVibrationConfigWrite(uint16_t durationS, uint16_t rateHz);
     // Pedido de retransmissão a partir de `startIndex` no eixo indicado —
     // o app usa isto quando detecta um buraco na série recebida, já que
@@ -52,6 +53,10 @@ private:
     volatile uint16_t _resendStartIndex = 0;
     volatile bool _resendPan = false;
 
+    // Último pacote de extremos enviado, para notificar só quando muda.
+    uint16_t _lastSentPeaks[4] = {0, 0, 0, 0};
+    bool _hasSentPeaks = false;
+
     // Envia um pacote de amostras a partir de `cursor` (que é avançado) na
     // characteristic indicada. `pan` escolhe de qual dos dois buffers ler.
     void sendVibrationChunk(BLECharacteristic *characteristic, uint16_t &cursor, uint16_t total, bool pan);
@@ -59,5 +64,10 @@ private:
     // Notifica tilt e pan na mesma cadência (BLE_NOTIFY_INTERVAL_MS), em
     // characteristics separadas — ver CHAR_PAN_UUID em Config.h.
     void notifyAngles();
+
+    // Extremos do peak-hold num pacote só (ver CHAR_PEAKS_UUID em Config.h).
+    // Chamado por notifyAngles(), mas só emite notify quando o valor muda.
+    void notifyPeaks();
+
     void updateVibrationNotify();
 };
