@@ -57,6 +57,14 @@ procedimento de instalação do software Python (seção 4) detalha o
 conteúdo de cada CD e como combiná-los. O procedimento de teste funcional
 traz um diagrama em blocos do setup de bancada (seção 3).
 
+**Para o operador final (sem conhecimento de programação), o único
+caminho de instalação do software Python é o CD(3) DSE via instalador
+(Setup.exe)** — cria ícone na Área de Trabalho e no Menu Iniciar, com a
+logo da Avibras Aeroco, abrindo por duplo clique como qualquer programa
+do Windows. Os caminhos por código-fonte (CD1+CD2) ou pasta executável
+solta são só para desenvolvimento/manutenção do software — nenhum dos
+dois cria ícone de atalho.
+
 ## Documentação técnica de referência
 
 Mantida junto ao código, e atualizada primeiro (é a fonte da verdade de
