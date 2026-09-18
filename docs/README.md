@@ -66,6 +66,12 @@ do Windows. Os caminhos por código-fonte (CD1+CD2) ou pasta executável
 solta são só para desenvolvimento/manutenção do software — nenhum dos
 dois cria ícone de atalho.
 
+Na gravação de firmware, o `esptool` (standalone, na mídia) precisa estar
+acessível pelo **PATH do Windows** na máquina de gravação — o procedimento
+traz o passo com `setx PATH` para isso (seção 3, passo 5); sem isso, o
+comando `esptool` só funciona se o terminal for aberto exatamente na pasta
+onde o executável foi copiado.
+
 ## Documentação técnica de referência
 
 Mantida junto ao código, e atualizada primeiro (é a fonte da verdade de
