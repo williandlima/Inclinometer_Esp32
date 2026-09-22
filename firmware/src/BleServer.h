@@ -53,6 +53,14 @@ private:
     volatile uint16_t _resendStartIndex = 0;
     volatile bool _resendPan = false;
 
+    // Idem para calibrar/resetar picos: sem isso, handleCalibrateWrite()/
+    // handleResetPeaksWrite() mutariam PanSensor/AngleSensor direto da task
+    // do BLE, concorrentemente com panSensor.update()/angleSensor.update()
+    // no loop() principal — corrida que corrompe o offset do pan e crava a
+    // leitura no limite do clamp (ver PanSensor::readPanDeg).
+    volatile bool _calibratePending = false;
+    volatile bool _resetPeaksPending = false;
+
     // Último pacote de extremos enviado, para notificar só quando muda.
     uint16_t _lastSentPeaks[4] = {0, 0, 0, 0};
     bool _hasSentPeaks = false;

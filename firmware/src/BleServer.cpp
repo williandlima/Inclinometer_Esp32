@@ -147,15 +147,15 @@ void BleServer::begin() {
 }
 
 void BleServer::handleCalibrateWrite() {
-    // Uma ação de calibração zera os DOIS eixos: é o que os apps expõem como
-    // um único botão "Calibrar".
-    _sensor.calibrate();
-    _pan.calibrate();
+    // Só agenda: quem calibra de fato é update(), no loop principal — este
+    // callback roda na task do stack BLE, e calibrate() mexe nos mesmos
+    // campos que panSensor.update()/angleSensor.update() escrevem a cada
+    // iteração do loop (mesmo raciocínio de handleVibrationResendWrite).
+    _calibratePending = true;
 }
 
 void BleServer::handleResetPeaksWrite() {
-    _sensor.resetPeaks();
-    _pan.resetPeaks();
+    _resetPeaksPending = true;
 }
 
 void BleServer::handleVibrationConfigWrite(uint16_t durationS, uint16_t rateHz) {
@@ -330,6 +330,18 @@ void BleServer::update() {
     if (restartAdvertisingPending) {
         restartAdvertisingPending = false;
         BLEDevice::startAdvertising();
+    }
+    if (_calibratePending) {
+        _calibratePending = false;
+        // Uma ação de calibração zera os DOIS eixos: é o que os apps expõem
+        // como um único botão "Calibrar".
+        _sensor.calibrate();
+        _pan.calibrate();
+    }
+    if (_resetPeaksPending) {
+        _resetPeaksPending = false;
+        _sensor.resetPeaks();
+        _pan.resetPeaks();
     }
     if (_resendPending) {
         _resendPending = false;
