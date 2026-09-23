@@ -191,6 +191,17 @@ def _fix_winrt_threading_model() -> None:
         pass
 
 
+# Força o Windows a redescobrir os characteristics do zero em cada conexão
+# nova, em vez de servir a lista cacheada de uma conexão anterior a este
+# mesmo endereço BLE — sem isso, gravar um firmware que adiciona
+# characteristics novas (ex: Modo Vibração) pode deixar o Windows
+# respondendo "Characteristic ... was not found!" para elas mesmo estando
+# presentes no dispositivo de verdade, porque a descoberta inicial usou o
+# cache antigo. Parâmetro só do backend WinRT — ignorado sem erro nas
+# outras plataformas (BlueZ/CoreBluetooth), ver bleak/__init__.py.
+_WINRT_NO_CACHE_KWARGS: dict = {"winrt": {"use_cached_services": False}}
+
+
 def test_connection(device_address: str, timeout_s: float = 8.0) -> ConnectionTestResult:
     """Testa a conexão BLE com o ESP32: conecta, lê os ângulos e a versão do
     firmware uma única vez, e desconecta. Retorna tudo em caso de sucesso;
@@ -199,7 +210,7 @@ def test_connection(device_address: str, timeout_s: float = 8.0) -> ConnectionTe
     from bleak import BleakClient
 
     async def _test() -> ConnectionTestResult:
-        async with BleakClient(device_address, timeout=timeout_s) as client:
+        async with BleakClient(device_address, timeout=timeout_s, **_WINRT_NO_CACHE_KWARGS) as client:
             raw = await client.read_gatt_char(ANGLE_CHARACTERISTIC_UUID)
             angle_deg = _decode_angle(raw)
             try:
@@ -636,7 +647,10 @@ class BleAngleSource(IAngleDataSource):
 
         try:
             async with BleakClient(
-                self._device_address, timeout=CONNECT_TIMEOUT_S, disconnected_callback=_handle_disconnect
+                self._device_address,
+                timeout=CONNECT_TIMEOUT_S,
+                disconnected_callback=_handle_disconnect,
+                **_WINRT_NO_CACHE_KWARGS,
             ) as client:
                 self._client = client
                 connected_ok = True
