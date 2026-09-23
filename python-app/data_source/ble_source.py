@@ -172,10 +172,30 @@ class ConnectionTestResult(NamedTuple):
     pan_deg: float | None = None
 
 
+def _fix_winrt_threading_model() -> None:
+    """No Windows, o backend WinRT do bleak precisa rodar em MTA (Multi
+    Threaded Apartment) para funcionar fora da thread principal do Qt —
+    mas alguma dependência importada pelo app (ex: pywin32, via PyQt5)
+    já inicializa a thread atual como STA (Single Threaded Apartment) na
+    importação, o que faz o bleak falhar com "Thread is configured for
+    Windows GUI but callbacks are not working" (todas as chamadas BLE
+    deste app rodam em threading.Thread próprias, nunca na thread do Qt —
+    ver cabeçalho do módulo). `uninitialize_sta()` desfaz isso na thread
+    atual antes da primeira chamada bleak; é a solução documentada em
+    bleak/docs/troubleshooting.rst. No-op fora do Windows (ImportError)."""
+    try:
+        from bleak.backends.winrt.util import uninitialize_sta
+
+        uninitialize_sta()
+    except ImportError:
+        pass
+
+
 def test_connection(device_address: str, timeout_s: float = 8.0) -> ConnectionTestResult:
     """Testa a conexão BLE com o ESP32: conecta, lê os ângulos e a versão do
     firmware uma única vez, e desconecta. Retorna tudo em caso de sucesso;
     levanta exceção em caso de falha."""
+    _fix_winrt_threading_model()
     from bleak import BleakClient
 
     async def _test() -> ConnectionTestResult:
@@ -199,6 +219,7 @@ def test_connection(device_address: str, timeout_s: float = 8.0) -> ConnectionTe
 def scan_devices(timeout_s: float = 5.0) -> list[tuple[str, str]]:
     """Varre dispositivos BLE próximos usando o Bluetooth do notebook.
     Retorna lista de (endereço, nome)."""
+    _fix_winrt_threading_model()
     from bleak import BleakScanner
 
     async def _scan() -> list[tuple[str, str]]:
@@ -479,6 +500,7 @@ class BleAngleSource(IAngleDataSource):
             self._thread = None
 
     def _run_thread(self, on_reading: ReadingCallback, on_error: ErrorCallback | None) -> None:
+        _fix_winrt_threading_model()
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
