@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include <atomic>
+
 #include "AngleSensor.h"
 #include "PanSensor.h"
 #include "VibrationCapture.h"
@@ -47,11 +49,16 @@ private:
     uint16_t _vibrationPanDataCursor = 0;
     uint32_t _lastVibrationStatusNotifyMs = 0;
     uint32_t _lastVibrationChunkMs = 0;
-    // Escritos pela task do BLE (callback de retransmissão) e consumidos
-    // pelo loop principal, como o resto dos pedidos vindos de callbacks.
-    volatile bool _resendPending = false;
-    volatile uint16_t _resendStartIndex = 0;
-    volatile bool _resendPan = false;
+    // Pedidos de retransmissão: escritos pela task do BLE e consumidos pelo
+    // loop principal. Uma vaga POR EIXO: o app pede tilt e pan na mesma
+    // rodada, e com uma vaga só o segundo pedido podia sobrescrever o
+    // primeiro antes de o loop consumi-lo. Atômicos porque o consumo lê e
+    // limpa de uma vez — com volatile, um pedido que chegasse entre a
+    // leitura e a limpeza se perdia. NO_RESEND = nenhum pedido pendente.
+    static constexpr uint32_t NO_RESEND = UINT32_MAX;
+    std::atomic<uint32_t> _resendTiltFrom{NO_RESEND};
+    std::atomic<uint32_t> _resendPanFrom{NO_RESEND};
+    void consumeResend(std::atomic<uint32_t> &request, uint16_t &cursor);
 
     // Idem para calibrar/resetar picos: sem isso, handleCalibrateWrite()/
     // handleResetPeaksWrite() mutariam PanSensor/AngleSensor direto da task

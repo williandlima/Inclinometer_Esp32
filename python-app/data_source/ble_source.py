@@ -123,7 +123,13 @@ VIBRATION_TIMEOUT_MARGIN_S = 30.0
 # buraco — o que deslocava no tempo todas as amostras seguintes e falseava o
 # espectro inteiro, sem nenhum aviso. Agora o buraco é detectado e o pedaço
 # que faltou é pedido de novo.
-VIBRATION_RESEND_ATTEMPTS = 5
+#
+# Continua pedindo enquanto cada rodada recupera amostras: perda alta só
+# exige mais rodadas (com 30% de perda cada uma ainda completa ~70% dos
+# buracos). Desiste após rodadas seguidas sem progresso — aí o problema não
+# é perda ocasional — ou no teto total, que limita o tempo de espera.
+VIBRATION_RESEND_STALLED_ROUNDS = 3
+VIBRATION_RESEND_MAX_ROUNDS = 20
 VIBRATION_RESEND_TIMEOUT_S = 20.0
 
 # Reconexão automática após uma queda durante a leitura contínua — ver
@@ -451,7 +457,17 @@ class BleAngleSource(IAngleDataSource):
                     return i
             return None
 
-        for _ in range(VIBRATION_RESEND_ATTEMPTS):
+        def missing_count() -> int:
+            n = sum(1 for i in range(sample_count) if i not in samples)
+            if pan_samples is not None:
+                n += sum(1 for i in range(sample_count) if i not in pan_samples)
+            return n
+
+        rounds = 0
+        stalled = 0
+        last_missing = missing_count()
+        while rounds < VIBRATION_RESEND_MAX_ROUNDS and stalled < VIBRATION_RESEND_STALLED_ROUNDS:
+            rounds += 1
             pending: list[tuple[int, bool]] = []
             idx = first_missing(samples)
             if idx is not None:
@@ -482,6 +498,10 @@ class BleAngleSource(IAngleDataSource):
             except asyncio.TimeoutError:
                 break
 
+            now_missing = missing_count()
+            stalled = stalled + 1 if now_missing >= last_missing else 0
+            last_missing = now_missing
+
         faltando_tilt = sum(1 for i in range(sample_count) if i not in samples)
         faltando_pan = (
             sum(1 for i in range(sample_count) if i not in pan_samples)
@@ -491,7 +511,7 @@ class BleAngleSource(IAngleDataSource):
         if faltando_tilt == 0 and faltando_pan == 0:
             return None
         return (
-            f"A captura chegou incompleta mesmo após {VIBRATION_RESEND_ATTEMPTS} tentativas de "
+            f"A captura chegou incompleta mesmo após {rounds} rodadas de "
             f"retransmissão ({faltando_tilt} amostras de inclinação e {faltando_pan} de azimute "
             f"faltando de {sample_count}). Aproxime o ESP32 do computador e repita, ou use o modo "
             f"USB/Modbus RTU, que não perde pacotes."

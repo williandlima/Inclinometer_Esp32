@@ -140,6 +140,13 @@ pio run -t upload    # compila e grava no ESP32 conectado por USB
 pio device monitor    # abre o monitor serial (115200 baud)
 ```
 
+**Testes sem hardware**: `sim/run.sh` (na raiz do repositório) compila o
+código real de `firmware/src` no computador, contra um MPU6050 e uma lib BLE
+simulados, e roda o pan com mudanças de posição da placa e o Modo Vibração
+via BLE de ponta a ponta com o código real do app Python (inclusive com
+perda de pacotes). Não substitui o teste em bancada — não mede tempo real
+de I2C/rádio —, mas pega erros de lógica e de contrato BLE.
+
 **Não foi possível compilar neste ambiente de desenvolvimento**: o
 `pio run` precisa baixar o toolchain/plataforma `espressif32` da internet
 na primeira vez, e o acesso de rede deste sandbox bloqueia esse download
@@ -565,6 +572,19 @@ tela de configuração, em vez de truncar em silêncio.
   original. Relatado em bancada ("mudo a posição da placa e o pan trava").
   A 1.6.1 estima o bias **por eixo, no referencial do sensor** (`gy`, `gz`),
   e só projeta depois — ver o item 2 do cabeçalho de `PanSensor.h`.
+- **[corrigido na 1.6.1] Modo Vibração e versão do firmware sumiam no BLE.**
+  `createService(SERVICE_UUID)` reserva só 15 handles GATT, e o serviço usa
+  29 (2 por characteristic + 1 por descritor BLE2902). A lib não dá erro:
+  deixa de registrar, em silêncio, o que não coube — as characteristics de
+  configuração/status/dados/retransmissão da vibração e a da versão. Os
+  apps viam "Characteristic 6e6e0005-... was not found!" ao iniciar a
+  captura e "firmware v?" no teste de conexão. O serviço agora é criado com
+  `SERVICE_NUM_HANDLES` explícito (`BleServer.cpp`).
+- **[corrigido na 1.6.1] Pedido de retransmissão de um eixo podia sobrescrever
+  o do outro.** O app pede tilt e pan na mesma rodada, e havia uma vaga só
+  para o pedido pendente. Agora é uma vaga por eixo, com consumo atômico.
+  Medido em simulação com 30% de pacotes perdidos: antes, 1464 amostras
+  faltando após as retransmissões; depois, captura completa.
 - **[1.3.0] Memória do buffer de captura dobrou** para ~24KB (dois buffers
   de `VIBRATION_MAX_SAMPLES` int16, em `VibrationCapture.h`). Cabe com folga
   no ESP32 mesmo com o stack BLE ativo, mas é o maior consumo de RAM do

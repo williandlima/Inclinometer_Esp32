@@ -20,6 +20,14 @@ BleServer *self = nullptr;  // única instância — usada pelos callbacks está
 // Sinalizado pelo callback de desconexão e consumido no loop principal.
 volatile bool restartAdvertisingPending = false;
 
+// Orçamento de handles GATT do serviço. createService(const char*) reserva só
+// 15, e cada characteristic consome 2 (declaração + valor) mais 1 por
+// descritor BLE2902 — este serviço usa 29. Estourando o orçamento a lib não
+// dá erro: só deixa de registrar, em silêncio, as characteristics que não
+// couberam (era o que fazia o app não achar as do Modo Vibração nem a da
+// versão do firmware). Refazer a conta ao adicionar characteristic.
+constexpr uint32_t SERVICE_NUM_HANDLES = 40;
+
 class ServerCallbacks : public BLEServerCallbacks {
     void onDisconnect(BLEServer *) override {
         // O ESP32 PARA de anunciar assim que um cliente conecta, e a lib BLE
@@ -86,7 +94,7 @@ void BleServer::begin() {
     BLEDevice::setMTU(247);  // best-effort: reduz o nº de pacotes se o central negociar MTU maior
     BLEServer *server = BLEDevice::createServer();
     server->setCallbacks(new ServerCallbacks());
-    BLEService *service = server->createService(SERVICE_UUID);
+    BLEService *service = server->createService(BLEUUID(SERVICE_UUID), SERVICE_NUM_HANDLES);
 
     angleChar = service->createCharacteristic(
         CHAR_ANGLE_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
@@ -169,9 +177,34 @@ void BleServer::handleVibrationConfigWrite(uint16_t durationS, uint16_t rateHz) 
 }
 
 void BleServer::handleVibrationResendWrite(uint16_t startIndex, bool pan) {
-    _resendStartIndex = startIndex;
-    _resendPan = pan;
-    _resendPending = true;
+    // Dois pedidos do mesmo eixo antes de o loop consumir: fica o menor
+    // índice. A corrida possível aqui (o loop consumir entre o load e o
+    // store) só causa uma retransmissão a mais, que é inofensiva.
+    std::atomic<uint32_t> &request = pan ? _resendPanFrom : _resendTiltFrom;
+    if (startIndex < request.load()) {
+        request.store(startIndex);
+    }
+}
+
+void BleServer::consumeResend(std::atomic<uint32_t> &request, uint16_t &cursor) {
+    uint32_t from = request.exchange(NO_RESEND);
+    if (from == NO_RESEND) {
+        return;
+    }
+    // Rebobina o cursor do eixo pedido: a fase de envio recomeça dali e o app
+    // recebe de novo tudo a partir daquele índice. Reenviar em excesso é
+    // inofensivo — o app acumula as amostras por índice, então repetição é
+    // idempotente —, e é bem mais simples (e mais robusto) do que enviar
+    // exatamente um bloco isolado.
+    if (from < cursor) {
+        cursor = static_cast<uint16_t>(from);
+    }
+    // Também limpa o "pronto" já reportado: sem isso, o guard de
+    // _lastReportedVibrationStatus impediria a nova notificação de conclusão
+    // no fim da retransmissão, e o app ficaria esperando para sempre.
+    if (_lastReportedVibrationStatus == VibrationCapture::Status::Ready) {
+        _lastReportedVibrationStatus = VibrationCapture::Status::Capturing;
+    }
 }
 
 void BleServer::notifyAngles() {
@@ -343,26 +376,8 @@ void BleServer::update() {
         _sensor.resetPeaks();
         _pan.resetPeaks();
     }
-    if (_resendPending) {
-        _resendPending = false;
-        // Rebobina o cursor do eixo pedido: a fase de envio recomeça dali e
-        // o app recebe de novo tudo a partir daquele índice. Reenviar em
-        // excesso é inofensivo — o app acumula as amostras por índice, então
-        // repetição é idempotente —, e é bem mais simples (e mais robusto)
-        // do que enviar exatamente um bloco isolado.
-        //
-        // Também limpa o "pronto" já reportado: sem isso, o guard de
-        // _lastReportedVibrationStatus impediria a nova notificação de
-        // conclusão no fim da retransmissão, e o app ficaria esperando para
-        // sempre.
-        uint16_t &cursor = _resendPan ? _vibrationPanDataCursor : _vibrationDataCursor;
-        if (_resendStartIndex < cursor) {
-            cursor = _resendStartIndex;
-        }
-        if (_lastReportedVibrationStatus == VibrationCapture::Status::Ready) {
-            _lastReportedVibrationStatus = VibrationCapture::Status::Capturing;
-        }
-    }
+    consumeResend(_resendTiltFrom, _vibrationDataCursor);
+    consumeResend(_resendPanFrom, _vibrationPanDataCursor);
     notifyAngles();
     updateVibrationNotify();
 }
