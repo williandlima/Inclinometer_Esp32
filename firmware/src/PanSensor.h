@@ -35,11 +35,25 @@
 // 2. ZUPT (zero-rate update). Integrar giro acumula erro: um bias residual
 //    vira uma rampa. Mas o drift só corre enquanto se integra — e o eixo de
 //    pan aqui fica parado a maior parte do tempo. A cada
-//    PAN_ZUPT_WINDOW_MS calcula-se a média de ω_pan; se ela estiver próxima
-//    do bias corrente, a janela é considerada parada e o bias é atualizado em
-//    direção a essa média. O gate usa a MÉDIA (e não a dispersão) de
-//    propósito: vibração é de média zero, então o mastro pode estar
-//    balançando sob vento que a janela ainda é reconhecida como parada.
+//    PAN_ZUPT_WINDOW_MS calcula-se a média de gy e gz; se ela estiver
+//    próxima do bias corrente, a janela é considerada parada e o bias é
+//    atualizado em direção a essa média. O gate usa a MÉDIA (e não a
+//    dispersão) de propósito: vibração é de média zero, então o mastro pode
+//    estar balançando sob vento que a janela ainda é reconhecida como parada.
+//
+//    O bias é estimado POR EIXO, no referencial do sensor (gy, gz), e só
+//    depois projetado na vertical — nunca sobre ω_pan já projetado. O bias
+//    de fábrica é fixo nos eixos do chip; projetado, ele vale
+//    bgz·cos(θ) − bgy·sin(θ) e portanto MUDA com o tilt. Estimado sobre
+//    ω_pan, qualquer mudança de inclinação deixava o bias aprendido errado
+//    por alguns °/s, o gate passava a rejeitar toda janela parada (o bias
+//    nunca mais se corrigia) e esse erro era integrado sem fim até cravar a
+//    leitura em ±PAN_MAX_DEG — medido em simulação: 45° de tilt com bias de
+//    fábrica típico dava ~1,4°/s de deriva, travando em -90° em ~60 s.
+//    A distância usada no gate, hypot(Δgy, Δgz), vale exatamente |ω_pan|
+//    para uma rotação de pan em qualquer tilt, então o limiar mantém o
+//    significado de "°/s de pan". Rotação de tilt (eixo X) não aparece em
+//    gy/gz e não tira a janela da condição de parada.
 //
 // 3. CANCELAMENTO DE JANELA PARADA. Não basta parar de corrigir o bias — se a
 //    integração continuasse rodando enquanto parado, o ruído do giro viraria
@@ -128,7 +142,10 @@ private:
 
     float _panDeg = 0.0f;     // integrado desde o boot (absoluto, sem clamp)
     float _offsetDeg = 0.0f;  // zero da calibração
-    float _biasDps = 0.0f;    // bias estimado do giro, em graus/s
+    // Bias estimado de cada eixo do giro, no referencial do sensor (°/s) —
+    // ver item 2 do cabeçalho: não pode ser estimado sobre ω_pan projetado.
+    float _biasGyDps = 0.0f;
+    float _biasGzDps = 0.0f;
     bool _biasReady = false;  // primeira janela já definiu o bias?
 
     uint32_t _lastSampleMs = 0;
@@ -137,7 +154,8 @@ private:
 
     // Estado da janela de ZUPT em andamento.
     uint32_t _windowStartMs = 0;
-    float _windowRateSumDps = 0.0f;
+    float _windowGySumDps = 0.0f;
+    float _windowGzSumDps = 0.0f;
     uint16_t _windowSamples = 0;
     float _windowDeltaDeg = 0.0f;  // quanto foi integrado nesta janela
 
@@ -149,7 +167,11 @@ private:
 
     void resetWindow(uint32_t now);
 
-    // Lê o sensor e devolve a taxa de pan bruta (compensada por tilt, sem
-    // subtrair bias). false em falha de I2C.
-    bool sampleRateDps(float &rateDps);
+    // Lê o sensor: gy/gz crus (°/s, sem bias subtraído) e o tilt do mesmo
+    // burst (rad). false em falha de I2C.
+    bool sampleMotion(float &gyDps, float &gzDps, float &tiltRad);
+
+    // Taxa de pan (°/s): bias de cada eixo subtraído no referencial do
+    // sensor e só então projetado na vertical (item 1 do cabeçalho).
+    float panRateDps(float gyDps, float gzDps, float tiltRad) const;
 };

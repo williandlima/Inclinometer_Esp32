@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.0`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.1`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -209,11 +209,14 @@ cabeçalho do header):
    `ω_pan = gz·cos(θ) − gy·sin(θ)`, com `θ` vindo do **mesmo burst I2C**.
    Por ser uma projeção (produto escalar), e não a fórmula de taxa de Euler
    `(gy·sinφ + gz·cosφ)/cosθ`, não há singularidade em nenhum tilt.
-2. **ZUPT.** A cada 1s, se a **média** da taxa na janela estiver perto do
-   bias corrente, a janela é dada como parada e o bias é refinado. Usar a
+2. **ZUPT.** A cada 1s, se a **média** de `gy`/`gz` na janela estiver perto
+   do bias corrente, a janela é dada como parada e o bias é refinado. Usar a
    média (e não o pico) deixa o detector imune a vibração, que é de média
    zero: o mastro pode estar balançando sob vento que a janela ainda é
-   corretamente reconhecida como parada.
+   corretamente reconhecida como parada. O bias é estimado **por eixo, no
+   referencial do sensor**, e só depois projetado — o bias de fábrica é fixo
+   nos eixos do chip, e projetado ele mudaria com o tilt (ver a limitação
+   corrigida na 1.6.1, mais abaixo).
 3. **Cancelamento de janela parada.** O que foi integrado dentro de uma
    janela classificada como parada é subtraído de volta — parado, o ângulo
    fica cravado, sem random walk.
@@ -235,6 +238,9 @@ sinais sintéticos (bias de fábrica de 5°/s, ruído, vibração, tilt fixo):
 | Parado 60s sob vibração de 3°/s de pico | 0,004° de deriva |
 | 60° de pan com o sensor a 60° de tilt | 60,02° (sem a compensação daria 30°) |
 | 40 movimentos de ±45°, voltando ao zero | 0,066° de erro residual |
+| **1.6.1:** placa parada, tilt muda 0→45° (bias típico) | 0,00° (na 1.6.0: travava em −90° em ~80 s) |
+| **1.6.1:** pan +30°, tilt 0→45° e volta a 0° | 29,76° mantido (na 1.6.0: −39,5°, sem recuperar) |
+| **1.6.1:** bias de ±15°/s, tilt 0→60°, pan +30°, tilt 60→10° | 29,75° mantido |
 
 O piso de detecção medido bate com o previsto (`limiar × janela` = 1°/s × 1s):
 movimentos de até ~1° são descartados como ruído, e a partir de ~2° são
@@ -548,10 +554,17 @@ tela de configuração, em vez de truncar em silêncio.
   causa do cancelamento de janela parada. É o compromisso da abordagem:
   ajustável em `PAN_ZUPT_RATE_THRESHOLD_DPS`/`PAN_ZUPT_WINDOW_MS`, ao custo
   de uma estimativa de bias pior.
-- **[1.2.0] Mudança de tilt durante o pan** desloca ligeiramente o bias
-  projetado (o bias é estimado sobre a taxa já projetada, que depende de
-  `θ`). Irrelevante no uso normal, em que o tilt fica aproximadamente fixo
-  enquanto se mede pan; a janela de ZUPT seguinte reabsorve a diferença.
+- **[1.2.0 → corrigido na 1.6.1] Mudança de tilt travava o pan em ±90°.**
+  Até a 1.6.0 o bias era estimado sobre a taxa **já projetada**
+  (`gz·cos θ − gy·sin θ`), que depende de `θ`. A premissa de que "a janela de
+  ZUPT seguinte reabsorve a diferença" estava errada: com bias de fábrica
+  típico, 45° de mudança de tilt deslocava o bias projetado em ~1,5°/s —
+  acima do limiar de 1°/s —, então **toda** janela parada passava a ser
+  rejeitada, o bias nunca mais se corrigia e o erro era integrado sem fim
+  até cravar a leitura em ±90°, sem recuperar nem voltando a placa à posição
+  original. Relatado em bancada ("mudo a posição da placa e o pan trava").
+  A 1.6.1 estima o bias **por eixo, no referencial do sensor** (`gy`, `gz`),
+  e só projeta depois — ver o item 2 do cabeçalho de `PanSensor.h`.
 - **[1.3.0] Memória do buffer de captura dobrou** para ~24KB (dois buffers
   de `VIBRATION_MAX_SAMPLES` int16, em `VibrationCapture.h`). Cabe com folga
   no ESP32 mesmo com o stack BLE ativo, mas é o maior consumo de RAM do

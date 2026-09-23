@@ -5,28 +5,31 @@
 
 #include "Config.h"
 
-bool PanSensor::sampleRateDps(float &rateDps) {
-    float ax, ay, az, gxDps, gyDps, gzDps;
+bool PanSensor::sampleMotion(float &gyDps, float &gzDps, float &tiltRad) {
+    float ax, ay, az, gxDps;
     if (!_mpu.readMotion(ax, ay, az, gxDps, gyDps, gzDps)) {
         return false;
     }
-
-    // Projeção da velocidade angular medida sobre a vertical, escrita em
-    // coordenadas do corpo — ver o item 1 do cabeçalho de PanSensor.h. O
-    // ângulo de tilt vem do MESMO burst, então não há defasagem entre o
-    // ângulo usado na projeção e as taxas projetadas.
-    float tiltRad = atan2f(ay, az);
-    rateDps = gzDps * cosf(tiltRad) - gyDps * sinf(tiltRad);
-    _lastRateDps = rateDps;
+    // Tilt do MESMO burst: sem defasagem entre o ângulo usado na projeção e
+    // as taxas projetadas.
+    tiltRad = atan2f(ay, az);
     return true;
 }
 
+float PanSensor::panRateDps(float gyDps, float gzDps, float tiltRad) const {
+    // Projeção da velocidade angular sobre a vertical, escrita em coordenadas
+    // do corpo (item 1 do cabeçalho de PanSensor.h), com o bias de cada eixo
+    // removido ANTES de projetar (item 2).
+    return (gzDps - _biasGzDps) * cosf(tiltRad) - (gyDps - _biasGyDps) * sinf(tiltRad);
+}
+
 float PanSensor::readInstantRateDps() {
-    float rateDps;
-    if (!sampleRateDps(rateDps)) {
-        rateDps = _lastRateDps;  // amostra perdida: repete a última válida
+    float gyDps, gzDps, tiltRad;
+    if (!sampleMotion(gyDps, gzDps, tiltRad)) {
+        return _lastRateDps;  // amostra perdida: repete a última válida
     }
-    return (rateDps - _biasDps) * PAN_SCALE_CORRECTION;
+    _lastRateDps = panRateDps(gyDps, gzDps, tiltRad) * PAN_SCALE_CORRECTION;
+    return _lastRateDps;
 }
 
 void PanSensor::update() {
@@ -37,8 +40,8 @@ void PanSensor::update() {
     uint32_t elapsedMs = now - _lastSampleMs;
     _lastSampleMs = now;
 
-    float panRateDps;
-    if (!sampleRateDps(panRateDps)) {
+    float gyDps, gzDps, tiltRad;
+    if (!sampleMotion(gyDps, gzDps, tiltRad)) {
         return;  // falha de I2C: preserva o estado em vez de corrompê-lo
     }
 
@@ -57,12 +60,13 @@ void PanSensor::update() {
     // Só integra depois que a primeira janela estabeleceu o bias: antes
     // disso, o zero-rate de fábrica (±20°/s) jogaria o ângulo longe.
     if (_biasReady) {
-        float deltaDeg = (panRateDps - _biasDps) * dtS * PAN_SCALE_CORRECTION;
+        float deltaDeg = panRateDps(gyDps, gzDps, tiltRad) * dtS * PAN_SCALE_CORRECTION;
         _panDeg += deltaDeg;
         _windowDeltaDeg += deltaDeg;
     }
 
-    _windowRateSumDps += panRateDps;
+    _windowGySumDps += gyDps;
+    _windowGzSumDps += gzDps;
     _windowSamples++;
 
     if (now - _windowStartMs >= PAN_ZUPT_WINDOW_MS) {
@@ -81,20 +85,27 @@ void PanSensor::closeWindow(uint32_t now) {
         return;
     }
 
-    float meanDps = _windowRateSumDps / _windowSamples;
+    float meanGyDps = _windowGySumDps / _windowSamples;
+    float meanGzDps = _windowGzSumDps / _windowSamples;
 
     if (!_biasReady) {
         // Primeira janela desde o boot (ou desde a última calibração): adota
         // a média como bias, sem aplicar limiar. Ver "PREMISSA DE BOOT" em
         // PanSensor.h — o zero-rate de fábrica é grande demais para passar
         // por qualquer limiar razoável.
-        _biasDps = meanDps;
+        _biasGyDps = meanGyDps;
+        _biasGzDps = meanGzDps;
         _biasReady = true;
-    } else if (fabsf(meanDps - _biasDps) < PAN_ZUPT_RATE_THRESHOLD_DPS) {
-        // Janela parada: refina o bias e desfaz o que foi integrado nela, para
-        // o ruído do giro não virar random walk enquanto o eixo está parado.
-        _biasDps += PAN_ZUPT_BIAS_ALPHA * (meanDps - _biasDps);
-        _panDeg -= _windowDeltaDeg;
+    } else {
+        float dGy = meanGyDps - _biasGyDps;
+        float dGz = meanGzDps - _biasGzDps;
+        if (hypotf(dGy, dGz) < PAN_ZUPT_RATE_THRESHOLD_DPS) {
+            // Janela parada: refina o bias e desfaz o que foi integrado nela,
+            // para o ruído do giro não virar random walk enquanto parado.
+            _biasGyDps += PAN_ZUPT_BIAS_ALPHA * dGy;
+            _biasGzDps += PAN_ZUPT_BIAS_ALPHA * dGz;
+            _panDeg -= _windowDeltaDeg;
+        }
     }
 
     resetWindow(now);
@@ -102,7 +113,8 @@ void PanSensor::closeWindow(uint32_t now) {
 
 void PanSensor::resetWindow(uint32_t now) {
     _windowStartMs = now;
-    _windowRateSumDps = 0.0f;
+    _windowGySumDps = 0.0f;
+    _windowGzSumDps = 0.0f;
     _windowSamples = 0;
     _windowDeltaDeg = 0.0f;
 }
