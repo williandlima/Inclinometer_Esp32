@@ -6,8 +6,8 @@ import datetime as _dt
 import os
 import threading
 
-from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt5.QtCore import QObject, QStandardPaths, Qt, QTimer, QUrl, pyqtSignal
+from PyQt5.QtGui import QDesktopServices, QFont, QPixmap
 from PyQt5.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -162,6 +162,8 @@ class MainWindow(QMainWindow):
         self._source: IAngleDataSource | None = None
         self._running = False
         self._vibration_progress_dialog: QProgressDialog | None = None
+        # Pasta do último relatório salvo (ver `_ask_report_path`).
+        self._report_dir: str | None = None
         # Degrau atualmente exibido em cada eixo (histerese da exibição).
         self._displayed: dict[str, float | None] = {TILT_AXIS: None, PAN_AXIS: None}
 
@@ -490,9 +492,7 @@ class MainWindow(QMainWindow):
                 return
             session_id = sessions[0].id
 
-        default_name = f"relatorio_inclinometro_{_dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
-        default_path = os.path.join(os.getcwd(), default_name)
-        path, _ = QFileDialog.getSaveFileName(self, "Salvar relatório", default_path, "PDF (*.pdf)")
+        path = self._ask_report_path("Salvar relatório", "relatorio_inclinometro")
         if not path:
             return
 
@@ -507,7 +507,37 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Erro ao gerar relatório", str(exc))
             return
 
-        QMessageBox.information(self, "Relatório gerado", f"Relatório salvo em:\n{path}")
+        self._report_saved(path)
+
+    def _ask_report_path(self, title: str, prefix: str) -> str:
+        """Pergunta onde salvar um relatório, sugerindo um nome novo.
+
+        A pasta sugerida era `os.getcwd()` — no app instalado, a pasta do
+        programa, onde o usuário não pode gravar e o Windows redireciona para
+        outro lugar. Os dois relatórios (sessão e vibração) acabavam num
+        lugar que o usuário não escolheu, e ele abria de lá o arquivo errado
+        (o de vibração salvo antes). Agora a sugestão é a pasta do último
+        relatório salvo, começando por Documentos.
+        """
+        folder = self._report_dir or QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+        default_name = f"{prefix}_{_dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
+        path, _ = QFileDialog.getSaveFileName(self, title, os.path.join(folder, default_name), "PDF (*.pdf)")
+        if path and not path.lower().endswith(".pdf"):
+            path += ".pdf"
+        return path
+
+    def _report_saved(self, path: str) -> None:
+        """Confirma o relatório salvo e oferece abrir EXATAMENTE esse arquivo."""
+        self._report_dir = os.path.dirname(path)
+        answer = QMessageBox.question(
+            self,
+            "Relatório gerado",
+            f"Relatório salvo em:\n{path}\n\nAbrir o relatório agora?",
+            QMessageBox.Open | QMessageBox.Close,
+            QMessageBox.Open,
+        )
+        if answer == QMessageBox.Open:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _angle_for_display(self, axis: str, angle_deg: float) -> float:
         """Arredonda para o degrau de exibição, com histerese para não
@@ -651,9 +681,7 @@ class MainWindow(QMainWindow):
         if not result_dialog.save_requested:
             return
 
-        default_name = f"relatorio_vibracao_{_dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
-        default_path = os.path.join(os.getcwd(), default_name)
-        path, _ = QFileDialog.getSaveFileName(self, "Salvar relatório de vibração", default_path, "PDF (*.pdf)")
+        path = self._ask_report_path("Salvar relatório de vibração", "relatorio_vibracao")
         if not path:
             return
 
@@ -665,7 +693,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Erro ao gerar relatório", str(exc))
             return
 
-        QMessageBox.information(self, "Relatório gerado", f"Relatório salvo em:\n{path}")
+        self._report_saved(path)
 
     def _flash(self, label: QLabel) -> None:
         label.setStyleSheet(_FLASH_STYLE)
