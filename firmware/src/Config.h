@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.5";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10605;
+constexpr char FIRMWARE_VERSION[] = "1.6.6";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10606;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py

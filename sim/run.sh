@@ -7,10 +7,16 @@
 #                      simulados x SOAK_SEEDS sementes, contra um MPU6050
 #                      emulado com falhas de hardware injetadas (ver o
 #                      cabeçalho de soak_sim.cpp)
+#   e2e_modbus      -> modo USB (Modbus RTU) de ponta a ponta, em tempo real:
+#                      firmware real numa porta serial virtual <-> app real
+#                      com o pymodbus de verdade; placa reinicia a cada
+#                      abertura da porta, reset no meio, linha com ruído
+#                      (~1,5 min; SKIP_MODBUS=1 pula)
 #   e2e_vibration   -> characteristics BLE registrados + Modo Vibração 500 Hz/10 s
 #                      ponta a ponta, com 0%, 5% e 30% de pacotes perdidos
 # O mock BLE reproduz a contabilidade de handles GATT do Bluedroid
-# (default de 15 por serviço). Requer g++, python3 e numpy.
+# (default de 15 por serviço). Requer g++, python3, numpy e as dependências
+# do app (pip install -r python-app/requirements.txt: pymodbus, pyserial).
 set -euo pipefail
 cd "$(dirname "$0")"
 SRC=../firmware/src
@@ -27,3 +33,9 @@ echo
 "$OUT/soak_sim" "${SOAK_SEEDS:-20}"
 echo
 python3 e2e_vibration.py "$OUT/fw_sim"
+if [ -z "${SKIP_MODBUS:-}" ]; then
+    g++ $FLAGS modbus_sim.cpp $SRC/main.cpp $SRC/BleServer.cpp $SRC/VibrationCapture.cpp \
+        $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp $SRC/ModbusSlave.cpp -o "$OUT/modbus_sim"
+    echo
+    python3 e2e_modbus.py "$OUT/modbus_sim" 2>/dev/null
+fi

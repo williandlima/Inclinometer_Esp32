@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -36,12 +35,14 @@ class AppSettings:
 class SettingsDialog(QDialog):
     _devices_found = pyqtSignal(list, str)  # [(endereco, nome)], erro (vazio se ok)
     _port_detected = pyqtSignal(str, str)  # porta encontrada (vazio se não achou), erro
+    _test_finished = pyqtSignal(bool, str)  # sucesso, texto do resultado
 
     def __init__(self, current: AppSettings, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Configurações")
         self._devices_found.connect(self._on_devices_found)
         self._port_detected.connect(self._on_port_detected)
+        self._test_finished.connect(self._on_test_finished)
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("Simulação", "simulado")
@@ -133,50 +134,66 @@ class SettingsDialog(QDialog):
         self.test_result_label.clear()
 
     def _test_connection(self) -> None:
+        """Roda o teste numa thread: ele pode levar vários segundos (a placa
+        pode reiniciar ao abrir a porta, e sem resposta o teste ainda reabre
+        a porta uma vez), e na thread da UI a janela congelava enquanto isso."""
+        import threading
+
         mode = self.mode_combo.currentData()
+        if mode not in ("real", "ble"):
+            return
+        port = self.port_combo.currentText().strip()
+        baudrate = self.baud_combo.currentData()
+        slave_id = self.slave_spin.value()
+        # currentData() guarda o endereço puro (ex: "00:70:07:25:60:8A") quando
+        # o item veio do "Escanear"; currentText() nesse caso é o rótulo
+        # exibido "Nome (endereço)" inteiro, que o bleak não reconhece como
+        # endereço válido — daí cair para currentText() só quando não há
+        # currentData (usuário digitou o endereço à mão).
+        address = self.ble_combo.currentData() or self.ble_combo.currentText().strip()
+
         self.test_btn.setEnabled(False)
-        self.test_result_label.setText("Testando...")
+        self.test_result_label.setText("Testando... (pode levar alguns segundos)")
         self.test_result_label.setStyleSheet("color: #888;")
-        QApplication.processEvents()
 
-        try:
-            if mode == "real":
-                port = self.port_combo.currentText().strip()
-                if not port:
-                    raise ValueError("Selecione uma porta serial.")
-                from data_source.modbus_source import test_connection
+        def worker() -> None:
+            try:
+                if mode == "real":
+                    if not port:
+                        raise ValueError("Selecione uma porta serial.")
+                    from data_source.modbus_source import test_connection
 
-                result = test_connection(port, self.baud_combo.currentData(), self.slave_spin.value())
-            elif mode == "ble":
-                # currentData() guarda o endereço puro (ex: "00:70:07:25:60:8A")
-                # quando o item veio do "Escanear"; currentText() nesse caso é o
-                # rótulo exibido "Nome (endereço)" inteiro, que o bleak não
-                # reconhece como endereço válido — daí cair para currentText()
-                # só quando não há currentData (usuário digitou o endereço à mão).
-                address = self.ble_combo.currentData() or self.ble_combo.currentText().strip()
-                if not address:
-                    raise ValueError("Selecione ou informe um endereço BLE.")
-                from data_source.ble_source import test_connection
+                    result = test_connection(port, baudrate, slave_id)
+                else:
+                    if not address:
+                        raise ValueError("Selecione ou informe um endereço BLE.")
+                    from data_source.ble_source import test_connection
 
-                result = test_connection(address)
-            else:
-                return
+                    result = test_connection(address)
+                pan_text = (
+                    f", azimute {result.pan_deg:.2f}°"
+                    if result.pan_deg is not None
+                    else ", sem eixo de azimute"
+                )
+                ok, text = True, (
+                    f"✓ ESP32 respondeu — inclinação {result.angle_deg:.2f}°{pan_text} "
+                    f"(firmware v{result.firmware_version})"
+                )
+            except Exception as exc:  # noqa: BLE001
+                ok, text = False, f"✗ Falha: {exc}"
+            try:
+                self._test_finished.emit(ok, text)
+            except RuntimeError:  # diálogo já fechado
+                pass
 
-            pan_text = (
-                f", azimute {result.pan_deg:.2f}°"
-                if result.pan_deg is not None
-                else ", sem eixo de azimute"
-            )
-            self.test_result_label.setText(
-                f"✓ ESP32 respondeu — inclinação {result.angle_deg:.2f}°{pan_text} "
-                f"(firmware v{result.firmware_version})"
-            )
-            self.test_result_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
-        except Exception as exc:  # noqa: BLE001
-            self.test_result_label.setText(f"✗ Falha: {exc}")
-            self.test_result_label.setStyleSheet("color: #c62828; font-weight: bold;")
-        finally:
-            self.test_btn.setEnabled(True)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_test_finished(self, ok: bool, text: str) -> None:
+        self.test_btn.setEnabled(True)
+        self.test_result_label.setText(text)
+        self.test_result_label.setStyleSheet(
+            "color: #2e7d32; font-weight: bold;" if ok else "color: #c62828; font-weight: bold;"
+        )
 
     def _detect_port(self) -> None:
         import threading

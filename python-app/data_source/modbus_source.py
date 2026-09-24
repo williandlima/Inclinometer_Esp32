@@ -74,12 +74,10 @@ from data_source.base import (
 # Muitas placas ESP32 (incluindo a usada neste projeto, com chip CH9102)
 # resetam a placa via DTR/RTS toda vez que a porta serial é aberta — é o
 # mesmo mecanismo de auto-reset usado para gravar o firmware sem apertar
-# botão. Isso significa que CADA conexão nova (não só a primeira do app)
-# reinicia o ESP32, que leva um tempo pra voltar a responder Modbus:
-# inicialização de I2C + do stack BLE do firmware (BLEDevice::init) pode
-# levar bem mais que 1s. Sem essa folga, a primeira leitura logo após
-# conectar falha com timeout mesmo com o hardware saudável.
-BOARD_RESET_GRACE_S = 2.5
+# botão. O app abre a porta com as duas linhas desligadas para evitar isso
+# (ver `_make_client`), e sonda a placa até ela responder em vez de esperar
+# um tempo fixo (ver BOARD_READY_TIMEOUT_S), para o caso de o driver do
+# chip USB-serial pulsar as linhas mesmo assim.
 
 # Quantas vezes tentar abrir a porta antes de desistir, e quanto esperar
 # entre tentativas. Existe porque o sistema operacional pode levar um
@@ -101,7 +99,7 @@ CONNECT_RETRY_DELAY_S = 1.0
 #
 # Cinco falhas (~1,25s no poll padrão) é tolerante o bastante para não
 # reconectar por causa de um timeout isolado — reabrir a porta reseta o
-# ESP32 (ver BOARD_RESET_GRACE_S), então não é uma operação barata.
+# ESP32 quando o driver pulsa DTR/RTS, então não é uma operação barata.
 READ_FAILURES_BEFORE_RECONNECT = 5
 
 # Quantas reconexões seguidas tentar antes de desistir e deixar a leitura
@@ -156,6 +154,124 @@ def _is_slave_exception(result) -> bool:
     de import dessa classe já mudou entre versões do pymodbus.
     """
     return getattr(result, "exception_code", None) is not None
+
+
+# O app usa a API do pymodbus 3.10+ (argumento `device_id`, que substituiu
+# `slave`). Com uma versão mais antiga instalada no PC, TODA chamada falhava
+# com um TypeError que aparecia como "erro de leitura" genérico.
+PYMODBUS_MIN_VERSION = (3, 10)
+
+# Espera máxima, depois de abrir a porta, até o ESP32 responder. Se a
+# abertura reiniciou a placa (auto-reset por DTR/RTS), ela volta em ~1-2 s;
+# se não reiniciou, responde na hora. Sondar em vez de dormir um tempo fixo
+# serve aos dois casos.
+BOARD_READY_TIMEOUT_S = 6.0
+BOARD_READY_POLL_S = 0.25
+
+# Timeout de resposta e repetições internas do pymodbus. A 9600 baud a maior
+# resposta do firmware (bloco de 32 amostras, 69 bytes) leva ~72 ms, e o
+# firmware responde no mesmo ciclo do loop — 0,3 s é folga de sobra. Com os
+# padrões do pymodbus (3 s, ou 1 s daqui, x 3 repetições), cada falha
+# isolada congelava a leitura por 4 s.
+RESPONSE_TIMEOUT_S = 0.3
+PYMODBUS_RETRIES = 1
+
+
+def _require_pymodbus() -> None:
+    import pymodbus
+
+    parts = []
+    for piece in pymodbus.__version__.split(".")[:2]:
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits or 0))
+    if tuple(parts) < PYMODBUS_MIN_VERSION:
+        raise RuntimeError(
+            f"pymodbus {pymodbus.__version__} instalado, mas o app precisa do 3.14 — "
+            f"rode: pip install -r requirements.txt"
+        )
+
+
+def _make_client(port: str, baudrate: int, timeout_s: float, retries: int = PYMODBUS_RETRIES):
+    """Cliente Modbus RTU que abre a porta SEM reiniciar o ESP32.
+
+    O circuito de auto-reset das placas ESP32 DevKit liga DTR/RTS do chip
+    USB-serial aos pinos EN/IO0 — é assim que o PlatformIO grava sem apertar
+    botão. O pyserial abre a porta com DTR e RTS ativos, o que reinicia a
+    placa a cada abertura: calibração, extremos e referência do pan se
+    perdiam em todo "Testar conexão", "Iniciar" ou reconexão. Abrindo com as
+    duas linhas já desligadas (estado de repouso do circuito, placa rodando
+    normalmente), o pulso de reset não acontece. Depende do driver do chip
+    USB-serial; quando ele pulsar as linhas mesmo assim, a sondagem em
+    `_wait_until_ready` absorve o reboot.
+    """
+    import serial
+    from pymodbus.client import ModbusSerialClient
+
+    class _NoResetSerialClient(ModbusSerialClient):
+        def connect(self) -> bool:
+            if self.socket:
+                return True
+            try:
+                s = serial.Serial()
+                s.port = self.comm_params.host
+                s.baudrate = self.comm_params.baudrate
+                s.bytesize = self.comm_params.bytesize
+                s.parity = self.comm_params.parity
+                s.stopbits = self.comm_params.stopbits
+                s.timeout = self.comm_params.timeout_connect
+                s.dtr = False
+                s.rts = False
+                s.open()
+                s.inter_byte_timeout = self.inter_byte_timeout
+                self.socket = s
+            except Exception:  # noqa: BLE001 - mesmo contrato do connect() original
+                self.close()
+                if not hasattr(self, "comm_params"):
+                    return super().connect()
+            return self.socket is not None
+
+    client = _NoResetSerialClient(port=port, baudrate=baudrate, timeout=timeout_s, retries=retries)
+    # O pymodbus 3.x fecha a porta sozinho depois de retries+3 transações
+    # seguidas sem resposta, e a reabre na chamada seguinte. Numa placa que
+    # reinicia ao abrir a porta, a sondagem durante o boot passava desse
+    # limite, a reabertura reiniciava a placa de novo — e o ciclo se
+    # repetia. Quem decide reconectar é o app (READ_FAILURES_BEFORE_RECONNECT).
+    transaction = getattr(client, "transaction", None)
+    if transaction is not None and hasattr(transaction, "max_until_disconnect"):
+        transaction.max_until_disconnect = transaction.count_until_disconnect = 10**9
+    return client
+
+
+def _wait_until_ready(client, slave_id: int, max_wait_s: float = BOARD_READY_TIMEOUT_S) -> bool:
+    """Sonda o escravo até ele responder (ver BOARD_READY_TIMEOUT_S).
+
+    No pymodbus 3.x, falta de resposta LEVANTA ModbusIOException (não volta
+    como resultado com isError()) — daí o try.
+    """
+    deadline = time.monotonic() + max_wait_s
+    while True:
+        try:
+            result = client.read_input_registers(address=ANGLE_INPUT_REGISTER, count=1, device_id=slave_id)
+            if not result.isError() or _is_slave_exception(result):
+                return True
+        except Exception:  # noqa: BLE001 - sem resposta ainda (placa reiniciando)
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(BOARD_READY_POLL_S)
+
+
+# Tentativas por transação durante a captura de vibração (ver `_transact`).
+VIBRATION_TRANSACTION_ATTEMPTS = 5
+VIBRATION_TRANSACTION_RETRY_DELAY_S = 0.1
+
+
+class _SlaveRejected(Exception):
+    """O escravo respondeu com exceção Modbus (endereço inexistente)."""
+
+
+class _CaptureCancelled(Exception):
+    """Captura cancelada pelo usuário durante uma transação."""
 
 
 class SlaveCapabilities:
@@ -239,7 +355,11 @@ TEST_OPEN_CYCLES = 2
 
 
 def test_connection(
-    port: str, baudrate: int, slave_id: int, timeout_s: float = 1.0, open_cycles: int = TEST_OPEN_CYCLES
+    port: str,
+    baudrate: int,
+    slave_id: int,
+    timeout_s: float = RESPONSE_TIMEOUT_S,
+    open_cycles: int = TEST_OPEN_CYCLES,
 ) -> ConnectionTestResult:
     """Testa a conexão Modbus RTU (via USB) com o ESP32: abre a porta, lê o
     ângulo e a versão do firmware, e fecha a conexão. Tenta a leitura
@@ -247,11 +367,10 @@ def test_connection(
     reset da placa) até `open_cycles` vezes — ver TEST_READ_ATTEMPTS. Levanta
     exceção (IOError/RuntimeError) se nada der certo.
     """
-    from pymodbus.client import ModbusSerialClient
-
+    _require_pymodbus()
     last_error: Exception | None = None
     for _cycle in range(open_cycles):
-        client = ModbusSerialClient(port=port, baudrate=baudrate, timeout=timeout_s, retries=0)
+        client = _make_client(port, baudrate, timeout_s, retries=0)
         try:
             connected = False
             for attempt in range(CONNECT_RETRY_ATTEMPTS):
@@ -262,7 +381,9 @@ def test_connection(
                     time.sleep(CONNECT_RETRY_DELAY_S)
             if not connected:
                 raise IOError(f"Não foi possível abrir a porta serial {port}.")
-            time.sleep(BOARD_RESET_GRACE_S)  # ver BOARD_RESET_GRACE_S: a porta abrir já reseta o ESP32
+            if not _wait_until_ready(client, slave_id):
+                last_error = IOError("sem resposta do ESP32")
+                continue  # nem a sondagem respondeu: reabre direto
 
             sample = None
             for attempt in range(TEST_READ_ATTEMPTS):
@@ -276,12 +397,23 @@ def test_connection(
             if sample is None:
                 continue  # reabre a porta (novo reset da placa)
 
-            version_result = client.read_input_registers(
-                address=FIRMWARE_VERSION_REGISTER, count=1, device_id=slave_id
-            )
-            firmware_version = (
-                _decode_firmware_version(version_result.registers[0]) if not version_result.isError() else "?"
-            )
+            # A placa já respondeu; a versão é diagnóstico secundário e não
+            # reprova o teste — mas uma resposta perdida aqui não pode virar
+            # exceção (no pymodbus 3.x, falta de resposta levanta).
+            firmware_version = "?"
+            for attempt in range(TEST_READ_ATTEMPTS):
+                try:
+                    version_result = client.read_input_registers(
+                        address=FIRMWARE_VERSION_REGISTER, count=1, device_id=slave_id
+                    )
+                    if not version_result.isError():
+                        firmware_version = _decode_firmware_version(version_result.registers[0])
+                        break
+                    if _is_slave_exception(version_result):
+                        break  # firmware sem o registrador de versão
+                except Exception:  # noqa: BLE001 - tenta de novo
+                    pass
+                time.sleep(TEST_READ_RETRY_DELAY_S)
             return ConnectionTestResult(sample.angle_deg, firmware_version, sample.pan_deg)
         finally:
             client.close()
@@ -289,11 +421,11 @@ def test_connection(
 
 
 # Teto de tempo para testar UMA porta, usado por `_probe_port` abaixo.
-# Generoso o bastante para cobrir BOARD_RESET_GRACE_S + as leituras reais
+# Generoso o bastante para cobrir BOARD_READY_TIMEOUT_S + as leituras reais
 # (com folga), mas existe sobretudo para as portas erradas: sem ele, uma
 # porta "fantasma" (ver `_looks_like_bluetooth_port`) pode travar a busca
 # inteira por dezenas de segundos ou mais.
-PORT_PROBE_TIMEOUT_S = 10.0
+PORT_PROBE_TIMEOUT_S = 12.0
 
 
 def _looks_like_bluetooth_port(port_info) -> bool:
@@ -339,7 +471,7 @@ def _probe_port(port: str, baudrate: int, slave_id: int, timeout_s: float) -> bo
     return result[0]
 
 
-def find_port(baudrate: int, slave_id: int, timeout_s: float = 1.0) -> str | None:
+def find_port(baudrate: int, slave_id: int, timeout_s: float = RESPONSE_TIMEOUT_S) -> str | None:
     """Varre as portas seriais do sistema em busca do ESP32, testando cada
     uma de verdade com `test_connection` (não dá pra confiar só em VID/PID:
     o chip USB-serial do hardware confirmado, CH9102X, não tem um
@@ -350,7 +482,7 @@ def find_port(baudrate: int, slave_id: int, timeout_s: float = 1.0) -> str | Non
 
     Devolve o nome da primeira porta que responder como o ESP32, ou `None`
     se nenhuma responder. Cada porta errada custa até `PORT_PROBE_TIMEOUT_S`
-    de espera; a porta certa custa `BOARD_RESET_GRACE_S` adicionais (o reset
+    de espera; a porta certa custa até `BOARD_READY_TIMEOUT_S` (o reset
     que a abertura da porta provoca no ESP32) — por isso esta função é
     pensada para rodar numa thread de fundo, não na UI.
     """
@@ -371,7 +503,7 @@ class ModbusAngleSource(IAngleDataSource):
         baudrate: int = 9600,
         slave_id: int = 1,
         poll_interval_s: float = 0.25,
-        timeout_s: float = 1.0,
+        timeout_s: float = RESPONSE_TIMEOUT_S,
     ) -> None:
         self._port = port
         self._baudrate = baudrate
@@ -461,34 +593,72 @@ class ModbusAngleSource(IAngleDataSource):
             self._vibration_thread.join(timeout=2.0)
             self._vibration_thread = None
 
+    def _transact(self, operation):
+        """Executa `operation(client)` com o cliente CORRENTE, sob o lock, com
+        até VIBRATION_TRANSACTION_ATTEMPTS tentativas.
+
+        Numa transferência de milhares de amostras a 9600 baud, uma única
+        resposta perdida derrubava a captura inteira; e o cliente guardado no
+        início podia já ter sido fechado pela reconexão da leitura contínua.
+        `operation` devolve o resultado ou levanta IOError; exceções do
+        escravo (endereço inexistente) não são repetidas.
+        """
+        last_error: Exception | None = None
+        for attempt in range(VIBRATION_TRANSACTION_ATTEMPTS):
+            if self._vibration_stop_event.is_set():
+                raise _CaptureCancelled()
+            with self._client_lock:
+                client = self._client
+                if client is not None:
+                    try:
+                        return operation(client)
+                    except _SlaveRejected:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - tenta de novo
+                        last_error = exc
+                else:
+                    last_error = RuntimeError("Não conectado ao dispositivo.")
+            self._vibration_stop_event.wait(VIBRATION_TRANSACTION_RETRY_DELAY_S)
+        raise IOError(f"Comunicação com o ESP32 falhou durante a captura de vibração: {last_error}")
+
     def _run_vibration_capture(self, duration_s: float, rate_hz: float, on_progress, on_done) -> None:
         try:
-            with self._client_lock:
-                if self._client is None:
-                    raise RuntimeError("Não conectado ao dispositivo.")
-                client = self._client
-                r1 = client.write_register(address=VIBRATION_DURATION_REG, value=int(duration_s), device_id=self._slave_id)
-                r2 = client.write_register(address=VIBRATION_RATE_REG, value=int(rate_hz), device_id=self._slave_id)
-                r3 = client.write_coil(address=VIBRATION_START_COIL, value=True, device_id=self._slave_id)
-                if r1.isError() or r2.isError() or r3.isError():
-                    raise IOError("Falha ao configurar/iniciar a captura de vibração no dispositivo.")
+            def configure(client):
+                for result in (
+                    client.write_register(address=VIBRATION_DURATION_REG, value=int(duration_s), device_id=self._slave_id),
+                    client.write_register(address=VIBRATION_RATE_REG, value=int(rate_hz), device_id=self._slave_id),
+                ):
+                    if result.isError():
+                        raise IOError(str(result))
+
+            def start(client):
+                result = client.write_coil(address=VIBRATION_START_COIL, value=True, device_id=self._slave_id)
+                if result.isError():
+                    raise IOError(str(result))
+
+            self._transact(configure)
+            self._transact(start)
+
+            def read_status(client):
+                result = client.read_input_registers(address=VIBRATION_STATUS_REG, count=3, device_id=self._slave_id)
+                if result.isError():
+                    raise IOError(str(result))
+                return result.registers
 
             sample_count = 0
             while True:
                 if self._vibration_stop_event.is_set():
                     on_done(None, "Captura cancelada pelo usuário.")
                     return
-                with self._client_lock:
-                    status_result = client.read_input_registers(
-                        address=VIBRATION_STATUS_REG, count=3, device_id=self._slave_id
-                    )
-                if status_result.isError():
-                    raise IOError(str(status_result))
-                status, progress, sample_count = status_result.registers
+                status, progress, sample_count = self._transact(read_status)
                 if status == 2:
                     break
                 if status == 3:
                     raise IOError("Firmware reportou erro durante a captura de vibração.")
+                if status == 0:
+                    # Logo após o comando de início o status já é "capturando";
+                    # "ocioso" aqui só acontece se o ESP32 reiniciou no meio.
+                    raise IOError("O ESP32 reiniciou durante a captura de vibração — repita a captura.")
                 on_progress(float(progress))
                 self._vibration_stop_event.wait(VIBRATION_STATUS_POLL_INTERVAL_S)
 
@@ -502,7 +672,10 @@ class ModbusAngleSource(IAngleDataSource):
             index = 0
             while index < sample_count:
                 block_size = min(VIBRATION_BLOCK_SIZE, sample_count - index)
-                with self._client_lock:
+
+                def read_block(client, index=index, block_size=block_size):
+                    # Cursor e bloco na MESMA transação sob o lock: entre os
+                    # dois, ninguém mais mexe no cursor do firmware.
                     cursor_result = client.write_register(
                         address=VIBRATION_CURSOR_REG, value=index, device_id=self._slave_id
                     )
@@ -511,30 +684,37 @@ class ModbusAngleSource(IAngleDataSource):
                     block_result = client.read_input_registers(
                         address=VIBRATION_BLOCK_START_REG, count=block_size, device_id=self._slave_id
                     )
-                    pan_result = (
-                        client.read_input_registers(
-                            address=VIBRATION_PAN_BLOCK_START_REG, count=block_size, device_id=self._slave_id
-                        )
-                        if pan_supported
-                        else None
-                    )
-                if block_result.isError():
-                    raise IOError(str(block_result))
-                angles.extend(_to_signed16(raw) / ANGLE_SCALE for raw in block_result.registers)
+                    if block_result.isError() or len(block_result.registers) != block_size:
+                        raise IOError(str(block_result))
+                    return block_result.registers
 
-                if pan_result is not None:
+                def read_pan_block(client, index=index, block_size=block_size):
+                    cursor_result = client.write_register(
+                        address=VIBRATION_CURSOR_REG, value=index, device_id=self._slave_id
+                    )
+                    if cursor_result.isError():
+                        raise IOError(str(cursor_result))
+                    pan_result = client.read_input_registers(
+                        address=VIBRATION_PAN_BLOCK_START_REG, count=block_size, device_id=self._slave_id
+                    )
                     if pan_result.isError():
                         # Só desiste do eixo de pan se o escravo rejeitou o
                         # endereço (firmware anterior à v1.3.0); falha de
-                        # transporte é erro de verdade e derruba a captura.
-                        if not _is_slave_exception(pan_result):
-                            raise IOError(str(pan_result))
+                        # transporte é repetida por _transact.
+                        if _is_slave_exception(pan_result):
+                            raise _SlaveRejected()
+                        raise IOError(str(pan_result))
+                    if len(pan_result.registers) != block_size:
+                        raise IOError("bloco de pan incompleto")
+                    return pan_result.registers
+
+                angles.extend(_to_signed16(raw) / ANGLE_SCALE for raw in self._transact(read_block))
+                if pan_supported:
+                    try:
+                        pan_rates.extend(_to_signed16(raw) / PAN_RATE_SCALE for raw in self._transact(read_pan_block))
+                    except _SlaveRejected:
                         pan_supported = False
                         pan_rates = []
-                    else:
-                        pan_rates.extend(
-                            _to_signed16(raw) / PAN_RATE_SCALE for raw in pan_result.registers
-                        )
                 index += block_size
                 # A transferência leva quase tanto tempo quanto a captura em
                 # taxas altas (a 9600 bauds, 32 amostras por transação): sem
@@ -548,6 +728,8 @@ class ModbusAngleSource(IAngleDataSource):
                 ),
                 None,
             )
+        except _CaptureCancelled:
+            on_done(None, "Captura cancelada pelo usuário.")
         except Exception as exc:  # noqa: BLE001
             on_done(None, str(exc))
         finally:
@@ -569,23 +751,17 @@ class ModbusAngleSource(IAngleDataSource):
     def _open_client(self):
         """Abre a porta e devolve um cliente conectado, ou `None` se não
         conseguiu (ou se pediram parada no meio das tentativas)."""
-        from pymodbus.client import ModbusSerialClient
-
-        client = ModbusSerialClient(
-            port=self._port,
-            baudrate=self._baudrate,
-            timeout=self._timeout,
-        )
+        _require_pymodbus()
+        client = _make_client(self._port, self._baudrate, self._timeout)
         for attempt in range(CONNECT_RETRY_ATTEMPTS):
             if self._stop_event.is_set():
                 client.close()
                 return None
             if client.connect():
-                # Ver BOARD_RESET_GRACE_S: abrir a porta já reseta o ESP32 —
-                # sem essa folga, a primeira leitura falha com timeout mesmo
-                # com o hardware saudável. Usa wait() em vez de sleep() para
-                # "Parar" continuar responsivo durante a espera.
-                self._stop_event.wait(BOARD_RESET_GRACE_S)
+                # Espera o ESP32 responder (ver BOARD_READY_TIMEOUT_S). Se
+                # não responder, segue assim mesmo: o laço de leitura trata
+                # as falhas e reconecta.
+                _wait_until_ready(client, self._slave_id)
                 return client
             if attempt < CONNECT_RETRY_ATTEMPTS - 1:
                 self._stop_event.wait(CONNECT_RETRY_DELAY_S)

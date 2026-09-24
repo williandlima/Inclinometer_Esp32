@@ -41,10 +41,17 @@ void ModbusSlave::handleFrame() {
     if (_frameLen < 4) {
         return;  // frame curto demais pra ser válido
     }
-    uint16_t receivedCrc = _frame[_frameLen - 2] | (_frame[_frameLen - 1] << 8);
-    uint16_t computedCrc = crc16(_frame, _frameLen - 2);
-    if (receivedCrc != computedCrc) {
-        return;  // CRC inválido, ignora o frame
+    if (!crcOk(_frame, _frameLen)) {
+        // Lixo colado antes do pedido (ruído na linha ao abrir a porta, sobra
+        // de um quadro truncado) invalida o CRC do conjunto e o pedido se
+        // perdia. Todo pedido que o escravo atende tem exatamente 8 bytes:
+        // se os 8 finais formam um quadro válido, é ele.
+        if (_frameLen > 8 && crcOk(_frame + _frameLen - 8, 8)) {
+            memmove(_frame, _frame + _frameLen - 8, 8);
+            _frameLen = 8;
+        } else {
+            return;  // CRC inválido, ignora o frame
+        }
     }
 
     uint8_t slaveId = _frame[0];
@@ -81,10 +88,23 @@ void ModbusSlave::handleReadInputRegisters(uint16_t startAddr, uint16_t count) {
         return;
     }
 
+    // Os blocos de amostras só valem para leituras que COMEÇAM no início do
+    // bloco. O de tilt (31-62) cobre o endereço 40, que também é o da versão
+    // do firmware: com a versão testada primeiro, a 10ª amostra de todo
+    // bloco saía como 10605 (106,05°) e envenenava o espectro de toda
+    // captura via USB (até a 1.6.5). Os apps sempre leem o bloco a partir do
+    // início e a versão sozinha, então o início da leitura desambigua.
+    bool tiltBlock = startAddr == REG_VIBRATION_BLOCK_START;
+    bool panBlock = startAddr == REG_VIBRATION_PAN_BLOCK_START;
+
     uint16_t values[125];
     for (uint16_t i = 0; i < count; i++) {
         uint16_t addr = startAddr + i;
-        if (addr == REG_ANGLE_INPUT) {
+        if (tiltBlock && addr < REG_VIBRATION_BLOCK_START + VIBRATION_BLOCK_SIZE) {
+            values[i] = static_cast<uint16_t>(_vibration.sampleAt(_vibrationCursor + i));
+        } else if (panBlock && addr < REG_VIBRATION_PAN_BLOCK_START + VIBRATION_BLOCK_SIZE) {
+            values[i] = static_cast<uint16_t>(_vibration.panSampleAt(_vibrationCursor + i));
+        } else if (addr == REG_ANGLE_INPUT) {
             values[i] = static_cast<uint16_t>(lroundf(_sensor.readAngleDeg() * ANGLE_SCALE));
         } else if (addr == REG_PAN_INPUT) {
             values[i] = static_cast<uint16_t>(lroundf(_pan.readPanDeg() * ANGLE_SCALE));
@@ -104,12 +124,6 @@ void ModbusSlave::handleReadInputRegisters(uint16_t startAddr, uint16_t count) {
             values[i] = _vibration.sampleCount();
         } else if (addr == REG_FIRMWARE_VERSION) {
             values[i] = FIRMWARE_VERSION_CODE;
-        } else if (addr >= REG_VIBRATION_BLOCK_START && addr < REG_VIBRATION_BLOCK_START + VIBRATION_BLOCK_SIZE) {
-            uint16_t sampleIndex = _vibrationCursor + (addr - REG_VIBRATION_BLOCK_START);
-            values[i] = static_cast<uint16_t>(_vibration.sampleAt(sampleIndex));
-        } else if (addr >= REG_VIBRATION_PAN_BLOCK_START && addr < REG_VIBRATION_PAN_BLOCK_START + VIBRATION_BLOCK_SIZE) {
-            uint16_t sampleIndex = _vibrationCursor + (addr - REG_VIBRATION_PAN_BLOCK_START);
-            values[i] = static_cast<uint16_t>(_vibration.panSampleAt(sampleIndex));
         } else {
             sendException(0x04, 0x02);  // endereço inválido
             return;
@@ -200,6 +214,14 @@ void ModbusSlave::sendResponse(const uint8_t *payload, uint8_t len) {
 
     modbusSerial.write(frame, len + 2);
     modbusSerial.flush();
+}
+
+bool ModbusSlave::crcOk(const uint8_t *frame, uint16_t len) {
+    if (len < 4) {
+        return false;
+    }
+    uint16_t received = frame[len - 2] | (frame[len - 1] << 8);
+    return received == crc16(frame, static_cast<uint8_t>(len - 2));
 }
 
 uint16_t ModbusSlave::crc16(const uint8_t *data, uint8_t len) {

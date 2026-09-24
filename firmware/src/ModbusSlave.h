@@ -42,4 +42,5 @@ private:
     void sendResponse(const uint8_t *payload, uint8_t len);
 
     static uint16_t crc16(const uint8_t *data, uint8_t len);
+    static bool crcOk(const uint8_t *frame, uint16_t len);
 };

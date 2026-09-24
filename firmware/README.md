@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.5`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.6`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -576,6 +576,31 @@ tela de configuração, em vez de truncar em silêncio.
   testes feitos com o tilt zerado — testar panning com o tilt em ±45°/±60° e
   conferir se bate com a mesma medida feita em `θ=0`. Resolve junto com a
   confirmação de montagem do `atan2(ay, az)`, que já estava pendente.
+- **[corrigido na 1.6.6] Modo Vibração via USB com uma amostra errada a cada
+  32.** O bloco de amostras de tilt ocupa os input registers 31-62, que
+  incluem o 40 — o da versão do firmware. Como a versão era testada antes,
+  a 10ª amostra de todo bloco saía como 10605 (106,05°): em teste, 3 Hz e
+  0,5° viravam 3,12 Hz e 7,06°. Agora um bloco só vale para leituras que
+  COMEÇAM no início dele (31 ou 70), que é como o app lê; a versão
+  continua em 40, lida sozinha. Via BLE não era afetado.
+- **[1.6.6] Ressincronização do Modbus**: lixo colado antes de um pedido
+  (ruído ao abrir a porta) invalidava o CRC e o pedido se perdia; como todo
+  pedido atendido tem 8 bytes, os 8 finais são aproveitados se válidos.
+- **Teste de ponta a ponta do modo USB** (`sim/e2e_modbus.py` +
+  `sim/modbus_sim.cpp`, parte do `run.sh`): firmware real em tempo real numa
+  porta serial virtual, contra o código real do app com o pymodbus 3.14,
+  com a placa reiniciando a cada abertura da porta, reset no meio da
+  leitura e linha com bytes perdidos/corrompidos. Mudanças do lado do app
+  (`python-app/data_source/modbus_source.py`): porta aberta com DTR/RTS
+  desligados (evita o auto-reset da placa, que apagava a calibração a cada
+  "Testar conexão"/"Iniciar"/reconexão — a confirmar em bancada, depende do
+  driver do chip USB-serial), sondagem até a placa responder em vez de
+  espera fixa, timeout de 0,3 s com 1 repetição (antes cada falha isolada
+  congelava a leitura por 4 s), reconexão automática do pymodbus 3.x
+  desligada (ela reabria a porta durante o boot e podia reiniciar a placa
+  em ciclo), teste de conexão tolerante e fora da thread da UI, captura de
+  vibração com repetição por transação, e checagem da versão do pymodbus
+  (a API `device_id` exige 3.10+).
 - **[corrigido na 1.6.5] Robustez contra falhas de hardware**, encontradas
   pelo teste de resistência (`sim/soak_sim.cpp`):
   - **leitura I2C que falhava durante um giro jogava fora 10 ms de rotação**
