@@ -32,6 +32,45 @@ float PanSensor::readInstantRateDps() {
     return _lastRateDps;
 }
 
+namespace {
+float median5(const float *v) {
+    float s[5] = {v[0], v[1], v[2], v[3], v[4]};
+    for (int i = 1; i < 5; i++) {
+        float x = s[i];
+        int j = i - 1;
+        while (j >= 0 && s[j] > x) {
+            s[j + 1] = s[j];
+            j--;
+        }
+        s[j + 1] = x;
+    }
+    return s[2];
+}
+}  // namespace
+
+void PanSensor::despike(float &gyDps, float &gzDps) {
+    if (!_despikePrimed) {
+        for (int i = 0; i < PAN_DESPIKE_LEN; i++) {
+            _gyHist[i] = gyDps;
+            _gzHist[i] = gzDps;
+        }
+        _despikePrimed = true;
+    }
+    for (int i = 0; i < PAN_DESPIKE_LEN - 1; i++) {
+        _gyHist[i] = _gyHist[i + 1];
+        _gzHist[i] = _gzHist[i + 1];
+    }
+    _gyHist[PAN_DESPIKE_LEN - 1] = gyDps;
+    _gzHist[PAN_DESPIKE_LEN - 1] = gzDps;
+    float gy = median5(_gyHist);
+    float gz = median5(_gzHist);
+    if (fabsf(gy - gyDps) > PAN_SPIKE_REPORT_DPS || fabsf(gz - gzDps) > PAN_SPIKE_REPORT_DPS) {
+        _spikeCount++;
+    }
+    gyDps = gy;
+    gzDps = gz;
+}
+
 void PanSensor::update() {
     uint32_t now = millis();
     if (_hasLastSample && now - _lastSampleMs < ANGLE_SAMPLE_INTERVAL_MS) {
@@ -49,6 +88,7 @@ void PanSensor::update() {
     _lastGzDps = gzDps;
     _lastTiltRad = tiltRad;
     _sampleCount++;
+    despike(gyDps, gzDps);
 
     if (!_hasLastSample) {
         // Primeira amostra: sem intervalo anterior, não há dt para integrar.
@@ -164,7 +204,7 @@ PanSensor::Diagnostics PanSensor::diagnostics() const {
     return Diagnostics{
         _panDeg, _offsetDeg, _biasGyDps, _biasGzDps, _prevMeanGyDps, _prevMeanGzDps,
         _lastGyDps, _lastGzDps, _lastTiltRad * 57.29578f, _sampleCount, _i2cFailures,
-        _mismatchWindows, static_cast<uint8_t>(_biasReady ? 1 : 0),
+        _mismatchWindows, static_cast<uint8_t>(_biasReady ? 1 : 0), _spikeCount,
     };
 }
 

@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.3`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.4`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -561,6 +561,15 @@ tela de configuração, em vez de truncar em silêncio.
   testes feitos com o tilt zerado — testar panning com o tilt em ±45°/±60° e
   conferir se bate com a mesma medida feita em `θ=0`. Resolve junto com a
   confirmação de montagem do `atan2(ay, az)`, que já estava pendente.
+- **[1.2.0 → corrigido na 1.6.4] Pan da placa PARADA derivava até cravar
+  em ±90° depois de alguns minutos.** Uma única leitura errada do giroscópio
+  no barramento I2C (ex.: −250°/s por 10 ms) tirava a janela de ZUPT da
+  condição de "parada" e os ~2,5° integrados nela ficavam para sempre.
+  Algumas por minuto bastavam: em simulação, uma a cada ~7 s leva a −84° em
+  4 min e crava em −90° (cenário I de `sim/pan_sim.cpp`). A 1.6.4 passa gy/gz
+  por uma **mediana móvel de 5 amostras** antes de integrar (~20 ms de
+  atraso) — cenários I e J cravados no valor certo por 10 min. O contador
+  `espurias` do diagnóstico BLE mostra quantas leituras foram descartadas.
 - **[1.2.0 → corrigido na 1.6.2] Boot com a placa em movimento travava o
   pan em ±90°.** Até a 1.6.1 a primeira janela de ZUPT era aceita sem teste
   como bias. Ligada em movimento, o bias saía errado, toda janela parada

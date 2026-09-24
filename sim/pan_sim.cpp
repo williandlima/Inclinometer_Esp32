@@ -15,6 +15,10 @@ static double g_tiltDeg = 0, g_tiltRateDps = 0, g_panRateDps = 0;
 static double BGX = 1.5, BGY = 3.0, BGZ = -2.0;  // bias de fábrica do giro (°/s), corpo
 static std::mt19937 rng(42);
 static std::normal_distribution<double> noise(0.0, 0.05);
+// Leitura espúria isolada (ruído no I2C): a cada g_spikeEveryMs, uma amostra
+// de gz vem com g_spikeDps. 0 = desligado.
+static uint32_t g_spikeEveryMs = 0, g_readCount = 0;
+static double g_spikeDps = 0;
 
 bool Mpu6050::begin() { return true; }
 bool Mpu6050::readAccelG(float &ax, float &ay, float &az) {
@@ -26,6 +30,8 @@ bool Mpu6050::readMotion(float &ax, float &ay, float &az, float &gx, float &gy, 
     gx = g_tiltRateDps + BGX + noise(rng);
     gy = -g_panRateDps * sin(t) + BGY + noise(rng);
     gz =  g_panRateDps * cos(t) + BGZ + noise(rng);
+    // Uma leitura a cada 10 ms (ANGLE_SAMPLE_INTERVAL_MS).
+    if (g_spikeEveryMs && ++g_readCount % (g_spikeEveryMs / 10) == 0) gz = g_spikeDps;
     return true;
 }
 bool Mpu6050::setDlpfForSampleRate(uint16_t) { return true; }
@@ -89,6 +95,16 @@ int main() {
     // o reaprendizado do bias.
     Seg h[] = {{5, 9, 0, -20}, {15, 23, 0, 20}, {40, 42, 15, 0}};
     expect("H", run("H: varreduras do motor -80 -> +80, tilt 0->30", h, 3, 180, 0, rep, 9), 80, 0.5);
+    // I: placa parada 10 min, com uma leitura espúria de -250°/s em gz a cada
+    // ~7 s (ruído no barramento I2C). Não pode derivar.
+    g_spikeEveryMs = 7000; g_spikeDps = -250; g_readCount = 0;
+    const double repI[] = {60, 120, 240, 360, 480, 600};
+    expect("I", run("I: parada 10 min com leituras espurias de gz", nullptr, 0, 600, 0, repI, 6), 0, 0.5);
+    // J: idem, com pan +30 e mudança de posição no meio.
+    Seg j[] = {{20, 21.5, 0, 20}, {100, 103, 15, 0}};
+    g_readCount = 0;
+    expect("J", run("J: espurias + pan +30 + tilt 0->45", j, 2, 600, 0, repI, 6), 30, 0.5);
+    g_spikeEveryMs = 0;
     printf(failures ? "PAN: HOUVE FALHA\n" : "PAN: TUDO OK\n");
     return failures ? 1 : 0;
 }

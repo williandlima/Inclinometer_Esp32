@@ -69,6 +69,18 @@
 //    não se acumula com o tempo nem com o número de movimentos — e some
 //    quando o eixo volta ao zero.
 //
+// LEITURAS ESPÚRIAS. gy e gz passam por uma mediana móvel de 5 amostras
+// antes de tudo (integração e médias do ZUPT). Uma única leitura errada do
+// barramento I2C — ex.: -250°/s por 10 ms — deslocava a média da janela em
+// 2,5°/s: a janela deixava de ser "parada", e os ~2,5° que ela integrou
+// ficavam para sempre. Algumas por minuto, com o sinal puxando para o mesmo
+// lado, levavam a placa PARADA a cravar em ±90° em poucos minutos (até a
+// 1.6.3; cenário I de sim/pan_sim.cpp). A mediana descarta até 2 amostras
+// ruins seguidas e custa ~20 ms de atraso, irrelevante perto do motor.
+// Movimento real passa intacto: o DLPF de 21 Hz já não deixa o sinal
+// verdadeiro mudar de forma brusca entre amostras de 10 ms. O Modo
+// Vibração (readInstantRateDps) não passa pela mediana.
+//
 // BOOT E RECUPERAÇÃO. O bias inicial não pode passar pelo gate do item 2,
 // porque o zero-rate de fábrica do MPU6050 chega a ±20°/s. Ele é adotado
 // quando DUAS janelas seguidas têm médias coerentes entre si (distância
@@ -166,6 +178,7 @@ public:
         uint32_t i2cFailures;
         uint16_t mismatchWindows;
         uint8_t biasReady;
+        uint32_t spikes;    // leituras espúrias descartadas pela mediana
     };
     Diagnostics diagnostics() const;
 
@@ -199,6 +212,14 @@ private:
     // Sequência corrente de janelas coerentes entre si mas longe do bias.
     uint16_t _mismatchWindows = 0;
     float _mismatchDeltaDeg = 0.0f;  // integrado ao longo dessa sequência
+
+    // Mediana móvel de gy/gz (ver "LEITURAS ESPÚRIAS" no cabeçalho).
+    static constexpr int PAN_DESPIKE_LEN = 5;
+    float _gyHist[PAN_DESPIKE_LEN] = {};
+    float _gzHist[PAN_DESPIKE_LEN] = {};
+    bool _despikePrimed = false;
+    uint32_t _spikeCount = 0;
+    void despike(float &gyDps, float &gzDps);
 
     float _lastGyDps = 0.0f;
     float _lastGzDps = 0.0f;

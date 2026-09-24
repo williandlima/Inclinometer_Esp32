@@ -27,8 +27,8 @@ constexpr uint32_t I2C_CLOCK_HZ = 400000;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.3";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10603;
+constexpr char FIRMWARE_VERSION[] = "1.6.4";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10604;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -98,10 +98,10 @@ constexpr char CHAR_VIBRATION_RESEND_UUID[] = "6e6e000a-3c17-4a2e-8f4b-1a2b3c4d5
 // calibração porque são ações diferentes: calibrar move o zero, resetar os
 // extremos não mexe na leitura.
 constexpr char CHAR_RESET_PEAKS_UUID[] = "6e6e000b-3c17-4a2e-8f4b-1a2b3c4d5e6f";
-// Read-only, diagnóstico do pan em campo (v1.6.3): 47 bytes LE = 9 float32
+// Read-only, diagnóstico do pan em campo (v1.6.3): 51 bytes LE = 9 float32
 // (pan interno, offset, bias gy, bias gz, média gy, média gz, gy, gz, tilt)
 // + uint32 amostras + uint32 falhas I2C + uint16 janelas fora do bias +
-// uint8 bias pronto. Ver PanSensor::Diagnostics e
+// uint8 bias pronto + uint32 leituras espúrias (v1.6.4; 47 bytes na 1.6.3). Ver PanSensor::Diagnostics e
 // python-app/tools/diagnostico_pan.py. Os apps não usam.
 constexpr char CHAR_PAN_DIAGNOSTICS_UUID[] = "6e6e000d-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 // Extremos do peak-hold, num pacote só de 8 bytes (int16 LE, x ANGLE_SCALE):
@@ -251,6 +251,11 @@ constexpr float PAN_ZUPT_BIAS_ALPHA = 0.1f;
 // maior que a varredura mais longa possível a velocidade constante: 180° de
 // curso a 20°/s (motor) duram 9 s — 20 janelas dão folga mais que dupla.
 constexpr uint16_t PAN_BIAS_RELEARN_WINDOWS = 20;
+
+// Diferença entre a amostra crua do giro e a mediana (ver "LEITURAS
+// ESPÚRIAS" em PanSensor.h) acima da qual a amostra é contada como espúria
+// no diagnóstico. Só conta: o descarte é feito pela mediana, sempre.
+constexpr float PAN_SPIKE_REPORT_DPS = 30.0f;
 
 // Correção do fator de escala do giroscópio (tolerância de fábrica ~+-3%).
 // Este é o erro dominante depois que o ZUPT resolve o bias, e é proporcional
