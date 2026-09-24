@@ -76,6 +76,19 @@ int main() {
     BGX = 12; BGY = -15; BGZ = 14;
     Seg e[] = {{5, 9, 15, 0}, {12, 13.5, 0, 20}, {30, 33.33, -15, 0}};
     expect("E", run("E: bias ±15°/s, tilt 0->60, pan +30, tilt 60->10", e, 3, 120, 0, rep, 8), 29.75, 0.5);
+    // F: ligada com a placa na mão (pan mexendo nos primeiros ~2,4 s), depois
+    // parada; muda de posição (tilt 0->45) e gira o pan +30.
+    BGX = 1.5; BGY = 3.0; BGZ = -2.0;
+    Seg f[] = {{0, 0.7, 0, 15}, {0.7, 1.6, 0, -25}, {1.6, 2.4, 0, 10}, {10, 13, 15, 0}, {20, 21.5, 0, 20}};
+    expect("F", run("F: liga com a placa em movimento, tilt 0->45, pan +30", f, 5, 180, 0, rep, 9), 30, 0.5);
+    // G: giro lento e constante (5°/s) exatamente durante o boot — o bias sai
+    // errado; a rede de segurança tem de reaprendê-lo e desfazer a deriva.
+    Seg g[] = {{0, 2.0, 0, 5}, {10, 13, 15, 0}};
+    expect("G", run("G: giro constante no boot (bias errado), tilt 0->45", g, 2, 180, 0, rep, 9), 0, 0.5);
+    // H: varreduras do motor a 20°/s (a mais longa, 8 s) não podem disparar
+    // o reaprendizado do bias.
+    Seg h[] = {{5, 9, 0, -20}, {15, 23, 0, 20}, {40, 42, 15, 0}};
+    expect("H", run("H: varreduras do motor -80 -> +80, tilt 0->30", h, 3, 180, 0, rep, 9), 80, 0.5);
     printf(failures ? "PAN: HOUVE FALHA\n" : "PAN: TUDO OK\n");
     return failures ? 1 : 0;
 }

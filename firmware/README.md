@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.1`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.2`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -248,6 +248,9 @@ sinais sintéticos (bias de fábrica de 5°/s, ruído, vibração, tilt fixo):
 | **1.6.1:** placa parada, tilt muda 0→45° (bias típico) | 0,00° (na 1.6.0: travava em −90° em ~1 min) |
 | **1.6.1:** pan +30°, tilt 0→45° e volta a 0° | 29,76° mantido (na 1.6.0: −39,5°, sem recuperar) |
 | **1.6.1:** bias de ±15°/s, tilt 0→60°, pan +30°, tilt 60→10° | 29,75° mantido |
+| **1.6.2:** liga com a placa em movimento, tilt 0→45°, pan +30° | 29,75° (na 1.6.1: travava em −90°) |
+| **1.6.2:** giro constante de 5°/s durante o boot, tilt 0→45° | deriva desfeita em ~22 s, 0,00° (na 1.6.1: −90° travado) |
+| **1.6.2:** varreduras do motor −80° → +80° a 20°/s | 80,04°, sem reaprendizado indevido |
 
 O piso de detecção medido bate com o previsto (`limiar × janela` = 1°/s × 1s):
 movimentos de até ~1° são descartados como ruído, e a partir de ~2° são
@@ -550,13 +553,20 @@ tela de configuração, em vez de truncar em silêncio.
   testes feitos com o tilt zerado — testar panning com o tilt em ±45°/±60° e
   conferir se bate com a mesma medida feita em `θ=0`. Resolve junto com a
   confirmação de montagem do `atan2(ay, az)`, que já estava pendente.
-- **[1.2.0] Boot com o eixo em movimento estraga o bias inicial.** A
-  primeira janela de ZUPT é aceita sem limiar (o zero-rate de fábrica do
-  MPU6050 chega a ±20°/s e nenhum limiar razoável o aceitaria), ou seja,
-  assume-se o sensor parado ao ligar. Se não estiver, o bias sai errado e as
-  janelas paradas seguintes passam a ser rejeitadas. **Pressionar Calibrar
-  com o eixo parado recupera** — `PanSensor::calibrate()` refaz a estimativa
-  do zero do giro junto com o zero do ângulo (confirmado em teste).
+- **[1.2.0 → corrigido na 1.6.2] Boot com a placa em movimento travava o
+  pan em ±90°.** Até a 1.6.1 a primeira janela de ZUPT era aceita sem teste
+  como bias. Ligada em movimento, o bias saía errado, toda janela parada
+  seguinte era rejeitada e a leitura derivava até cravar em ±90° **para
+  sempre** (só Calibrar recuperava). Aparecia no uso via BLE (app Android,
+  placa ligada na mão) e não via USB, porque o app Python reinicia o ESP32
+  ao abrir a porta serial, com a placa parada na bancada. A 1.6.2 só adota
+  o bias quando **duas janelas seguidas têm médias coerentes** e, como rede
+  de segurança, reaprende o bias (desfazendo a deriva) após
+  `PAN_BIAS_RELEARN_WINDOWS` (20) janelas coerentes entre si mas longe dele
+  — ver "BOOT E RECUPERAÇÃO" em `PanSensor.h`. Cenários F e G de
+  `sim/pan_sim.cpp`: na 1.6.1, −90° travado; na 1.6.2, 29,75° e 0,00°
+  corretos. O cenário H confirma que varreduras do motor (8 s a 20°/s) não
+  disparam o reaprendizado.
 - **[1.2.0] Movimentos menores que ~1° são descartados** como ruído, por
   causa do cancelamento de janela parada. É o compromisso da abordagem:
   ajustável em `PAN_ZUPT_RATE_THRESHOLD_DPS`/`PAN_ZUPT_WINDOW_MS`, ao custo

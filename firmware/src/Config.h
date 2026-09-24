@@ -27,8 +27,8 @@ constexpr uint32_t I2C_CLOCK_HZ = 400000;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.1";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10601;
+constexpr char FIRMWARE_VERSION[] = "1.6.2";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10602;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -238,6 +238,13 @@ constexpr float PAN_ZUPT_RATE_THRESHOLD_DPS = 1.0f;
 // propósito: um movimento real lento o suficiente para passar pelo limiar
 // acima precisaria persistir por muitas janelas para ser absorvido no bias.
 constexpr float PAN_ZUPT_BIAS_ALPHA = 0.1f;
+
+// Rede de segurança contra bias errado (ver "BOOT E RECUPERAÇÃO" em
+// PanSensor.h): quantas janelas SEGUIDAS, coerentes entre si mas todas longe
+// do bias, provam que o eixo está parado sob um bias errado. Tem de ser
+// maior que a varredura mais longa possível a velocidade constante: 180° de
+// curso a 20°/s (motor) duram 9 s — 20 janelas dão folga mais que dupla.
+constexpr uint16_t PAN_BIAS_RELEARN_WINDOWS = 20;
 
 // Correção do fator de escala do giroscópio (tolerância de fábrica ~+-3%).
 // Este é o erro dominante depois que o ZUPT resolve o bias, e é proporcional

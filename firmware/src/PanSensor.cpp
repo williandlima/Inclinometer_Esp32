@@ -88,14 +88,19 @@ void PanSensor::closeWindow(uint32_t now) {
     float meanGyDps = _windowGySumDps / _windowSamples;
     float meanGzDps = _windowGzSumDps / _windowSamples;
 
+    // Coerente com a janela anterior = mesma taxa média nas duas: ou o eixo
+    // está parado, ou girando a velocidade constante. Ver "BOOT E
+    // RECUPERAÇÃO" em PanSensor.h.
+    bool coherent = _hasPrevMean &&
+        hypotf(meanGyDps - _prevMeanGyDps, meanGzDps - _prevMeanGzDps) < PAN_ZUPT_RATE_THRESHOLD_DPS;
+    _prevMeanGyDps = meanGyDps;
+    _prevMeanGzDps = meanGzDps;
+    _hasPrevMean = true;
+
     if (!_biasReady) {
-        // Primeira janela desde o boot (ou desde a última calibração): adota
-        // a média como bias, sem aplicar limiar. Ver "PREMISSA DE BOOT" em
-        // PanSensor.h — o zero-rate de fábrica é grande demais para passar
-        // por qualquer limiar razoável.
-        _biasGyDps = meanGyDps;
-        _biasGzDps = meanGzDps;
-        _biasReady = true;
+        if (coherent) {
+            adoptBias(meanGyDps, meanGzDps);
+        }
     } else {
         float dGy = meanGyDps - _biasGyDps;
         float dGz = meanGzDps - _biasGzDps;
@@ -105,10 +110,34 @@ void PanSensor::closeWindow(uint32_t now) {
             _biasGyDps += PAN_ZUPT_BIAS_ALPHA * dGy;
             _biasGzDps += PAN_ZUPT_BIAS_ALPHA * dGz;
             _panDeg -= _windowDeltaDeg;
+            _mismatchWindows = 0;
+            _mismatchDeltaDeg = 0.0f;
+        } else {
+            if (coherent && _mismatchWindows > 0) {
+                _mismatchWindows++;
+                _mismatchDeltaDeg += _windowDeltaDeg;
+            } else {
+                _mismatchWindows = 1;
+                _mismatchDeltaDeg = _windowDeltaDeg;
+            }
+            if (_mismatchWindows >= PAN_BIAS_RELEARN_WINDOWS) {
+                // Parado sob bias errado: reaprende e desfaz a deriva da
+                // sequência inteira.
+                _panDeg -= _mismatchDeltaDeg;
+                adoptBias(meanGyDps, meanGzDps);
+            }
         }
     }
 
     resetWindow(now);
+}
+
+void PanSensor::adoptBias(float gyDps, float gzDps) {
+    _biasGyDps = gyDps;
+    _biasGzDps = gzDps;
+    _biasReady = true;
+    _mismatchWindows = 0;
+    _mismatchDeltaDeg = 0.0f;
 }
 
 void PanSensor::resetWindow(uint32_t now) {
@@ -146,5 +175,8 @@ void PanSensor::calibrate() {
     // reestabelecer o zero do giroscópio. É o que recupera o caso de o ESP32
     // ter sido ligado com o eixo em movimento.
     _biasReady = false;
+    _hasPrevMean = false;
+    _mismatchWindows = 0;
+    _mismatchDeltaDeg = 0.0f;
     resetWindow(millis());
 }
