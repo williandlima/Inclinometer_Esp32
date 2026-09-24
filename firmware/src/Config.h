@@ -21,14 +21,23 @@ constexpr int PIN_I2C_SCL = 22;
 // disso (ver Mpu6050::begin).
 constexpr uint32_t I2C_CLOCK_HZ = 400000;
 
+// Robustez do sensor (ver Mpu6050::maintain e accelPlausible). O chip pode
+// reiniciar sozinho numa queda de alimentação — o rádio BLE puxa picos de
+// corrente — e volta em SLEEP, lendo zeros, sem nunca mais ser
+// reconfigurado. E o barramento pode devolver bytes corrompidos.
+constexpr uint32_t MPU_HEALTH_CHECK_INTERVAL_MS = 1000;
+constexpr uint16_t MPU_BUS_RESET_FAILURES = 20;
+constexpr float ACCEL_MIN_PLAUSIBLE_G = 0.5f;
+constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
+
 // ============================================================================
 // Versão do firmware — bump manual a cada mudança relevante de contrato ou
 // comportamento. FIRMWARE_VERSION_CODE codifica a mesma versão como inteiro
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.4";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10604;
+constexpr char FIRMWARE_VERSION[] = "1.6.5";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10605;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -98,10 +107,11 @@ constexpr char CHAR_VIBRATION_RESEND_UUID[] = "6e6e000a-3c17-4a2e-8f4b-1a2b3c4d5
 // calibração porque são ações diferentes: calibrar move o zero, resetar os
 // extremos não mexe na leitura.
 constexpr char CHAR_RESET_PEAKS_UUID[] = "6e6e000b-3c17-4a2e-8f4b-1a2b3c4d5e6f";
-// Read-only, diagnóstico do pan em campo (v1.6.3): 51 bytes LE = 9 float32
+// Read-only, diagnóstico do pan em campo (v1.6.3): 55 bytes LE = 9 float32
 // (pan interno, offset, bias gy, bias gz, média gy, média gz, gy, gz, tilt)
 // + uint32 amostras + uint32 falhas I2C + uint16 janelas fora do bias +
-// uint8 bias pronto + uint32 leituras espúrias (v1.6.4; 47 bytes na 1.6.3). Ver PanSensor::Diagnostics e
+// uint8 bias pronto + uint32 leituras espúrias (v1.6.4) + uint32
+// reconfigurações do MPU6050 (v1.6.5). Versões anteriores mandam menos bytes. Ver PanSensor::Diagnostics e
 // python-app/tools/diagnostico_pan.py. Os apps não usam.
 constexpr char CHAR_PAN_DIAGNOSTICS_UUID[] = "6e6e000d-3c17-4a2e-8f4b-1a2b3c4d5e6f";
 // Extremos do peak-hold, num pacote só de 8 bytes (int16 LE, x ANGLE_SCALE):
@@ -223,8 +233,8 @@ constexpr uint16_t VIBRATION_MAX_RATE_HZ = 500;
 // Faixa mecânica do pan. PLACEHOLDER: o curso é limitado (sem volta
 // completa), mas o valor exato depende da mecânica final — ajustar aqui
 // quando estiver definido, como já foi feito quando a faixa do tilt mudou de
-// 0-120° para -60~+60°. Só limita o valor reportado; o integrador interno não
-// é clampado, então voltar para dentro da faixa recupera a leitura correta.
+// 0-120° para -60~+60°. Limita também o integrador interno (anti-windup, ver
+// PanSensor::clampIntegrator): passar do limite e voltar responde na hora.
 constexpr float PAN_MIN_DEG = -90.0f;
 constexpr float PAN_MAX_DEG = 90.0f;
 
@@ -240,10 +250,30 @@ constexpr uint32_t PAN_ZUPT_WINDOW_MS = 1000;
 // parada. A separação é confortável — o motor gira a ~20-30°/s.
 constexpr float PAN_ZUPT_RATE_THRESHOLD_DPS = 1.0f;
 
+// Segundo critério de "parado": nenhuma amostra da janela (já passada pela
+// mediana) pode se afastar do bias mais que isto. Só com a média, um
+// movimento que terminava logo no começo de uma janela (ex.: 30 ms a 20°/s
+// = média de 0,6°/s) passava por parado e tinha até ~1° cancelado — perda
+// que se acumulava a cada movimento. O motor gira a 20-30°/s, bem acima;
+// vibração do mastro (~1°/s) fica bem abaixo, então a imunidade a
+// vibração do critério da média continua valendo.
+constexpr float PAN_ZUPT_PEAK_DPS = 8.0f;
+
 // Velocidade com que o bias persegue a média das janelas paradas. Baixo de
 // propósito: um movimento real lento o suficiente para passar pelo limiar
 // acima precisaria persistir por muitas janelas para ser absorvido no bias.
 constexpr float PAN_ZUPT_BIAS_ALPHA = 0.1f;
+
+// O bias do giro deriva com a temperatura (o chip esquenta por minutos
+// depois de ligado; o datasheet dá até ±20°/s na faixa de temperatura).
+// Durante um giro não há janela parada para corrigi-lo, e com o bias parado
+// no último valor a deriva virava erro de ângulo proporcional ao quadrado
+// da duração do giro. Filtro alfa-beta: além do nível (ALPHA), estima a
+// velocidade de deriva (BETA) e a extrapola entre janelas paradas — por no
+// máximo PAN_BIAS_EXTRAPOLATION_MAX_S, e limitada a ±PAN_BIAS_SLOPE_MAX_DPS2.
+constexpr float PAN_ZUPT_SLOPE_BETA = 0.01f;
+constexpr float PAN_BIAS_SLOPE_MAX_DPS2 = 0.05f;
+constexpr float PAN_BIAS_EXTRAPOLATION_MAX_S = 30.0f;
 
 // Rede de segurança contra bias errado (ver "BOOT E RECUPERAÇÃO" em
 // PanSensor.h): quantas janelas SEGUIDAS, coerentes entre si mas todas longe
@@ -265,8 +295,11 @@ constexpr float PAN_SPIKE_REPORT_DPS = 30.0f;
 constexpr float PAN_SCALE_CORRECTION = 1.0f;
 
 // Teto para o dt de uma única integração. Protege contra um loop que atrasou
-// muito (ou millis() dando a volta) virar um salto grande no ângulo.
-constexpr float PAN_MAX_INTEGRATION_DT_S = 0.1f;
+// muito (ou millis() dando a volta) virar um salto grande no ângulo. Não pode
+// ser curto demais: leituras perdidas (falha de I2C, sensor sendo
+// reconfigurado) viram um dt maior na amostra seguinte, integrada à taxa
+// dela — com 0,1 s, um buraco de 0,3 s durante um giro a 20°/s perdia 4°.
+constexpr float PAN_MAX_INTEGRATION_DT_S = 0.3f;
 
 // Escala das amostras de vibração do eixo de pan no protocolo. Diferente do
 // tilt, o que trafega aqui é VELOCIDADE ANGULAR (graus/s), não ângulo — ver

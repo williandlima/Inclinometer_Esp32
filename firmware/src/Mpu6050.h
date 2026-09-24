@@ -33,6 +33,18 @@ public:
     bool setDlpfForSampleRate(uint16_t rateHz);
     bool restoreDefaultDlpf();
 
+    // Chamar a cada iteração do loop(). A cada MPU_HEALTH_CHECK_INTERVAL_MS
+    // relê a configuração do chip e, se ela não bater com a esperada (sensor
+    // reiniciado por queda de alimentação volta em SLEEP, entregando zeros),
+    // reconfigura. Com MPU_BUS_RESET_FAILURES leituras seguidas falhando,
+    // reinicia também o periférico I2C, sem esperar o intervalo.
+    void maintain();
+
+    // Diagnóstico: reconfigurações feitas por maintain() e leituras
+    // descartadas (falha de I2C ou quadro implausível) desde o boot.
+    uint32_t recoveries() const { return _recoveries; }
+    uint32_t readFailures() const { return _readFailures; }
+
 private:
     static constexpr uint8_t I2C_ADDRESS = 0x68;
     static constexpr uint8_t REG_PWR_MGMT_1 = 0x6B;
@@ -84,4 +96,18 @@ private:
     static constexpr uint8_t GYRO_RANGE_250DPS = 0x00;
 
     bool writeRegister(uint8_t reg, uint8_t value);
+    bool readRegister(uint8_t reg, uint8_t &value);
+    bool configure();
+
+    // Aceleração com módulo fora de [ACCEL_MIN_PLAUSIBLE_G,
+    // ACCEL_MAX_PLAUSIBLE_G] não é física para o equipamento montado: é
+    // lixo do barramento (bytes 0xFF), chip reiniciado (zeros) ou choque.
+    static bool accelPlausible(int16_t rawX, int16_t rawY, int16_t rawZ);
+    bool fail();  // conta a falha e devolve false
+
+    uint8_t _dlpfCfg = DLPF_CFG_21HZ;  // banda que o chip DEVE estar usando
+    uint32_t _lastHealthCheckMs = 0;
+    uint16_t _consecutiveFailures = 0;
+    uint32_t _recoveries = 0;
+    uint32_t _readFailures = 0;
 };

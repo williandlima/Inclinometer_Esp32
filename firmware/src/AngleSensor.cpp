@@ -38,6 +38,32 @@ void AngleSensor::update() {
         return;  // falha de I2C: preserva o estado do filtro em vez de corrompê-lo
     }
 
+    // Mediana das últimas 5 amostras ANTES do filtro: o 1-euro abre o corte
+    // quando vê velocidade, então uma única amostra espúria (lixo do I2C)
+    // era seguida quase inteira e depois demorava segundos para ser
+    // esquecida — e ainda entrava nos extremos. Até juntar 5 amostras o
+    // filtro nem começa, para uma amostra ruim no boot não virar o ponto
+    // de partida.
+    for (int i = 0; i < ANGLE_DESPIKE_LEN - 1; i++) {
+        _rawHist[i] = _rawHist[i + 1];
+    }
+    _rawHist[ANGLE_DESPIKE_LEN - 1] = rawDeg;
+    if (_rawHistCount < ANGLE_DESPIKE_LEN) {
+        _rawHistCount++;
+        return;
+    }
+    float sorted[ANGLE_DESPIKE_LEN];
+    for (int i = 0; i < ANGLE_DESPIKE_LEN; i++) {
+        float x = _rawHist[i];
+        int j = i - 1;
+        while (j >= 0 && sorted[j] > x) {
+            sorted[j + 1] = sorted[j];
+            j--;
+        }
+        sorted[j + 1] = x;
+    }
+    rawDeg = sorted[ANGLE_DESPIKE_LEN / 2];
+
     if (!_filterReady) {
         // Primeira amostra entra direto: sem isso a leitura começaria em 0°
         // e levaria segundos subindo até o valor real.

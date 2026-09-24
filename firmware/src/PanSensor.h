@@ -179,23 +179,33 @@ public:
         uint16_t mismatchWindows;
         uint8_t biasReady;
         uint32_t spikes;    // leituras espúrias descartadas pela mediana
+        uint32_t mpuRecoveries;  // reconfigurações do sensor (Mpu6050::maintain)
     };
     Diagnostics diagnostics() const;
 
 private:
     Mpu6050 &_mpu;
 
-    float _panDeg = 0.0f;     // integrado desde o boot (absoluto, sem clamp)
+    float _panDeg = 0.0f;     // integrado desde o boot, limitado à faixa (clampIntegrator)
     float _offsetDeg = 0.0f;  // zero da calibração
     // Bias estimado de cada eixo do giro, no referencial do sensor (°/s) —
     // ver item 2 do cabeçalho: não pode ser estimado sobre ω_pan projetado.
     float _biasGyDps = 0.0f;
     float _biasGzDps = 0.0f;
+    // Velocidade de deriva do bias (°/s por s), estimada nas janelas paradas.
+    float _biasSlopeGy = 0.0f;
+    float _biasSlopeGz = 0.0f;
+    float _sinceStillS = 0.0f;  // tempo desde a última janela parada
+    static float clampSlope(float slope);
     bool _biasReady = false;  // primeira janela já definiu o bias?
 
-    uint32_t _lastSampleMs = 0;
+    uint32_t _lastSampleMs = 0;   // última leitura BEM-SUCEDIDA
+    uint32_t _lastAttemptMs = 0;
+    bool _failedAttempt = false;
     bool _hasLastSample = false;  // primeira amostra não tem dt confiável
     float _lastRateDps = 0.0f;    // última taxa válida (repetida em falha de I2C)
+    float _prevIntegRateDps = 0.0f;  // taxa da amostra anterior (trapézio)
+    bool _hasPrevIntegRate = false;
 
     // Estado da janela de ZUPT em andamento.
     uint32_t _windowStartMs = 0;
@@ -203,6 +213,7 @@ private:
     float _windowGzSumDps = 0.0f;
     uint16_t _windowSamples = 0;
     float _windowDeltaDeg = 0.0f;  // quanto foi integrado nesta janela
+    float _windowPeakDps = 0.0f;   // maior |taxa - bias| da janela (PAN_ZUPT_PEAK_DPS)
 
     // Média da janela anterior, para o teste de coerência (BOOT E RECUPERAÇÃO).
     bool _hasPrevMean = false;
@@ -217,9 +228,12 @@ private:
     static constexpr int PAN_DESPIKE_LEN = 5;
     float _gyHist[PAN_DESPIKE_LEN] = {};
     float _gzHist[PAN_DESPIKE_LEN] = {};
-    bool _despikePrimed = false;
+    float _tiltHist[PAN_DESPIKE_LEN] = {};
+    int _histCount = 0;         // amostras válidas no histórico (<= 5)
+    float _pendingDtS = 0.0f;   // intervalo ainda não integrado (após buraco)
     uint32_t _spikeCount = 0;
-    void despike(float &gyDps, float &gzDps);
+    // Mediana de gy, gz e tilt; false enquanto o histórico não estiver cheio.
+    bool despike(float &gyDps, float &gzDps, float &tiltRad);
 
     float _lastGyDps = 0.0f;
     float _lastGzDps = 0.0f;
@@ -236,6 +250,7 @@ private:
     void resetWindow(uint32_t now);
 
     void adoptBias(float gyDps, float gzDps);
+    void clampIntegrator();
 
     // Lê o sensor: gy/gz crus (°/s, sem bias subtraído) e o tilt do mesmo
     // burst (rad). false em falha de I2C.

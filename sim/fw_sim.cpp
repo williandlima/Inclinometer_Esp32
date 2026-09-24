@@ -26,6 +26,7 @@ static std::normal_distribution<double> nz(0.0, 0.02);
 static double tNow() { return g_now_us / 1e6; }
 static double tiltRad() { return (TILT_AMP_DEG * sin(2 * M_PI * TILT_HZ * tNow())) * M_PI / 180; }
 bool Mpu6050::begin() { return true; }
+void Mpu6050::maintain() {}
 bool Mpu6050::readAccelG(float &ax, float &ay, float &az) {
     double t = tiltRad(); ax = 0; ay = sin(t) + nz(rng) * 0.01; az = cos(t); return true;
 }

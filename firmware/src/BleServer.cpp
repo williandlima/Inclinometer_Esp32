@@ -245,13 +245,14 @@ void BleServer::updatePanDiagnostics() {
         d.panDeg, d.offsetDeg, d.biasGyDps, d.biasGzDps, d.meanGyDps,
         d.meanGzDps, d.gyDps, d.gzDps, d.tiltDeg,
     };
-    uint8_t payload[51];
+    uint8_t payload[55];
     memcpy(payload, floats, sizeof(floats));  // ESP32 é little-endian
     memcpy(payload + 36, &d.samples, 4);
     memcpy(payload + 40, &d.i2cFailures, 4);
     memcpy(payload + 44, &d.mismatchWindows, 2);
     payload[46] = d.biasReady;
     memcpy(payload + 47, &d.spikes, 4);
+    memcpy(payload + 51, &d.mpuRecoveries, 4);
     panDiagnosticsChar->setValue(payload, sizeof(payload));
 }
 

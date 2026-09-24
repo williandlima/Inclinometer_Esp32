@@ -35,6 +35,7 @@ void setup() {
 }
 
 void loop() {
+    mpu.maintain();        // reconfigura o sensor se ele reiniciou (ver Mpu6050.h)
     angleSensor.update();  // alimenta o filtro da leitura contínua (tilt)
     panSensor.update();    // integra o giro + ZUPT (pan)
     vibrationCapture.update();

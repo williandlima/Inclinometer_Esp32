@@ -33,10 +33,11 @@ float PanSensor::readInstantRateDps() {
 }
 
 namespace {
-float median5(const float *v) {
-    float s[5] = {v[0], v[1], v[2], v[3], v[4]};
-    for (int i = 1; i < 5; i++) {
-        float x = s[i];
+// Mediana de n <= 5 valores (média dos dois centrais se n for par).
+float medianOf(const float *v, int n) {
+    float s[5];
+    for (int i = 0; i < n; i++) {
+        float x = v[i];
         int j = i - 1;
         while (j >= 0 && s[j] > x) {
             s[j + 1] = s[j];
@@ -44,31 +45,39 @@ float median5(const float *v) {
         }
         s[j + 1] = x;
     }
-    return s[2];
+    return (n % 2) ? s[n / 2] : 0.5f * (s[n / 2 - 1] + s[n / 2]);
 }
 }  // namespace
 
-void PanSensor::despike(float &gyDps, float &gzDps) {
-    if (!_despikePrimed) {
-        for (int i = 0; i < PAN_DESPIKE_LEN; i++) {
-            _gyHist[i] = gyDps;
-            _gzHist[i] = gzDps;
-        }
-        _despikePrimed = true;
-    }
+bool PanSensor::despike(float &gyDps, float &gzDps, float &tiltRad) {
     for (int i = 0; i < PAN_DESPIKE_LEN - 1; i++) {
         _gyHist[i] = _gyHist[i + 1];
         _gzHist[i] = _gzHist[i + 1];
+        _tiltHist[i] = _tiltHist[i + 1];
     }
     _gyHist[PAN_DESPIKE_LEN - 1] = gyDps;
     _gzHist[PAN_DESPIKE_LEN - 1] = gzDps;
-    float gy = median5(_gyHist);
-    float gz = median5(_gzHist);
+    _tiltHist[PAN_DESPIKE_LEN - 1] = tiltRad;
+    if (_histCount < PAN_DESPIKE_LEN) {
+        _histCount++;
+    }
+    // Só com o histórico cheio a mediana rejeita até 2 amostras ruins
+    // seguidas (picos vêm em dupla); antes disso, melhor esperar.
+    if (_histCount < PAN_DESPIKE_LEN) {
+        return false;
+    }
+    int first = PAN_DESPIKE_LEN - _histCount;
+    float gy = medianOf(_gyHist + first, _histCount);
+    float gz = medianOf(_gzHist + first, _histCount);
     if (fabsf(gy - gyDps) > PAN_SPIKE_REPORT_DPS || fabsf(gz - gzDps) > PAN_SPIKE_REPORT_DPS) {
         _spikeCount++;
     }
     gyDps = gy;
     gzDps = gz;
+    // O tilt da projeção vem do MESMO quadro; um quadro de lixo que passe
+    // pelo teste de plausibilidade traz também um tilt errado.
+    tiltRad = medianOf(_tiltHist + first, _histCount);
+    return true;
 }
 
 void PanSensor::update() {
@@ -76,24 +85,33 @@ void PanSensor::update() {
     if (_hasLastSample && now - _lastSampleMs < ANGLE_SAMPLE_INTERVAL_MS) {
         return;
     }
-    uint32_t elapsedMs = now - _lastSampleMs;
-    _lastSampleMs = now;
+    if (_failedAttempt && now == _lastAttemptMs) {
+        return;  // falhou neste mesmo ms: tenta de novo no próximo
+    }
 
     float gyDps, gzDps, tiltRad;
     if (!sampleMotion(gyDps, gzDps, tiltRad)) {
+        // O relógio da integração NÃO avança numa falha: o intervalo fica
+        // para a próxima leitura boa, que o integra inteiro. Avançando aqui
+        // (como até a 1.6.4), cada leitura perdida durante um giro jogava
+        // fora 10 ms de rotação (0,2° a 20°/s) — em silêncio, a cada falha.
         _i2cFailures++;
+        _failedAttempt = true;
+        _lastAttemptMs = now;
         return;  // falha de I2C: preserva o estado em vez de corrompê-lo
     }
+    _failedAttempt = false;
+    uint32_t elapsedMs = now - _lastSampleMs;
+    _lastSampleMs = now;
     _lastGyDps = gyDps;
     _lastGzDps = gzDps;
     _lastTiltRad = tiltRad;
     _sampleCount++;
-    despike(gyDps, gzDps);
-
     if (!_hasLastSample) {
         // Primeira amostra: sem intervalo anterior, não há dt para integrar.
         _hasLastSample = true;
         resetWindow(now);
+        despike(gyDps, gzDps, tiltRad);
         return;
     }
 
@@ -102,17 +120,58 @@ void PanSensor::update() {
         dtS = PAN_MAX_INTEGRATION_DT_S;
     }
 
+    // Depois de um buraco (loop atrasado, leituras perdidas), o histórico da
+    // mediana é de ANTES dele: no fim de um giro, 4 amostras velhas a 20°/s
+    // venciam a nova já parada e o buraco inteiro era integrado a 20°/s. Ele
+    // é descartado, e o buraco só é integrado quando 5 amostras novas dão
+    // uma mediana confiável — nunca com uma amostra isolada, que pode ser
+    // justamente a espúria.
+    if (elapsedMs > 3 * ANGLE_SAMPLE_INTERVAL_MS) {
+        _histCount = 0;
+    }
+    if (!despike(gyDps, gzDps, tiltRad)) {
+        _pendingDtS += dtS;
+        return;
+    }
+    dtS += _pendingDtS;
+    _pendingDtS = 0.0f;
+
     // Só integra depois que a primeira janela estabeleceu o bias: antes
     // disso, o zero-rate de fábrica (±20°/s) jogaria o ângulo longe.
+    if (_biasReady && _sinceStillS < PAN_BIAS_EXTRAPOLATION_MAX_S) {
+        // Deriva térmica do bias continua durante o movimento, quando não
+        // há janela parada para corrigi-lo: segue a velocidade estimada.
+        // Só por um tempo limitado — a estimativa envelhece.
+        _biasGyDps += _biasSlopeGy * dtS;
+        _biasGzDps += _biasSlopeGz * dtS;
+        _sinceStillS += dtS;
+    }
+
     if (_biasReady) {
-        float deltaDeg = panRateDps(gyDps, gzDps, tiltRad) * dtS * PAN_SCALE_CORRECTION;
-        _panDeg += deltaDeg;
-        _windowDeltaDeg += deltaDeg;
+        // Regra do trapézio: a taxa muda entre duas amostras (início e fim de
+        // cada giro), e multiplicar só a taxa nova pelo intervalo inteiro
+        // errava até uma amostra (~0,2° a 20°/s) por borda de movimento.
+        float rate = panRateDps(gyDps, gzDps, tiltRad) * PAN_SCALE_CORRECTION;
+        float prevRate = _hasPrevIntegRate ? _prevIntegRateDps : rate;
+        _prevIntegRateDps = rate;
+        _hasPrevIntegRate = true;
+        float before = _panDeg;
+        _panDeg += 0.5f * (prevRate + rate) * dtS;
+        clampIntegrator();
+        // O que foi EFETIVAMENTE aplicado (após o clamp), para o cancelamento
+        // da janela desfazer exatamente isso.
+        _windowDeltaDeg += _panDeg - before;
     }
 
     _windowGySumDps += gyDps;
     _windowGzSumDps += gzDps;
     _windowSamples++;
+    if (_biasReady) {
+        float peak = hypotf(gyDps - _biasGyDps, gzDps - _biasGzDps);
+        if (peak > _windowPeakDps) {
+            _windowPeakDps = peak;
+        }
+    }
 
     if (now - _windowStartMs >= PAN_ZUPT_WINDOW_MS) {
         closeWindow(now);
@@ -147,14 +206,24 @@ void PanSensor::closeWindow(uint32_t now) {
             adoptBias(meanGyDps, meanGzDps);
         }
     } else {
-        float dGy = meanGyDps - _biasGyDps;
-        float dGz = meanGzDps - _biasGzDps;
-        if (hypotf(dGy, dGz) < PAN_ZUPT_RATE_THRESHOLD_DPS) {
-            // Janela parada: refina o bias e desfaz o que foi integrado nela,
-            // para o ruído do giro não virar random walk enquanto parado.
+        // A média da janela corresponde ao bias do MEIO da janela; o bias
+        // corrente já foi extrapolado até o fim dela.
+        float winS = (now - _windowStartMs) / 1000.0f;
+        float dGy = meanGyDps - (_biasGyDps - _biasSlopeGy * 0.5f * winS);
+        float dGz = meanGzDps - (_biasGzDps - _biasSlopeGz * 0.5f * winS);
+        if (hypotf(dGy, dGz) < PAN_ZUPT_RATE_THRESHOLD_DPS && _windowPeakDps < PAN_ZUPT_PEAK_DPS) {
+            // Janela parada: refina o bias (filtro alfa-beta: nível e
+            // velocidade de deriva) e desfaz o que foi integrado nela, para o
+            // ruído do giro não virar random walk enquanto parado.
             _biasGyDps += PAN_ZUPT_BIAS_ALPHA * dGy;
             _biasGzDps += PAN_ZUPT_BIAS_ALPHA * dGz;
+            if (winS > 0.0f) {
+                _biasSlopeGy = clampSlope(_biasSlopeGy + PAN_ZUPT_SLOPE_BETA * dGy / winS);
+                _biasSlopeGz = clampSlope(_biasSlopeGz + PAN_ZUPT_SLOPE_BETA * dGz / winS);
+            }
+            _sinceStillS = 0.0f;
             _panDeg -= _windowDeltaDeg;
+            clampIntegrator();
             _mismatchWindows = 0;
             _mismatchDeltaDeg = 0.0f;
         } else {
@@ -169,6 +238,7 @@ void PanSensor::closeWindow(uint32_t now) {
                 // Parado sob bias errado: reaprende e desfaz a deriva da
                 // sequência inteira.
                 _panDeg -= _mismatchDeltaDeg;
+                clampIntegrator();
                 adoptBias(meanGyDps, meanGzDps);
             }
         }
@@ -177,10 +247,33 @@ void PanSensor::closeWindow(uint32_t now) {
     resetWindow(now);
 }
 
+float PanSensor::clampSlope(float slope) {
+    if (slope > PAN_BIAS_SLOPE_MAX_DPS2) return PAN_BIAS_SLOPE_MAX_DPS2;
+    if (slope < -PAN_BIAS_SLOPE_MAX_DPS2) return -PAN_BIAS_SLOPE_MAX_DPS2;
+    return slope;
+}
+
+void PanSensor::clampIntegrator() {
+    // Anti-windup: o integrador nunca passa da faixa mecânica. Sem isto, um
+    // erro qualquer que o empurrasse para além de ±PAN_MAX_DEG (leitura
+    // espúria, bias errado, a placa girada à mão além do curso) deixava a
+    // leitura presa no limite: girar de volta só descontava do excesso, e o
+    // valor mostrado não saía do lugar — "travado". Com o clamp, a volta
+    // responde na hora.
+    float lo = _offsetDeg + PAN_MIN_DEG;
+    float hi = _offsetDeg + PAN_MAX_DEG;
+    if (_panDeg < lo) _panDeg = lo;
+    if (_panDeg > hi) _panDeg = hi;
+}
+
 void PanSensor::adoptBias(float gyDps, float gzDps) {
     _biasGyDps = gyDps;
     _biasGzDps = gzDps;
     _biasReady = true;
+    _hasPrevIntegRate = false;
+    _biasSlopeGy = 0.0f;
+    _biasSlopeGz = 0.0f;
+    _sinceStillS = 0.0f;
     _mismatchWindows = 0;
     _mismatchDeltaDeg = 0.0f;
 }
@@ -191,6 +284,7 @@ void PanSensor::resetWindow(uint32_t now) {
     _windowGzSumDps = 0.0f;
     _windowSamples = 0;
     _windowDeltaDeg = 0.0f;
+    _windowPeakDps = 0.0f;
 }
 
 float PanSensor::readPanDeg() {
@@ -205,6 +299,7 @@ PanSensor::Diagnostics PanSensor::diagnostics() const {
         _panDeg, _offsetDeg, _biasGyDps, _biasGzDps, _prevMeanGyDps, _prevMeanGzDps,
         _lastGyDps, _lastGzDps, _lastTiltRad * 57.29578f, _sampleCount, _i2cFailures,
         _mismatchWindows, static_cast<uint8_t>(_biasReady ? 1 : 0), _spikeCount,
+        _mpu.recoveries(),
     };
 }
 

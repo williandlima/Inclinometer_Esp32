@@ -76,6 +76,11 @@ private:
     float _prevRawDeg = 0.0f;       // amostra anterior, para calcular a derivada
     float _lastRawDeg = 0.0f;       // última amostra válida (absoluta)
     bool _filterReady = false;      // primeira amostra inicializa o filtro direto
+
+    // Mediana móvel do ângulo cru, antes do filtro (ver update()).
+    static constexpr int ANGLE_DESPIKE_LEN = 5;
+    float _rawHist[ANGLE_DESPIKE_LEN] = {};
+    int _rawHistCount = 0;
     uint32_t _lastSampleMs = 0;
 
     // Caminho de medida: filtro leve de 1 polo em ANGLE_PEAK_CUTOFF_HZ,

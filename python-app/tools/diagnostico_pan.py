@@ -32,13 +32,14 @@ VERSION_UUID = "6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f"
 FIELDS = (
     "pan_interno", "offset", "bias_gy", "bias_gz", "media_gy", "media_gz",
     "gy", "gz", "tilt", "amostras", "falhas_i2c", "janelas_fora_bias", "bias_pronto", "espurias",
+    "recuperacoes_mpu",
 )
-_FORMAT = "<9fIIHBI"  # 51 bytes, ver CHAR_PAN_DIAGNOSTICS_UUID
+_FORMAT = "<9fIIHBII"  # 55 bytes, ver CHAR_PAN_DIAGNOSTICS_UUID
 
 
 def parse_diagnostics(raw: bytes) -> dict:
     raw = bytes(raw)
-    if len(raw) < struct.calcsize(_FORMAT):  # firmware 1.6.3: sem o contador de espúrias
+    if len(raw) < struct.calcsize(_FORMAT):  # firmware antigo: sem os contadores do fim
         raw = raw + b"\x00" * (struct.calcsize(_FORMAT) - len(raw))
     return dict(zip(FIELDS, struct.unpack(_FORMAT, raw[: struct.calcsize(_FORMAT)])))
 
@@ -74,7 +75,7 @@ async def run(address: str | None, seconds: float | None) -> None:
             sys.exit("Este diagnóstico exige firmware 1.6.3 ou mais novo.")
         print(f"Gravando em {filename}. Enter = Calibrar, Ctrl+C = sair.\n")
         print(f"{'t(s)':>6} {'pan':>8} {'interno':>10} {'bias gy':>8} {'bias gz':>8} "
-              f"{'méd gy':>8} {'méd gz':>8} {'tilt':>7} {'amostr/s':>8} {'falhas':>6} {'espúr':>6} {'fora':>4} {'pronto':>6}")
+              f"{'méd gy':>8} {'méd gz':>8} {'tilt':>7} {'amostr/s':>8} {'falhas':>6} {'espúr':>6} {'reset':>5} {'fora':>4} {'pronto':>6}")
 
         with open(filename, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f, delimiter=";")
@@ -98,7 +99,7 @@ async def run(address: str | None, seconds: float | None) -> None:
                 last_samples, last_t = d["amostras"], t
                 print(f"{t:6.1f} {pan:8.2f} {d['pan_interno'] - d['offset']:10.2f} "
                       f"{d['bias_gy']:8.3f} {d['bias_gz']:8.3f} {d['media_gy']:8.3f} {d['media_gz']:8.3f} "
-                      f"{d['tilt']:7.2f} {rate:8.1f} {d['falhas_i2c']:6d} {d['espurias']:6d} {d['janelas_fora_bias']:4d} "
+                      f"{d['tilt']:7.2f} {rate:8.1f} {d['falhas_i2c']:6d} {d['espurias']:6d} {d['recuperacoes_mpu']:5d} {d['janelas_fora_bias']:4d} "
                       f"{d['bias_pronto']:6d}")
                 writer.writerow((f"{t:.2f}", f"{pan:.2f}", *(d[k] for k in FIELDS), event))
                 f.flush()

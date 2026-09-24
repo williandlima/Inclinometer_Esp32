@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.4`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.5`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -146,6 +146,21 @@ simulados, e roda o pan com mudanças de posição da placa e o Modo Vibração
 via BLE de ponta a ponta com o código real do app Python (inclusive com
 perda de pacotes). Não substitui o teste em bancada — não mede tempo real
 de I2C/rádio —, mas pega erros de lógica e de contrato BLE.
+
+O **teste de resistência** (`sim/soak_sim.cpp`, parte do `run.sh`) roda o
+firmware inteiro — inclusive o driver I2C real, `Mpu6050.cpp` — contra um
+MPU6050 emulado no nível de registrador, por 30 min simulados em cada uma
+de 20 sementes (`SOAK_SEEDS=100 sim/run.sh` para mais), com giros e
+mudanças de tilt aleatórios (inclusive além do curso), uma calibração no
+meio, bias de fábrica de até ±20°/s com deriva térmica de ±3°/s, vibração,
+e falhas de hardware injetadas: NACK e leitura curta, quadros de lixo e
+0xFF, picos isolados no giro, barramento travado, reset do sensor (volta
+em SLEEP lendo zeros) e loop parado. Ao fim de cada período parado a
+leitura é comparada com a verdade física: tolerância de 1,0° no pan e
+0,3° no tilt. Com o `PanSensor` da 1.6.4 o pior erro é de 85° (trava no
+limite); na 1.6.5, 0,57° (100 sementes: mediana 0,29°, pior 0,96°).
+`SOAK_FAULTS` (máscara de bits, ver o código) liga cada tipo de falha
+isoladamente, e `SOAK_VERBOSE`/`SOAK_TRACE` ajudam a investigar.
 
 **Diagnóstico do pan em campo** (1.6.3+): a characteristic read-only
 `CHAR_PAN_DIAGNOSTICS_UUID` expõe o estado interno do `PanSensor` (integrador
@@ -561,6 +576,31 @@ tela de configuração, em vez de truncar em silêncio.
   testes feitos com o tilt zerado — testar panning com o tilt em ±45°/±60° e
   conferir se bate com a mesma medida feita em `θ=0`. Resolve junto com a
   confirmação de montagem do `atan2(ay, az)`, que já estava pendente.
+- **[corrigido na 1.6.5] Robustez contra falhas de hardware**, encontradas
+  pelo teste de resistência (`sim/soak_sim.cpp`):
+  - **leitura I2C que falhava durante um giro jogava fora 10 ms de rotação**
+    (o relógio da integração avançava mesmo sem amostra) — 0,2° perdidos
+    por falha, em silêncio;
+  - **sensor reiniciado nunca era reconfigurado**: numa queda de
+    alimentação o MPU6050 volta em SLEEP, lendo zeros, até o próximo boot
+    do ESP32. `Mpu6050::maintain()` relê a configuração a cada 1 s e
+    reconfigura; com 20 leituras seguidas falhando, reinicia também o
+    periférico I2C;
+  - **quadros de lixo** (bytes 0xFF, zeros, aceleração com módulo fora de
+    0,5–2 g, giro no fundo de escala) são descartados no driver;
+  - **leitura travada no limite**: o integrador agora é limitado à faixa
+    (anti-windup) — passar de ±90° e voltar responde na hora, em vez de só
+    descontar do excesso;
+  - **tilt**: mediana de 5 amostras antes do filtro 1-euro, que seguia um
+    pico isolado e levava segundos para esquecê-lo (e o gravava nos
+    extremos); o tilt da projeção do pan também passa pela mediana;
+  - **depois de um buraco** (loop atrasado, leituras perdidas) o histórico
+    da mediana é descartado e o buraco só é integrado com 5 amostras novas;
+  - **precisão**: integração por trapézio (erro de até 0,2° por borda de
+    giro), janela só é "parada" se nenhuma amostra passar de 8°/s (bordas
+    de giro eram canceladas como ruído), e bias com estimativa da
+    velocidade de deriva térmica (filtro alfa-beta) extrapolada durante os
+    giros.
 - **[1.2.0 → corrigido na 1.6.4] Pan da placa PARADA derivava até cravar
   em ±90° depois de alguns minutos.** Uma única leitura errada do giroscópio
   no barramento I2C (ex.: −250°/s por 10 ms) tirava a janela de ZUPT da
