@@ -12,7 +12,7 @@ espaçamento 1,5.
 
 | Documento | Rev. | Conteúdo |
 |---|---|---|
-| [relatorio-tecnico-inclinometro.docx](relatorio-tecnico-inclinometro.docx) | 02 | Relatório técnico do projeto: fundamentação teórica, arquitetura do sistema, cálculos e modelagem matemática, protocolos de comunicação, modos de operação e resultados/validação. |
+| [relatorio-tecnico-inclinometro.docx](relatorio-tecnico-inclinometro.docx) | 03 | Relatório técnico do projeto: fundamentação teórica, arquitetura do sistema, cálculos e modelagem matemática, protocolos de comunicação, modos de operação e resultados/validação. |
 | [lista-de-materiais-hardware.docx](lista-de-materiais-hardware.docx) | 00 | Lista de materiais (BOM): componentes, especificações técnicas, datasheets dos fabricantes, ligações elétricas do sensor e opções de alimentação em avaliação. |
 
 A revisão 01 do relatório técnico acompanha o firmware **1.4.0**: taxa de
@@ -22,7 +22,12 @@ espectral (interpolação do pico em decibéis e piso de ruído medido em janela
 local). A revisão 02 acompanha o firmware **1.6.0**: filtro adaptativo
 "1-euro" na leitura contínua exibida na tela, e extremos (mín./máx.) medidos
 pelo próprio firmware a 100 Hz, em caminho de filtragem separado do caminho
-de exibição — ver `firmware/README.md`.
+de exibição — ver `firmware/README.md`. A revisão 03 acompanha o firmware
+**1.6.1**, após o primeiro ensaio em bancada: viés do giroscópio estimado por
+eixo (o azimute travava em ±90° ao mudar a inclinação), orçamento de handles
+do serviço BLE (as características do Modo Vibração e da versão não eram
+registradas), retransmissão adaptativa, e a validação de ponta a ponta do
+Modo Vibração via BLE (`sim/run.sh`).
 
 ## Procedimentos de teste e instalação (formulário padrão da empresa)
 

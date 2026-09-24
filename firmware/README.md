@@ -245,7 +245,7 @@ sinais sintéticos (bias de fábrica de 5°/s, ruído, vibração, tilt fixo):
 | Parado 60s sob vibração de 3°/s de pico | 0,004° de deriva |
 | 60° de pan com o sensor a 60° de tilt | 60,02° (sem a compensação daria 30°) |
 | 40 movimentos de ±45°, voltando ao zero | 0,066° de erro residual |
-| **1.6.1:** placa parada, tilt muda 0→45° (bias típico) | 0,00° (na 1.6.0: travava em −90° em ~80 s) |
+| **1.6.1:** placa parada, tilt muda 0→45° (bias típico) | 0,00° (na 1.6.0: travava em −90° em ~1 min) |
 | **1.6.1:** pan +30°, tilt 0→45° e volta a 0° | 29,76° mantido (na 1.6.0: −39,5°, sem recuperar) |
 | **1.6.1:** bias de ±15°/s, tilt 0→60°, pan +30°, tilt 60→10° | 29,75° mantido |
 
