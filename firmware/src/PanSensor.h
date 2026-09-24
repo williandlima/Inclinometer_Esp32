@@ -150,6 +150,25 @@ public:
     // a análise espectral já o descarta por construção.
     float readInstantRateDps();
 
+    // Estado interno para diagnóstico em campo (characteristic
+    // CHAR_PAN_DIAGNOSTICS_UUID, lida por python-app/tools/diagnostico_pan.py).
+    struct Diagnostics {
+        float panDeg;       // integrador interno, sem offset e sem clamp
+        float offsetDeg;
+        float biasGyDps;
+        float biasGzDps;
+        float meanGyDps;    // média da última janela fechada
+        float meanGzDps;
+        float gyDps;        // última amostra crua
+        float gzDps;
+        float tiltDeg;      // atan2(ay, az) da última amostra
+        uint32_t samples;   // amostras válidas desde o boot
+        uint32_t i2cFailures;
+        uint16_t mismatchWindows;
+        uint8_t biasReady;
+    };
+    Diagnostics diagnostics() const;
+
 private:
     Mpu6050 &_mpu;
 
@@ -180,6 +199,12 @@ private:
     // Sequência corrente de janelas coerentes entre si mas longe do bias.
     uint16_t _mismatchWindows = 0;
     float _mismatchDeltaDeg = 0.0f;  // integrado ao longo dessa sequência
+
+    float _lastGyDps = 0.0f;
+    float _lastGzDps = 0.0f;
+    float _lastTiltRad = 0.0f;
+    uint32_t _sampleCount = 0;
+    uint32_t _i2cFailures = 0;
 
     PeakHold _peaks{1};  // sem teste de persistência — ver minPanDeg() acima
 

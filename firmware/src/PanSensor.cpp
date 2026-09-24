@@ -42,8 +42,13 @@ void PanSensor::update() {
 
     float gyDps, gzDps, tiltRad;
     if (!sampleMotion(gyDps, gzDps, tiltRad)) {
+        _i2cFailures++;
         return;  // falha de I2C: preserva o estado em vez de corrompê-lo
     }
+    _lastGyDps = gyDps;
+    _lastGzDps = gzDps;
+    _lastTiltRad = tiltRad;
+    _sampleCount++;
 
     if (!_hasLastSample) {
         // Primeira amostra: sem intervalo anterior, não há dt para integrar.
@@ -153,6 +158,14 @@ float PanSensor::readPanDeg() {
     if (pan < PAN_MIN_DEG) pan = PAN_MIN_DEG;
     if (pan > PAN_MAX_DEG) pan = PAN_MAX_DEG;
     return pan;
+}
+
+PanSensor::Diagnostics PanSensor::diagnostics() const {
+    return Diagnostics{
+        _panDeg, _offsetDeg, _biasGyDps, _biasGzDps, _prevMeanGyDps, _prevMeanGzDps,
+        _lastGyDps, _lastGzDps, _lastTiltRad * 57.29578f, _sampleCount, _i2cFailures,
+        _mismatchWindows, static_cast<uint8_t>(_biasReady ? 1 : 0),
+    };
 }
 
 float PanSensor::minPanDeg() {

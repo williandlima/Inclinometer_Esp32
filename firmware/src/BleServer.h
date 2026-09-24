@@ -68,6 +68,9 @@ private:
     volatile bool _calibratePending = false;
     volatile bool _resetPeaksPending = false;
 
+    // Atualiza o valor (sem notify) da characteristic de diagnóstico do pan.
+    void updatePanDiagnostics();
+
     // Último pacote de extremos enviado, para notificar só quando muda.
     uint16_t _lastSentPeaks[4] = {0, 0, 0, 0};
     bool _hasSentPeaks = false;

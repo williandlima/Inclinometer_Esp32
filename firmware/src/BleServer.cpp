@@ -5,6 +5,7 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <math.h>
+#include <string.h>
 
 #include "Config.h"
 
@@ -15,6 +16,7 @@ BLECharacteristic *vibrationStatusChar = nullptr;
 BLECharacteristic *vibrationDataChar = nullptr;
 BLECharacteristic *vibrationPanDataChar = nullptr;
 BLECharacteristic *peaksChar = nullptr;
+BLECharacteristic *panDiagnosticsChar = nullptr;
 BleServer *self = nullptr;  // única instância — usada pelos callbacks estáticos do BLE
 
 // Sinalizado pelo callback de desconexão e consumido no loop principal.
@@ -22,7 +24,7 @@ volatile bool restartAdvertisingPending = false;
 
 // Orçamento de handles GATT do serviço. createService(const char*) reserva só
 // 15, e cada characteristic consome 2 (declaração + valor) mais 1 por
-// descritor BLE2902 — este serviço usa 29. Estourando o orçamento a lib não
+// descritor BLE2902 — este serviço usa 31. Estourando o orçamento a lib não
 // dá erro: só deixa de registrar, em silêncio, as characteristics que não
 // couberam (era o que fazia o app não achar as do Modo Vibração nem a da
 // versão do firmware). Refazer a conta ao adicionar characteristic.
@@ -147,6 +149,9 @@ void BleServer::begin() {
     };
     firmwareVersionChar->setValue(versionPayload, 2);
 
+    panDiagnosticsChar =
+        service->createCharacteristic(CHAR_PAN_DIAGNOSTICS_UUID, BLECharacteristic::PROPERTY_READ);
+
     service->start();
 
     BLEAdvertising *advertising = BLEDevice::getAdvertising();
@@ -231,6 +236,22 @@ void BleServer::notifyAngles() {
     panChar->notify();
 
     notifyPeaks();
+    updatePanDiagnostics();
+}
+
+void BleServer::updatePanDiagnostics() {
+    PanSensor::Diagnostics d = _pan.diagnostics();
+    const float floats[9] = {
+        d.panDeg, d.offsetDeg, d.biasGyDps, d.biasGzDps, d.meanGyDps,
+        d.meanGzDps, d.gyDps, d.gzDps, d.tiltDeg,
+    };
+    uint8_t payload[47];
+    memcpy(payload, floats, sizeof(floats));  // ESP32 é little-endian
+    memcpy(payload + 36, &d.samples, 4);
+    memcpy(payload + 40, &d.i2cFailures, 4);
+    memcpy(payload + 44, &d.mismatchWindows, 2);
+    payload[46] = d.biasReady;
+    panDiagnosticsChar->setValue(payload, sizeof(payload));
 }
 
 void BleServer::notifyPeaks() {

@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from data_source.ble_source import BleAngleSource
 from limits.vibration_stats import analyze_axis
 from limits.limit_tracker import TILT_AXIS, PAN_AXIS
+from tools.diagnostico_pan import parse_diagnostics
 
 DATA_UUIDS = {"6e6e0006-3c17-4a2e-8f4b-1a2b3c4d5e6f", "6e6e0009-3c17-4a2e-8f4b-1a2b3c4d5e6f"}
 
@@ -101,7 +102,7 @@ def report(title, result, client, wall):
 
 
 DUR, RATE = 10, 500
-ALL_UUIDS = {f"6e6e00{n}-3c17-4a2e-8f4b-1a2b3c4d5e6f" for n in ("02", "03", "04", "05", "06", "07", "08", "09", "0a", "0b", "0c")}
+ALL_UUIDS = {f"6e6e00{n}-3c17-4a2e-8f4b-1a2b3c4d5e6f" for n in ("02", "03", "04", "05", "06", "07", "08", "09", "0a", "0b", "0c", "0d")}
 
 
 async def main():
@@ -109,10 +110,19 @@ async def main():
     client = FakeBleakClient(exe)
     missing = ALL_UUIDS - client.chars
     version = await client.read_gatt_char("6e6e0007-3c17-4a2e-8f4b-1a2b3c4d5e6f") if not missing else b"??"
+    diag_ok = True
+    if not missing:
+        # Diagnóstico do pan, decodificado pelo MESMO parser da ferramenta de campo.
+        client.run(5000)
+        d = parse_diagnostics(await client.read_gatt_char("6e6e000d-3c17-4a2e-8f4b-1a2b3c4d5e6f"))
+        diag_ok = (d["bias_pronto"] == 1 and abs(d["bias_gy"] - 3.0) < 0.2 and abs(d["bias_gz"] + 2.0) < 0.2
+                   and 450 <= d["amostras"] <= 510 and d["falhas_i2c"] == 0)
+        print(f"diagnóstico do pan: bias gy={d['bias_gy']:.3f} gz={d['bias_gz']:.3f} (esperado 3,0/-2,0), "
+              f"amostras={d['amostras']}, pronto={d['bias_pronto']}  {'OK' if diag_ok else 'FALHOU'}")
     client.close()
     print(f"characteristics registrados: {len(client.chars)}/{len(ALL_UUIDS)}"
           + (f"  FALTANDO: {sorted(missing)}" if missing else "  OK"))
-    ok = not missing
+    ok = not missing and diag_ok
     if not missing:
         code = version[0] | (version[1] << 8)
         print(f"versão do firmware lida via BLE: {code // 10000}.{(code // 100) % 100}.{code % 100}")

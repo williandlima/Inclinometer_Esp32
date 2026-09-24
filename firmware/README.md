@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.2`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.3`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -146,6 +146,14 @@ simulados, e roda o pan com mudanças de posição da placa e o Modo Vibração
 via BLE de ponta a ponta com o código real do app Python (inclusive com
 perda de pacotes). Não substitui o teste em bancada — não mede tempo real
 de I2C/rádio —, mas pega erros de lógica e de contrato BLE.
+
+**Diagnóstico do pan em campo** (1.6.3+): a characteristic read-only
+`CHAR_PAN_DIAGNOSTICS_UUID` expõe o estado interno do `PanSensor` (integrador
+sem clamp, offset, bias por eixo, médias da última janela, amostra crua,
+tilt, contadores de amostras e de falhas de I2C). `python-app/tools/
+diagnostico_pan.py` lê isso via Bluetooth duas vezes por segundo, mostra na
+tela e grava um CSV — Enter envia Calibrar, marcado no arquivo. Os apps não
+usam essa characteristic.
 
 **Não foi possível compilar neste ambiente de desenvolvimento**: o
 `pio run` precisa baixar o toolchain/plataforma `espressif32` da internet
