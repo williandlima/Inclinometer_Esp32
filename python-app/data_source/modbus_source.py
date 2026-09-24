@@ -226,36 +226,66 @@ class ConnectionTestResult(NamedTuple):
     pan_deg: float | None = None
 
 
-def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 1.0) -> ConnectionTestResult:
+# Tolerância do teste de conexão. O teste precisa ser tão tolerante quanto a
+# leitura contínua (que aceita READ_FAILURES_BEFORE_RECONNECT falhas seguidas
+# e reabre a porta): mais rígido que ela, ele reprovava uma placa que a
+# leitura normal usava sem problema — o caso em que a primeira resposta logo
+# depois do reset (que a abertura da porta provoca) não chega. Cada tentativa
+# é curta (sem os retries internos do pymodbus) para o diálogo não ficar
+# congelado muito tempo.
+TEST_READ_ATTEMPTS = 4
+TEST_READ_RETRY_DELAY_S = 0.5
+TEST_OPEN_CYCLES = 2
+
+
+def test_connection(
+    port: str, baudrate: int, slave_id: int, timeout_s: float = 1.0, open_cycles: int = TEST_OPEN_CYCLES
+) -> ConnectionTestResult:
     """Testa a conexão Modbus RTU (via USB) com o ESP32: abre a porta, lê o
-    ângulo e a versão do firmware uma única vez, e fecha a conexão. Retorna
-    ambos em caso de sucesso; levanta exceção (IOError/RuntimeError) em caso
-    de falha.
+    ângulo e a versão do firmware, e fecha a conexão. Tenta a leitura
+    TEST_READ_ATTEMPTS vezes e, se nenhuma responder, reabre a porta (novo
+    reset da placa) até `open_cycles` vezes — ver TEST_READ_ATTEMPTS. Levanta
+    exceção (IOError/RuntimeError) se nada der certo.
     """
     from pymodbus.client import ModbusSerialClient
 
-    client = ModbusSerialClient(port=port, baudrate=baudrate, timeout=timeout_s)
-    try:
-        connected = False
-        for attempt in range(CONNECT_RETRY_ATTEMPTS):
-            if client.connect():
-                connected = True
-                break
-            if attempt < CONNECT_RETRY_ATTEMPTS - 1:
-                time.sleep(CONNECT_RETRY_DELAY_S)
-        if not connected:
-            raise IOError(f"Não foi possível abrir a porta serial {port}.")
-        time.sleep(BOARD_RESET_GRACE_S)  # ver BOARD_RESET_GRACE_S: a porta abrir já reseta o ESP32
-        sample = _read_axes(client, slave_id, SlaveCapabilities())
+    last_error: Exception | None = None
+    for _cycle in range(open_cycles):
+        client = ModbusSerialClient(port=port, baudrate=baudrate, timeout=timeout_s, retries=0)
+        try:
+            connected = False
+            for attempt in range(CONNECT_RETRY_ATTEMPTS):
+                if client.connect():
+                    connected = True
+                    break
+                if attempt < CONNECT_RETRY_ATTEMPTS - 1:
+                    time.sleep(CONNECT_RETRY_DELAY_S)
+            if not connected:
+                raise IOError(f"Não foi possível abrir a porta serial {port}.")
+            time.sleep(BOARD_RESET_GRACE_S)  # ver BOARD_RESET_GRACE_S: a porta abrir já reseta o ESP32
 
-        version_result = client.read_input_registers(address=FIRMWARE_VERSION_REGISTER, count=1, device_id=slave_id)
-        firmware_version = (
-            _decode_firmware_version(version_result.registers[0]) if not version_result.isError() else "?"
-        )
+            sample = None
+            for attempt in range(TEST_READ_ATTEMPTS):
+                try:
+                    sample = _read_axes(client, slave_id, SlaveCapabilities())
+                    break
+                except Exception as exc:  # noqa: BLE001 - tenta de novo
+                    last_error = exc
+                    if attempt < TEST_READ_ATTEMPTS - 1:
+                        time.sleep(TEST_READ_RETRY_DELAY_S)
+            if sample is None:
+                continue  # reabre a porta (novo reset da placa)
 
-        return ConnectionTestResult(sample.angle_deg, firmware_version, sample.pan_deg)
-    finally:
-        client.close()
+            version_result = client.read_input_registers(
+                address=FIRMWARE_VERSION_REGISTER, count=1, device_id=slave_id
+            )
+            firmware_version = (
+                _decode_firmware_version(version_result.registers[0]) if not version_result.isError() else "?"
+            )
+            return ConnectionTestResult(sample.angle_deg, firmware_version, sample.pan_deg)
+        finally:
+            client.close()
+    raise IOError(f"O ESP32 não respondeu na porta {port}: {last_error}")
 
 
 # Teto de tempo para testar UMA porta, usado por `_probe_port` abaixo.
@@ -263,7 +293,7 @@ def test_connection(port: str, baudrate: int, slave_id: int, timeout_s: float = 
 # (com folga), mas existe sobretudo para as portas erradas: sem ele, uma
 # porta "fantasma" (ver `_looks_like_bluetooth_port`) pode travar a busca
 # inteira por dezenas de segundos ou mais.
-PORT_PROBE_TIMEOUT_S = 6.0
+PORT_PROBE_TIMEOUT_S = 10.0
 
 
 def _looks_like_bluetooth_port(port_info) -> bool:
@@ -297,7 +327,8 @@ def _probe_port(port: str, baudrate: int, slave_id: int, timeout_s: float) -> bo
 
     def attempt() -> None:
         try:
-            test_connection(port, baudrate, slave_id, timeout_s=timeout_s)
+            # Um ciclo só: cada porta errada já custa o teto inteiro.
+            test_connection(port, baudrate, slave_id, timeout_s=timeout_s, open_cycles=1)
             result[0] = True
         except Exception:  # noqa: BLE001 - porta errada, ou nada conectado nela
             result[0] = False
