@@ -379,16 +379,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    suspend fun generateReportFile(): File? {
+    suspend fun generateReportFile(): File? = reportOrNull {
         val sessionId = currentSessionId ?: repository.listSessions().firstOrNull()?.id ?: run {
             _uiState.update { it.copy(statusMessage = "Ainda não há nenhuma sessão registrada.") }
-            return null
+            return@reportOrNull null
         }
-        val session = repository.getSession(sessionId) ?: return null
+        val session = repository.getSession(sessionId) ?: return@reportOrNull null
         val readings = repository.getReadings(sessionId)
         val events = repository.getLimitEvents(sessionId)
-        return PdfReportGenerator.generate(getApplication(), session, readings, events)
+        PdfReportGenerator.generate(getApplication(), session, readings, events)
     }
+
+    /**
+     * Roda a geração de um relatório; uma falha (ex.: armazenamento
+     * indisponível) vira mensagem de status em vez de derrubar o app — a
+     * chamada vem de uma coroutine da tela, sem tratamento de exceção.
+     */
+    private suspend fun reportOrNull(block: suspend () -> File?): File? =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _uiState.update { it.copy(statusMessage = "Falha ao gerar relatório: ${e.message}") }
+            null
+        }
 
     // ------------------------------------------------------------ calibração
 
@@ -488,11 +503,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(vibrationResult = null, vibrationPanResult = null) }
     }
 
-    suspend fun generateVibrationReportFile(): File? {
-        val captureId = lastVibrationCaptureId ?: return null
+    suspend fun generateVibrationReportFile(): File? = reportOrNull {
+        val captureId = lastVibrationCaptureId ?: return@reportOrNull null
         val readings = lastVibrationReadings
-        if (readings.isEmpty()) return null
-        val captureInfo = repository.listVibrationCaptures().firstOrNull { it.id == captureId } ?: return null
+        if (readings.isEmpty()) return@reportOrNull null
+        val captureInfo = repository.listVibrationCaptures().firstOrNull { it.id == captureId }
+            ?: return@reportOrNull null
         val rateHz = lastVibrationRateHz.coerceAtLeast(1)
         val tilt = VibrationStatsCalculator.analyzeAxis(readings, rateHz, LimitAxis.TILT)
         val pan = if (VibrationStatsCalculator.hasPanSamples(readings)) {
@@ -500,7 +516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             null
         }
-        return PdfReportGenerator.generateVibrationReport(
+        PdfReportGenerator.generateVibrationReport(
             getApplication(),
             captureInfo,
             readings,

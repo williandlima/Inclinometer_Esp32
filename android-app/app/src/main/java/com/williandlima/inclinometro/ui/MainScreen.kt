@@ -2,6 +2,7 @@ package com.williandlima.inclinometro.ui
 
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -577,11 +578,16 @@ private fun BleScanDialog(
 }
 
 private fun sharePdf(context: Context, file: File) {
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "application/pdf"
-        putExtra(Intent.EXTRA_STREAM, uri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    try {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Compartilhar relatório"))
+    } catch (e: Exception) {
+        // O PDF já está salvo; só o compartilhamento falhou — sem derrubar o app.
+        Toast.makeText(context, "Relatório salvo, mas não foi possível compartilhar: ${e.message}", Toast.LENGTH_LONG).show()
     }
-    context.startActivity(Intent.createChooser(intent, "Compartilhar relatório"))
 }
