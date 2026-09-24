@@ -1,0 +1,23 @@
+# Roda os testes sem hardware (sim/run.sh) a cada push e pull request:
+# firmware real compilado no PC contra sensor/BLE/serial simulados, e o
+# código real do app Python — pan, teste de resistência com falhas
+# injetadas, Modo Vibração via BLE e o modo USB (Modbus) de ponta a ponta.
+name: Testes de simulação
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  simulacao:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Dependências do app
+        run: pip install -r python-app/requirements.txt
+      - name: sim/run.sh
+        run: bash sim/run.sh

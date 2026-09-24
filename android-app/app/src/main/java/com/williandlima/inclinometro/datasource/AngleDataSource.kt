@@ -14,6 +14,12 @@ interface AngleDataSource {
     /** Fluxo contínuo de leituras. Cancelar a coleta encerra a conexão/loop. */
     fun readings(): Flow<AngleReading>
 
+    /**
+     * Versão do firmware do ESP32 conectado ("1.6.6"), lida ao conectar;
+     * `null` enquanto não foi lida, ou se a fonte não tem firmware (simulação).
+     */
+    val firmwareVersion: String? get() = null
+
     /** Indica se esta fonte suporta [calibrate]. Por padrão, não. */
     val supportsCalibration: Boolean get() = false
 

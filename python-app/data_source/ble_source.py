@@ -262,10 +262,15 @@ class BleAngleSource(IAngleDataSource):
         # fim da janela de graça após um reset — ver `_handle_notify`.
         self._peaks_subscribed = False
         self._peaks_ignore_until = 0.0
+        self._firmware_version: str | None = None
 
     @property
     def label(self) -> str:
         return f"Bluetooth BLE ({self._device_address})"
+
+    @property
+    def firmware_version(self) -> str | None:
+        return self._firmware_version
 
     @property
     def supports_calibration(self) -> bool:
@@ -674,6 +679,14 @@ class BleAngleSource(IAngleDataSource):
             ) as client:
                 self._client = client
                 connected_ok = True
+                # Versão do firmware, para a tela principal. Só diagnóstico:
+                # firmware antigo sem a característica não derruba a sessão.
+                try:
+                    self._firmware_version = _decode_firmware_version(
+                        await client.read_gatt_char(FIRMWARE_VERSION_CHARACTERISTIC_UUID)
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 await client.start_notify(ANGLE_CHARACTERISTIC_UUID, _handle_notify)
                 last_notify_at[0] = time.monotonic()
 

@@ -49,9 +49,9 @@ import java.util.UUID
  *   tem essa característica — a captura sai só com o tilt.
  * - Versão do firmware: [FIRMWARE_VERSION_CHARACTERISTIC_UUID], read-only,
  *   2 bytes little-endian = `major*10000 + minor*100 + patch` (ex: "1.0.0"
- *   -> 10000). Valor fixo (não muda em runtime, sem notify) — ainda não
- *   lido pelo app Android (só documentado aqui para paridade de contrato;
- *   o app desktop já exibe no teste de conexão).
+ *   -> 10000). Valor fixo (não muda em runtime, sem notify) — lido uma vez
+ *   ao conectar e exibido na tela principal, com aviso se for mais antigo
+ *   que [MIN_RECOMMENDED_FIRMWARE_CODE].
  */
 object BleContract {
     val SERVICE_UUID: UUID = UUID.fromString("6e6e0001-3c17-4a2e-8f4b-1a2b3c4d5e6f")
@@ -70,6 +70,22 @@ object BleContract {
     val CLIENT_CHARACTERISTIC_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     const val ANGLE_SCALE = 100.0
+
+    /**
+     * Firmware mais antigo que isto funciona, mas sem correções importantes
+     * (pan travando, Modo Vibração via USB) — a tela avisa para regravar.
+     * Mesmo formato de [FIRMWARE_VERSION_CHARACTERISTIC_UUID] (1.6.6 -> 10606).
+     */
+    const val MIN_RECOMMENDED_FIRMWARE_CODE = 10606
+
+    fun decodeFirmwareVersion(code: Int): String = "${code / 10000}.${(code / 100) % 100}.${code % 100}"
+
+    /** true se [version] ("1.6.1") for mais antiga que a recomendada. */
+    fun firmwareOutdated(version: String?): Boolean {
+        val parts = version?.split(".")?.mapNotNull { it.toIntOrNull() } ?: return false
+        if (parts.size != 3) return false
+        return parts[0] * 10000 + parts[1] * 100 + parts[2] < MIN_RECOMMENDED_FIRMWARE_CODE
+    }
 
     /** Amostra de vibração do azimute = graus/s * 100 (int16, +-327°/s). */
     const val PAN_RATE_SCALE = 100.0

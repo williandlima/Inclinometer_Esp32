@@ -96,6 +96,22 @@ def build_vibration_readings(
     ]
 
 
+# Firmware mais antigo que isto funciona, mas sem correções importantes
+# (pan travando, Modo Vibração via USB) — a tela avisa para regravar.
+MIN_RECOMMENDED_FIRMWARE = (1, 6, 6)
+
+
+def firmware_outdated(version: str | None) -> bool:
+    """True se `version` ("1.6.1") for mais antiga que MIN_RECOMMENDED_FIRMWARE."""
+    if not version:
+        return False
+    try:
+        parts = tuple(int(p) for p in version.split("."))
+    except ValueError:
+        return False
+    return parts < MIN_RECOMMENDED_FIRMWARE
+
+
 ReadingCallback = Callable[[AngleReading], None]
 ErrorCallback = Callable[[str], None]
 # Percentual 0-100 e, opcionalmente, o rótulo da fase atual. A captura tem
@@ -121,6 +137,13 @@ class IAngleDataSource(ABC):
     @abstractmethod
     def label(self) -> str:
         """Nome curto exibido na UI (ex: 'Simulação' ou 'USB/Modbus RTU')."""
+
+    @property
+    def firmware_version(self) -> str | None:
+        """Versão do firmware do ESP32 conectado ("1.6.6"), lida ao conectar;
+        `None` enquanto não foi lida, ou se a fonte não tem firmware
+        (simulação)."""
+        return None
 
     @property
     def supports_calibration(self) -> bool:

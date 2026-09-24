@@ -22,8 +22,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from app_version import APP_NAME
-from data_source.base import AngleReading, IAngleDataSource
+from app_version import APP_NAME, APP_VERSION
+from data_source.base import MIN_RECOMMENDED_FIRMWARE, AngleReading, IAngleDataSource, firmware_outdated
 from data_source.ble_source import BleAngleSource
 from data_source.modbus_source import ModbusAngleSource
 from data_source.simulated_source import SimulatedAngleSource
@@ -162,6 +162,7 @@ class MainWindow(QMainWindow):
         self._source: IAngleDataSource | None = None
         self._running = False
         self._vibration_progress_dialog: QProgressDialog | None = None
+        self._firmware_warned = False
         # Pasta do último relatório salvo (ver `_ask_report_path`).
         self._report_dir: str | None = None
         # Degrau atualmente exibido em cada eixo (histerese da exibição).
@@ -177,6 +178,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._update_mode_label()
         self._set_connection_status("parado")
+        self._update_version_label()
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -199,9 +201,13 @@ class MainWindow(QMainWindow):
         self.mode_label.setStyleSheet("font-size: 14px;")
         self.connection_label = QLabel()
         self.connection_label.setAlignment(Qt.AlignCenter)
+        # Versões do app e do firmware conectado (ver `_update_version_label`).
+        self.version_label = QLabel()
+        self.version_label.setAlignment(Qt.AlignCenter)
         status_row.addStretch(1)
         status_row.addWidget(self.mode_label)
         status_row.addWidget(self.connection_label)
+        status_row.addWidget(self.version_label)
         status_row.addStretch(1)
         root.addLayout(status_row)
 
@@ -372,6 +378,32 @@ class MainWindow(QMainWindow):
         estado = "em execução" if self._running else "parado"
         self.mode_label.setText(f"Modo: {modo} — {estado}")
 
+    def _update_version_label(self) -> None:
+        """Mostra "App vX · Firmware vY". A versão do firmware é lida pela
+        fonte ao conectar; firmware mais antigo que o recomendado aparece em
+        âmbar, com aviso na barra de status uma vez por sessão."""
+        app = f"App v{APP_VERSION}"
+        style = "font-size: 13px; color: #9aa7b5;"
+        if self._source is None:
+            firmware = "Firmware: —"
+        elif self._settings.mode == "simulado":
+            firmware = "Firmware: simulação"
+        else:
+            version = self._source.firmware_version
+            firmware = f"Firmware v{version}" if version else "Firmware: lendo..."
+            if firmware_outdated(version):
+                recommended = ".".join(str(p) for p in MIN_RECOMMENDED_FIRMWARE)
+                firmware += f" — desatualizado, grave a {recommended}"
+                style = "font-size: 13px; color: #f0a020; font-weight: bold;"
+                if not self._firmware_warned:
+                    self._firmware_warned = True
+                    self.statusBar().showMessage(
+                        f"Firmware v{version} desatualizado: grave a versão {recommended} no ESP32 "
+                        f"(correções de leitura do pan e do Modo Vibração)."
+                    )
+        self.version_label.setText(f"{app}  ·  {firmware}")
+        self.version_label.setStyleSheet(style)
+
     def _set_connection_status(self, status: str) -> None:
         text, style = _CONN_STYLES[status]
         self.connection_label.setText(text)
@@ -435,6 +467,8 @@ class MainWindow(QMainWindow):
         self._update_mode_label()
         self._set_connection_status("simulacao" if self._settings.mode == "simulado" else "conectando")
         self.statusBar().showMessage(f"Conectado: {self._source.label}")
+        self._firmware_warned = False
+        self._update_version_label()
 
     def _stop(self) -> None:
         if self._source is not None:
@@ -447,6 +481,7 @@ class MainWindow(QMainWindow):
         self._update_mode_label()
         self._set_connection_status("parado")
         self.statusBar().showMessage("Parado.")
+        self._update_version_label()
 
     def _reset_limits(self) -> None:
         was_running = self._running
@@ -553,6 +588,10 @@ class MainWindow(QMainWindow):
     def _on_reading(self, reading: AngleReading) -> None:
         if self._settings.mode in ("real", "ble"):
             self._set_connection_status("conectado")
+            if self._source is not None and not self.version_label.text().startswith(
+                f"App v{APP_VERSION}  ·  Firmware v"
+            ):
+                self._update_version_label()
         self._history.add_reading(reading)
 
         values = {TILT_AXIS: reading.angle_deg, PAN_AXIS: reading.pan_deg}

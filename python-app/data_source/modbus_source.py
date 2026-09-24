@@ -523,10 +523,31 @@ class ModbusAngleSource(IAngleDataSource):
         # Encolhe conforme o escravo rejeita registradores — ver o cabeçalho
         # do módulo.
         self._caps = SlaveCapabilities()
+        self._firmware_version: str | None = None
 
     @property
     def label(self) -> str:
         return f"USB/Modbus RTU ({self._port}@{self._baudrate}, id={self._slave_id})"
+
+    @property
+    def firmware_version(self) -> str | None:
+        return self._firmware_version
+
+    def _read_firmware_version(self, client) -> None:
+        """Lê a versão do firmware (registrador 40) logo após conectar. Só
+        diagnóstico: uma falha aqui não interrompe a leitura."""
+        for _ in range(3):
+            try:
+                result = client.read_input_registers(
+                    address=FIRMWARE_VERSION_REGISTER, count=1, device_id=self._slave_id
+                )
+                if not result.isError():
+                    self._firmware_version = _decode_firmware_version(result.registers[0])
+                    return
+                if _is_slave_exception(result):
+                    return  # firmware sem o registrador de versão
+            except Exception:  # noqa: BLE001 - tenta de novo
+                pass
 
     @property
     def supports_calibration(self) -> bool:
@@ -761,7 +782,8 @@ class ModbusAngleSource(IAngleDataSource):
                 # Espera o ESP32 responder (ver BOARD_READY_TIMEOUT_S). Se
                 # não responder, segue assim mesmo: o laço de leitura trata
                 # as falhas e reconecta.
-                _wait_until_ready(client, self._slave_id)
+                if _wait_until_ready(client, self._slave_id):
+                    self._read_firmware_version(client)
                 return client
             if attempt < CONNECT_RETRY_ATTEMPTS - 1:
                 self._stop_event.wait(CONNECT_RETRY_DELAY_S)

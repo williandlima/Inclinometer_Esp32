@@ -7,6 +7,7 @@ import com.williandlima.inclinometro.datasource.AngleDataSource
 import com.williandlima.inclinometro.datasource.AngleReading
 import com.williandlima.inclinometro.datasource.BleAngleDataSource
 import com.williandlima.inclinometro.datasource.BleConnectionTester
+import com.williandlima.inclinometro.datasource.BleContract
 import com.williandlima.inclinometro.datasource.BleScanner
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.datasource.SimulatedAngleDataSource
@@ -75,6 +76,9 @@ data class UiState(
     val statusMessage: String = "Pronto.",
     val bleDeviceAddress: String = "",
     val connectionStatus: ConnectionStatus = ConnectionStatus.PARADO,
+    // Versão do firmware do ESP32 conectado (null enquanto não lida / simulação).
+    val firmwareVersion: String? = null,
+    val firmwareOutdated: Boolean = false,
     val scanning: Boolean = false,
     val scanResults: List<BleScanner.Found> = emptyList(),
     val bleTestInProgress: Boolean = false,
@@ -227,6 +231,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     panMaxReading = null,
                     displayPan = null,
                     panAvailable = true,
+                    firmwareVersion = null,
+                    firmwareOutdated = false,
                     statusMessage = "Conectado: ${source.label}",
                     connectionStatus = if (mode == ConnectionMode.SIMULATED) {
                         ConnectionStatus.SIMULACAO
@@ -263,8 +269,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = currentSessionId ?: return
         repository.addReading(sessionId, reading)
         val pan = reading.panDeg
+        val firmware = currentSource?.firmwareVersion
         _uiState.update {
             it.copy(
+                firmwareVersion = firmware,
+                firmwareOutdated = BleContract.firmwareOutdated(firmware),
                 currentAngle = reading.angleDeg,
                 displayAngle = angleForDisplay(reading.angleDeg, it.displayAngle),
                 currentPan = pan,
@@ -333,6 +342,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     running = false,
                     displayAngle = null,
                     displayPan = null,
+                    firmwareVersion = null,
+                    firmwareOutdated = false,
                     statusMessage = "Parado.",
                     connectionStatus = ConnectionStatus.PARADO,
                 )

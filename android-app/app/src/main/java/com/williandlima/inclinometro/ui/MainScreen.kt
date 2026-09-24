@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.williandlima.inclinometro.datasource.BleScanner
+import com.williandlima.inclinometro.datasource.BleContract
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.limits.VibrationStats
 import com.williandlima.inclinometro.ui.theme.AmberFlash
@@ -103,6 +104,28 @@ fun MainScreen(viewModel: MainViewModel) {
 
         Spacer(Modifier.height(8.dp))
         ConnectionBadge(state.connectionStatus)
+
+        // Versões do app e do firmware conectado; firmware mais antigo que o
+        // recomendado aparece em laranja, com o aviso para regravar.
+        val appVersion = remember(context) {
+            runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
+                .getOrNull() ?: "?"
+        }
+        val firmwareText = when {
+            !state.running -> "Firmware: —"
+            state.mode == ConnectionMode.SIMULATED -> "Firmware: simulação"
+            state.firmwareVersion == null -> "Firmware: lendo..."
+            state.firmwareOutdated -> "Firmware v${state.firmwareVersion} — desatualizado, grave a " +
+                BleContract.decodeFirmwareVersion(BleContract.MIN_RECOMMENDED_FIRMWARE_CODE)
+            else -> "Firmware v${state.firmwareVersion}"
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "App v$appVersion  ·  $firmwareText",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (state.firmwareOutdated) Orange else Color.Gray,
+            fontWeight = if (state.firmwareOutdated) FontWeight.Bold else null,
+        )
 
         Spacer(Modifier.height(16.dp))
 

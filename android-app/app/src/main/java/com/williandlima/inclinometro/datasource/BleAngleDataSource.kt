@@ -52,6 +52,12 @@ class BleAngleDataSource(
     // firmware for anterior à v1.2.0 e não tiver esse eixo.
     @Volatile private var lastPanDeg: Double? = null
 
+    // Lida uma vez ao conectar, para a tela principal (ver [firmwareVersion]).
+    @Volatile private var firmwareVersionCode: Int? = null
+
+    override val firmwareVersion: String?
+        get() = firmwareVersionCode?.let(BleContract::decodeFirmwareVersion)
+
     // Idem para os extremos medidos pelo firmware (v1.5.0+): chegam num pacote
     // só e são notificados apenas quando mudam, então o último recebido
     // continua valendo. `peaksIgnoreUntilMs` é o fim da janela de graça após
@@ -133,6 +139,30 @@ class BleAngleDataSource(
                 vibrationStatusChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
                 vibrationDataChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
                 vibrationPanDataChar?.let { c -> enqueueGattOperation { enableNotify(g, c) } }
+                // Versão do firmware (só diagnóstico). Ausente em firmware
+                // muito antigo: segue sem ela.
+                service.getCharacteristic(BleContract.FIRMWARE_VERSION_CHARACTERISTIC_UUID)?.let { c ->
+                    enqueueGattOperation {
+                        if (!g.readCharacteristic(c)) processNextGattOperation()
+                    }
+                }
+            }
+
+            @Suppress("DEPRECATION")
+            override fun onCharacteristicRead(
+                g: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                status: Int,
+            ) {
+                if (characteristic.uuid == BleContract.FIRMWARE_VERSION_CHARACTERISTIC_UUID &&
+                    status == BluetoothGatt.GATT_SUCCESS
+                ) {
+                    val raw = characteristic.value
+                    if (raw != null && raw.size >= 2) {
+                        firmwareVersionCode = (raw[0].toInt() and 0xFF) or ((raw[1].toInt() and 0xFF) shl 8)
+                    }
+                }
+                processNextGattOperation()
             }
 
             private fun enableNotify(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
@@ -260,6 +290,7 @@ class BleAngleDataSource(
             resetPeaksCharacteristic = null
             vibrationConfigCharacteristic = null
             lastPanDeg = null
+            firmwareVersionCode = null
             lastPeaks = null
             peaksIgnoreUntilMs = 0L
             gattOperationQueue.clear()
