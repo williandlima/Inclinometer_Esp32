@@ -30,6 +30,11 @@ class AppSettings:
     baudrate: int = 9600
     slave_id: int = 1
     ble_address: str = ""
+    # Degrau de exibição da inclinação na tela principal. 0,25° é o padrão
+    # (evita tremulação visual); 0,1° é para bancada, comparando com uma
+    # referência de precisão (ex: nível eletrônico Mitutoyo) — só a
+    # inclinação usa este valor, o azimute continua fixo em 0,25°.
+    tilt_display_step_deg: float = 0.25
 
 
 class SettingsDialog(QDialog):
@@ -78,6 +83,13 @@ class SettingsDialog(QDialog):
         self.slave_spin.setRange(1, 247)
         self.slave_spin.setValue(current.slave_id)
 
+        self.tilt_resolution_combo = QComboBox()
+        self.tilt_resolution_combo.addItem("0,25° (padrão)", 0.25)
+        self.tilt_resolution_combo.addItem("0,1° (bancada, referência de precisão)", 0.1)
+        idx = self.tilt_resolution_combo.findData(current.tilt_display_step_deg)
+        if idx >= 0:
+            self.tilt_resolution_combo.setCurrentIndex(idx)
+
         self.usb_port_label = QLabel("Porta serial:")
         self.usb_baud_label = QLabel("Baud rate:")
         self.usb_slave_label = QLabel("Endereço Modbus (slave id):")
@@ -102,6 +114,7 @@ class SettingsDialog(QDialog):
         form.addRow(self.usb_baud_label, self.baud_combo)
         form.addRow(self.usb_slave_label, self.slave_spin)
         form.addRow(self.ble_row_label, ble_row)
+        form.addRow("Resolução da inclinação:", self.tilt_resolution_combo)
 
         self.test_btn = QPushButton("Testar conexão com ESP32")
         self.test_btn.clicked.connect(self._test_connection)
@@ -283,4 +296,5 @@ class SettingsDialog(QDialog):
             baudrate=self.baud_combo.currentData(),
             slave_id=self.slave_spin.value(),
             ble_address=ble_address,
+            tilt_display_step_deg=self.tilt_resolution_combo.currentData(),
         )

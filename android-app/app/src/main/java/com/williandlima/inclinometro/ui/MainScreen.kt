@@ -163,6 +163,8 @@ fun MainScreen(viewModel: MainViewModel) {
             ModeSelector(
                 mode = state.mode,
                 onModeChange = viewModel::setMode,
+                tiltDisplayStepDeg = state.tiltDisplayStepDeg,
+                onTiltDisplayStepChange = viewModel::setTiltDisplayStep,
                 bleAddress = state.bleDeviceAddress,
                 onBleAddressChange = viewModel::setBleDeviceAddress,
                 scanning = state.scanning,
@@ -492,6 +494,8 @@ private fun LimitCard(
 private fun ModeSelector(
     mode: ConnectionMode,
     onModeChange: (ConnectionMode) -> Unit,
+    tiltDisplayStepDeg: Double,
+    onTiltDisplayStepChange: (Double) -> Unit,
     bleAddress: String,
     onBleAddressChange: (String) -> Unit,
     scanning: Boolean,
@@ -542,6 +546,16 @@ private fun ModeSelector(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Resolução da inclinação:", style = MaterialTheme.typography.bodySmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = tiltDisplayStepDeg == 0.25, onClick = { onTiltDisplayStepChange(0.25) })
+            Text("0,25° (padrão)")
+            Spacer(Modifier.width(16.dp))
+            RadioButton(selected = tiltDisplayStepDeg == 0.1, onClick = { onTiltDisplayStepChange(0.1) })
+            Text("0,1° (bancada, referência de precisão)")
         }
     }
 

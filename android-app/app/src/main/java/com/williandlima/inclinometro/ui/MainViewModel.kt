@@ -79,6 +79,10 @@ data class UiState(
     // Versão do firmware do ESP32 conectado (null enquanto não lida / simulação).
     val firmwareVersion: String? = null,
     val firmwareOutdated: Boolean = false,
+    // Degrau de exibição da inclinação (0,25° padrão; 0,1° para bancada com
+    // referência de precisão — ver Configurações). Só afeta a inclinação;
+    // o azimute continua fixo em DISPLAY_ANGLE_STEP_DEG.
+    val tiltDisplayStepDeg: Double = DISPLAY_ANGLE_STEP_DEG,
     val scanning: Boolean = false,
     val scanResults: List<BleScanner.Found> = emptyList(),
     val bleTestInProgress: Boolean = false,
@@ -257,12 +261,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Arredonda para o degrau de exibição, com histerese para não alternar
      * entre dois degraus quando o valor fica na fronteira. */
-    private fun angleForDisplay(angleDeg: Double, current: Double?): Double {
-        val step = DISPLAY_ANGLE_STEP_DEG
+    private fun angleForDisplay(angleDeg: Double, current: Double?, step: Double): Double {
         if (current != null && kotlin.math.abs(angleDeg - current) < step / 2 + DISPLAY_ANGLE_HYSTERESIS_DEG) {
             return current
         }
         return Math.round(angleDeg / step) * step
+    }
+
+    /** Troca a resolução de exibição da inclinação (Configurações). */
+    fun setTiltDisplayStep(stepDeg: Double) {
+        _uiState.update { it.copy(tiltDisplayStepDeg = stepDeg, displayAngle = null) }
     }
 
     private suspend fun onReading(reading: AngleReading) {
@@ -275,9 +283,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 firmwareVersion = firmware,
                 firmwareOutdated = BleContract.firmwareOutdated(firmware),
                 currentAngle = reading.angleDeg,
-                displayAngle = angleForDisplay(reading.angleDeg, it.displayAngle),
+                displayAngle = angleForDisplay(reading.angleDeg, it.displayAngle, it.tiltDisplayStepDeg),
                 currentPan = pan,
-                displayPan = if (pan == null) null else angleForDisplay(pan, it.displayPan),
+                displayPan = if (pan == null) null else angleForDisplay(pan, it.displayPan, DISPLAY_ANGLE_STEP_DEG),
                 panAvailable = pan != null,
                 connectionStatus = if (it.mode == ConnectionMode.REAL) ConnectionStatus.CONECTADO else it.connectionStatus,
             )

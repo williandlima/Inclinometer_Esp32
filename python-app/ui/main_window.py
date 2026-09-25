@@ -577,8 +577,13 @@ class MainWindow(QMainWindow):
     def _angle_for_display(self, axis: str, angle_deg: float) -> float:
         """Arredonda para o degrau de exibição, com histerese para não
         alternar entre dois degraus quando o valor fica na fronteira. Cada
-        eixo tem seu próprio estado de histerese."""
-        step = DISPLAY_ANGLE_STEP_DEG
+        eixo tem seu próprio estado de histerese.
+
+        O degrau da inclinação é configurável (Configurações > Resolução da
+        inclinação — ver `AppSettings.tilt_display_step_deg`), para bancada
+        com referência de precisão; o azimute continua fixo em
+        DISPLAY_ANGLE_STEP_DEG."""
+        step = self._settings.tilt_display_step_deg if axis == TILT_AXIS else DISPLAY_ANGLE_STEP_DEG
         current = self._displayed[axis]
         if current is None or abs(angle_deg - current) >= step / 2 + DISPLAY_ANGLE_HYSTERESIS_DEG:
             self._displayed[axis] = round(angle_deg / step) * step

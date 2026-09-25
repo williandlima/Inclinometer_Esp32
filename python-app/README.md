@@ -92,6 +92,13 @@ O indicador abaixo do modo mostra o estado da conexão com o ESP32
 (conectando/conectado/falha), atualizado a cada leitura ou erro, seja via
 USB ou BLE.
 
+**Resolução de exibição da inclinação**: em Configurações, o degrau padrão
+da tela (0,25°, para não tremular) pode ser trocado para 0,1° — usado em
+bancada, comparando com uma referência de precisão (ex: nível eletrônico
+Mitutoyo). Só a inclinação; o azimute continua fixo em 0,25°. Não muda a
+resolução do sensor nem do dado gravado no histórico/relatório (ambos já
+são de 0,01°) — só o arredondamento mostrado na tela.
+
 ## Modo Vibração
 
 A leitura contínua normal (poll a cada ~250ms) é boa para acompanhar o
