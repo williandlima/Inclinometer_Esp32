@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.6`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.7`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -256,6 +256,16 @@ cabeçalho do header):
    acumula com o tempo nem com o número de movimentos — e some quando o eixo
    volta ao zero.
 
+   **Calibrado na 1.6.7** com dados de bancada reais: mesa giratória
+   Mitutoyo AVB007451 (código 517-165) como referência, comparada com a
+   leitura do PAN-TILT METER em 24 pontos entre −8,6° e +7,7°. Antes da
+   correção o desvio-padrão do erro era 0,255° (chegando a 0,43° num
+   ponto); um ajuste de escala pura (sem deslocamento) reduziu para 0,073°
+   (máximo 0,20°) — confirmando que o erro é mesmo de escala, e não de
+   offset ou de outro mecanismo. `PAN_SCALE_CORRECTION` foi de `1.0` (nunca
+   calibrado) para `1.051`. Refazer esta calibração se o MPU6050 físico for
+   substituído — o valor é específico da tolerância de fábrica de cada chip.
+
 ### Validação feita até agora
 
 O `PanSensor.cpp` real foi compilado contra um MPU6050 falso e exercitado com
@@ -274,6 +284,7 @@ sinais sintéticos (bias de fábrica de 5°/s, ruído, vibração, tilt fixo):
 | **1.6.2:** liga com a placa em movimento, tilt 0→45°, pan +30° | 29,75° (na 1.6.1: travava em −90°) |
 | **1.6.2:** giro constante de 5°/s durante o boot, tilt 0→45° | deriva desfeita em ~22 s, 0,00° (na 1.6.1: −90° travado) |
 | **1.6.2:** varreduras do motor −80° → +80° a 20°/s | 80,04°, sem reaprendizado indevido |
+| **1.6.7:** 24 pontos de bancada, mesa Mitutoyo AVB007451 vs. leitura | desvio 0,073° (0,255° sem `PAN_SCALE_CORRECTION`) |
 
 O piso de detecção medido bate com o previsto (`limiar × janela` = 1°/s × 1s):
 movimentos de até ~1° são descartados como ruído, e a partir de ~2° são

@@ -32,7 +32,9 @@ bool Mpu6050::readAccelG(float &ax, float &ay, float &az) {
 }
 bool Mpu6050::readMotion(float &ax, float &ay, float &az, float &gx, float &gy, float &gz) {
     readAccelG(ax, ay, az);
-    double t = tiltRad(), w = PAN_AMP_DPS * sin(2 * M_PI * PAN_HZ * tNow());
+    // PAN_SENSOR_SCALE: ver sim/pan_sim.cpp e PAN_SCALE_CORRECTION em Config.h.
+    static const double PAN_SENSOR_SCALE = 1.0 / 1.051;
+    double t = tiltRad(), w = PAN_AMP_DPS * PAN_SENSOR_SCALE * sin(2 * M_PI * PAN_HZ * tNow());
     gx = nz(rng); gy = -w * sin(t) + BGY + nz(rng); gz = w * cos(t) + BGZ + nz(rng);
     return true;
 }

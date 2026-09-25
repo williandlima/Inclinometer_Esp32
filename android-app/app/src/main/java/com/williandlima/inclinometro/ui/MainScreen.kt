@@ -165,6 +165,8 @@ fun MainScreen(viewModel: MainViewModel) {
                 onModeChange = viewModel::setMode,
                 tiltDisplayStepDeg = state.tiltDisplayStepDeg,
                 onTiltDisplayStepChange = viewModel::setTiltDisplayStep,
+                panDisplayStepDeg = state.panDisplayStepDeg,
+                onPanDisplayStepChange = viewModel::setPanDisplayStep,
                 bleAddress = state.bleDeviceAddress,
                 onBleAddressChange = viewModel::setBleDeviceAddress,
                 scanning = state.scanning,
@@ -496,6 +498,8 @@ private fun ModeSelector(
     onModeChange: (ConnectionMode) -> Unit,
     tiltDisplayStepDeg: Double,
     onTiltDisplayStepChange: (Double) -> Unit,
+    panDisplayStepDeg: Double,
+    onPanDisplayStepChange: (Double) -> Unit,
     bleAddress: String,
     onBleAddressChange: (String) -> Unit,
     scanning: Boolean,
@@ -555,6 +559,16 @@ private fun ModeSelector(
             Text("0,25° (padrão)")
             Spacer(Modifier.width(16.dp))
             RadioButton(selected = tiltDisplayStepDeg == 0.1, onClick = { onTiltDisplayStepChange(0.1) })
+            Text("0,1° (bancada, referência de precisão)")
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Resolução do azimute:", style = MaterialTheme.typography.bodySmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = panDisplayStepDeg == 0.25, onClick = { onPanDisplayStepChange(0.25) })
+            Text("0,25° (padrão)")
+            Spacer(Modifier.width(16.dp))
+            RadioButton(selected = panDisplayStepDeg == 0.1, onClick = { onPanDisplayStepChange(0.1) })
             Text("0,1° (bancada, referência de precisão)")
         }
     }

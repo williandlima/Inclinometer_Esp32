@@ -579,11 +579,10 @@ class MainWindow(QMainWindow):
         alternar entre dois degraus quando o valor fica na fronteira. Cada
         eixo tem seu próprio estado de histerese.
 
-        O degrau da inclinação é configurável (Configurações > Resolução da
-        inclinação — ver `AppSettings.tilt_display_step_deg`), para bancada
-        com referência de precisão; o azimute continua fixo em
-        DISPLAY_ANGLE_STEP_DEG."""
-        step = self._settings.tilt_display_step_deg if axis == TILT_AXIS else DISPLAY_ANGLE_STEP_DEG
+        O degrau de cada eixo é configurável (Configurações > Resolução da
+        inclinação / do azimute — ver `AppSettings.tilt_display_step_deg` /
+        `pan_display_step_deg`), para bancada com referência de precisão."""
+        step = self._settings.tilt_display_step_deg if axis == TILT_AXIS else self._settings.pan_display_step_deg
         current = self._displayed[axis]
         if current is None or abs(angle_deg - current) >= step / 2 + DISPLAY_ANGLE_HYSTERESIS_DEG:
             self._displayed[axis] = round(angle_deg / step) * step

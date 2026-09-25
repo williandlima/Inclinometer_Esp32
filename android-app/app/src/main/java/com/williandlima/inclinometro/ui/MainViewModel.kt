@@ -79,10 +79,10 @@ data class UiState(
     // Versão do firmware do ESP32 conectado (null enquanto não lida / simulação).
     val firmwareVersion: String? = null,
     val firmwareOutdated: Boolean = false,
-    // Degrau de exibição da inclinação (0,25° padrão; 0,1° para bancada com
-    // referência de precisão — ver Configurações). Só afeta a inclinação;
-    // o azimute continua fixo em DISPLAY_ANGLE_STEP_DEG.
+    // Degrau de exibição de cada eixo (0,25° padrão; 0,1° para bancada com
+    // referência de precisão — ver Configurações). Cada eixo tem o seu.
     val tiltDisplayStepDeg: Double = DISPLAY_ANGLE_STEP_DEG,
+    val panDisplayStepDeg: Double = DISPLAY_ANGLE_STEP_DEG,
     val scanning: Boolean = false,
     val scanResults: List<BleScanner.Found> = emptyList(),
     val bleTestInProgress: Boolean = false,
@@ -273,6 +273,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(tiltDisplayStepDeg = stepDeg, displayAngle = null) }
     }
 
+    /** Troca a resolução de exibição do azimute (Configurações). */
+    fun setPanDisplayStep(stepDeg: Double) {
+        _uiState.update { it.copy(panDisplayStepDeg = stepDeg, displayPan = null) }
+    }
+
     private suspend fun onReading(reading: AngleReading) {
         val sessionId = currentSessionId ?: return
         repository.addReading(sessionId, reading)
@@ -285,7 +290,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 currentAngle = reading.angleDeg,
                 displayAngle = angleForDisplay(reading.angleDeg, it.displayAngle, it.tiltDisplayStepDeg),
                 currentPan = pan,
-                displayPan = if (pan == null) null else angleForDisplay(pan, it.displayPan, DISPLAY_ANGLE_STEP_DEG),
+                displayPan = if (pan == null) null else angleForDisplay(pan, it.displayPan, it.panDisplayStepDeg),
                 panAvailable = pan != null,
                 connectionStatus = if (it.mode == ConnectionMode.REAL) ConnectionStatus.CONECTADO else it.connectionStatus,
             )

@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.6";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10606;
+constexpr char FIRMWARE_VERSION[] = "1.6.7";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10607;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -292,7 +292,14 @@ constexpr float PAN_SPIKE_REPORT_DPS = 30.0f;
 // ao deslocamento atual em relação ao zero — não se acumula com o tempo nem
 // com o número de movimentos. Calibração de bancada: girar o eixo entre duas
 // posições de separação angular conhecida e usar (ângulo real / integrado).
-constexpr float PAN_SCALE_CORRECTION = 1.0f;
+//
+// Valor medido nesta unidade (firmware 1.6.7): mesa giratória Mitutoyo
+// AVB007451 (código 517-165) como referência, 24 pontos entre -8,6° e
+// +7,7°. Ajuste por escala pura (sem offset) nos dados: leitura = 0,951 x
+// referência — desvio cai de 0,255° (sem correção) para 0,073° (com ela).
+// PAN_SCALE_CORRECTION = 1/0,951. Refazer esta calibração se o MPU6050
+// físico for substituído.
+constexpr float PAN_SCALE_CORRECTION = 1.051f;
 
 // Teto para o dt de uma única integração. Protege contra um loop que atrasou
 // muito (ou millis() dando a volta) virar um salto grande no ângulo. Não pode

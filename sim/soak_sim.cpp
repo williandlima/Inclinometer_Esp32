@@ -98,8 +98,11 @@ static void dataFrame(uint8_t out[14]) {
                E.vibAmp * sin(2 * M_PI * E.vibHz * t + E.phase[i]) + E.noise * gauss(rng);
     }
     g[0] += T.tiltRateF;
-    g[1] += -T.panRateF * sin(th);
-    g[2] += T.panRateF * cos(th);
+    // Sensibilidade do giroscópio ~5% abaixo do nominal (ver PAN_SENSOR_SCALE
+    // em sim/pan_sim.cpp e PAN_SCALE_CORRECTION em firmware/src/Config.h).
+    static const double PAN_SENSOR_SCALE = 1.0 / 1.051;
+    g[1] += -T.panRateF * PAN_SENSOR_SCALE * sin(th);
+    g[2] += T.panRateF * PAN_SENSOR_SCALE * cos(th);
     int16_t raw[7] = {
         0, toRaw(sin(th) + 0.002 * gauss(rng), 16384), toRaw(cos(th) + 0.002 * gauss(rng), 16384), 0,
         toRaw(g[0], 131), toRaw(g[1], 131), toRaw(g[2], 131),
