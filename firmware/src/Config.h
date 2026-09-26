@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.7";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10607;
+constexpr char FIRMWARE_VERSION[] = "1.6.8";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10608;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -136,6 +136,22 @@ constexpr uint32_t BLE_VIBRATION_CHUNK_INTERVAL_MS = 5;
 constexpr float ANGLE_SCALE = 100.0f;  // valor no protocolo = ângulo * ANGLE_SCALE
 constexpr float ANGLE_MIN_DEG = -60.0f;
 constexpr float ANGLE_MAX_DEG = 60.0f;
+
+// Correção do fator de escala da inclinação. Resolvido pelo atan2 entre os
+// dois eixos do acelerômetro (sem singularidade nem necessidade de bias,
+// diferente do giroscópio do pan), o erro residual observado em bancada
+// ainda assim não era ruído: era uma escala sistemática, proporcional ao
+// deslocamento em relação à calibração — mesma assinatura do erro do pan,
+// mas aqui provavelmente por um descasamento de sensibilidade entre os
+// dois eixos do acelerômetro usados no atan2 (Y e Z), e não por bias.
+//
+// Valor medido nesta unidade (firmware 1.6.8): inclinômetro de referência
+// Mitutoyo PRO3600 (nº F4020023), 24 pontos entre -8,6° e +7,7° de
+// inclinação. Ajuste por escala pura (sem offset): leitura = 0,951 x
+// referência — desvio cai de 0,255° (sem correção) para 0,073° (com ela).
+// TILT_SCALE_CORRECTION = 1/0,951. Refazer esta calibração se o MPU6050
+// físico for substituído.
+constexpr float TILT_SCALE_CORRECTION = 1.051f;
 
 // ============================================================================
 // Filtro da leitura contínua (só do ângulo "normal" — o Modo Vibração NÃO
@@ -293,13 +309,12 @@ constexpr float PAN_SPIKE_REPORT_DPS = 30.0f;
 // com o número de movimentos. Calibração de bancada: girar o eixo entre duas
 // posições de separação angular conhecida e usar (ângulo real / integrado).
 //
-// Valor medido nesta unidade (firmware 1.6.7): mesa giratória Mitutoyo
-// AVB007451 (código 517-165) como referência, 24 pontos entre -8,6° e
-// +7,7°. Ajuste por escala pura (sem offset) nos dados: leitura = 0,951 x
-// referência — desvio cai de 0,255° (sem correção) para 0,073° (com ela).
-// PAN_SCALE_CORRECTION = 1/0,951. Refazer esta calibração se o MPU6050
-// físico for substituído.
-constexpr float PAN_SCALE_CORRECTION = 1.051f;
+// Ainda não calibrado: os 24 pontos de bancada obtidos com a mesa Mitutoyo
+// (v1.6.7) eram na verdade um teste de INCLINAÇÃO com o Mitutoyo PRO3600,
+// não de azimute — ver TILT_SCALE_CORRECTION em vez desta. Refazer esta
+// calibração para o pan quando houver dados de bancada de fato do azimute
+// (girar o eixo entre duas posições conhecidas com a mesa/referência).
+constexpr float PAN_SCALE_CORRECTION = 1.0f;
 
 // Teto para o dt de uma única integração. Protege contra um loop que atrasou
 // muito (ou millis() dando a volta) virar um salto grande no ângulo. Não pode

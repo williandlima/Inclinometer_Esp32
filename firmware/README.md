@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.7`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.8`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -215,6 +215,25 @@ degraus de 0,25° com histerese (evita alternar entre dois degraus quando o
 valor fica na fronteira). Isso é só apresentação: histórico, mín/máx e
 relatórios continuam usando o ângulo bruto.
 
+### Fator de escala (`TILT_SCALE_CORRECTION`, v1.6.8)
+
+Resolvido pelo `atan2` entre os dois eixos do acelerômetro (sem singularidade
+nem necessidade de bias, diferente do giroscópio do pan), o tilt não deveria
+sofrer do mesmo erro de escala do pan — mas um erro de bancada mostrou que
+sofre: um descasamento de sensibilidade entre os eixos Y/Z do acelerômetro
+usados no `atan2`, com a mesma assinatura (erro proporcional ao deslocamento
+em relação à calibração, não um offset fixo).
+
+**Calibrado na 1.6.8** com dados de bancada reais: inclinômetro de referência
+Mitutoyo PRO3600 (nº F4020023), comparado com a leitura do PAN-TILT METER em
+24 pontos entre −8,6° e +7,7° de inclinação (esses mesmos 24 pontos foram
+atribuídos por engano ao azimute na 1.6.7 — ver `PAN_SCALE_CORRECTION`
+acima). Antes da correção o desvio-padrão do erro era 0,255°; um ajuste de
+escala pura (sem deslocamento) reduziu para 0,073° (máximo 0,20°) —
+confirmando que o erro é mesmo de escala. `TILT_SCALE_CORRECTION` foi de
+`1.0` (nunca calibrado) para `1.051`. Refazer esta calibração se o MPU6050
+físico desta unidade for substituído.
+
 ## Azimute (pan) pelo giroscópio (v1.2.0)
 
 O acelerômetro mede a direção do vetor gravidade — e girar em torno da
@@ -256,15 +275,13 @@ cabeçalho do header):
    acumula com o tempo nem com o número de movimentos — e some quando o eixo
    volta ao zero.
 
-   **Calibrado na 1.6.7** com dados de bancada reais: mesa giratória
-   Mitutoyo AVB007451 (código 517-165) como referência, comparada com a
-   leitura do PAN-TILT METER em 24 pontos entre −8,6° e +7,7°. Antes da
-   correção o desvio-padrão do erro era 0,255° (chegando a 0,43° num
-   ponto); um ajuste de escala pura (sem deslocamento) reduziu para 0,073°
-   (máximo 0,20°) — confirmando que o erro é mesmo de escala, e não de
-   offset ou de outro mecanismo. `PAN_SCALE_CORRECTION` foi de `1.0` (nunca
-   calibrado) para `1.051`. Refazer esta calibração se o MPU6050 físico for
-   substituído — o valor é específico da tolerância de fábrica de cada chip.
+   **Ainda não calibrado** (`PAN_SCALE_CORRECTION = 1.0`): os 24 pontos de
+   bancada obtidos com a mesa Mitutoyo AVB007451 (v1.6.7) eram na verdade um
+   teste de **inclinação** com o inclinômetro Mitutoyo PRO3600, não de
+   azimute — ver `TILT_SCALE_CORRECTION` na seção "Estabilidade da leitura"
+   abaixo. Calibração de bancada pendente: girar o eixo entre duas posições
+   de separação angular conhecida (mesa/referência de azimute de fato) e
+   usar `(ângulo real / integrado)`.
 
 ### Validação feita até agora
 
@@ -284,7 +301,6 @@ sinais sintéticos (bias de fábrica de 5°/s, ruído, vibração, tilt fixo):
 | **1.6.2:** liga com a placa em movimento, tilt 0→45°, pan +30° | 29,75° (na 1.6.1: travava em −90°) |
 | **1.6.2:** giro constante de 5°/s durante o boot, tilt 0→45° | deriva desfeita em ~22 s, 0,00° (na 1.6.1: −90° travado) |
 | **1.6.2:** varreduras do motor −80° → +80° a 20°/s | 80,04°, sem reaprendizado indevido |
-| **1.6.7:** 24 pontos de bancada, mesa Mitutoyo AVB007451 vs. leitura | desvio 0,073° (0,255° sem `PAN_SCALE_CORRECTION`) |
 
 O piso de detecção medido bate com o previsto (`limiar × janela` = 1°/s × 1s):
 movimentos de até ~1° são descartados como ruído, e a partir de ~2° são

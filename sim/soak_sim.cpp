@@ -91,18 +91,21 @@ static int16_t toRaw(double v, double scale) {
 static void dataFrame(uint8_t out[14]) {
     memset(out, 0, 14);
     if (regs[0x6B] & 0x40) return;  // dormindo: registradores de dado zerados
-    double t = nowS(), th = T.tilt * M_PI / 180;
+    // Sensibilidade do acelerômetro ~5% abaixo do nominal entre os eixos Y/Z
+    // usados no atan2 (ver TILT_SCALE_CORRECTION em firmware/src/Config.h): o
+    // sensor "vê" um ângulo th menor que o real T.tilt. Isso entra tanto no
+    // atan2 do tilt quanto na projeção do giro do pan logo abaixo — o
+    // PanSensor recalcula seu próprio atan2 a partir do MESMO acelerômetro,
+    // sem a correção, que só existe do lado do consumidor em AngleSensor.
+    double t = nowS(), th = (T.tilt / TILT_SCALE_CORRECTION) * M_PI / 180;
     double g[3];
     for (int i = 0; i < 3; i++) {
         g[i] = E.b0[i] + E.drift[i] * (1 - exp(-t / E.tau)) +
                E.vibAmp * sin(2 * M_PI * E.vibHz * t + E.phase[i]) + E.noise * gauss(rng);
     }
     g[0] += T.tiltRateF;
-    // Sensibilidade do giroscópio ~5% abaixo do nominal (ver PAN_SENSOR_SCALE
-    // em sim/pan_sim.cpp e PAN_SCALE_CORRECTION em firmware/src/Config.h).
-    static const double PAN_SENSOR_SCALE = 1.0 / 1.051;
-    g[1] += -T.panRateF * PAN_SENSOR_SCALE * sin(th);
-    g[2] += T.panRateF * PAN_SENSOR_SCALE * cos(th);
+    g[1] += -T.panRateF * sin(th);
+    g[2] += T.panRateF * cos(th);
     int16_t raw[7] = {
         0, toRaw(sin(th) + 0.002 * gauss(rng), 16384), toRaw(cos(th) + 0.002 * gauss(rng), 16384), 0,
         toRaw(g[0], 131), toRaw(g[1], 131), toRaw(g[2], 131),

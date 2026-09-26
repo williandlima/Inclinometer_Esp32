@@ -27,6 +27,11 @@
 // - readRelativeAngleDeg(): VIBRAÇÃO. Amostra instantânea, sem filtro nenhum —
 //   ali a variação de frações de grau é justamente o que se quer medir, então
 //   filtrar destruiria o dado.
+//
+// Os três caminhos aplicam TILT_SCALE_CORRECTION (Config.h) sobre o valor JÁ
+// relativo à calibração — calibrado em bancada com um inclinômetro de
+// referência (ver o comentário da constante). Correção proporcional ao
+// deslocamento em relação ao zero, mesmo raciocínio do pan.
 class AngleSensor {
 public:
     // O Mpu6050 é compartilhado (por referência) com o PanSensor: é o mesmo
@@ -92,8 +97,9 @@ private:
     // leitura I2C falhar (sensor desconectado, mau contato).
     bool readRawAngleDeg(float &angleDeg);
 
-    // Aplica o offset de calibração e o clamp de faixa — a forma em que o
-    // ângulo sai deste sensor, seja como leitura corrente ou como extremo.
+    // Aplica o offset de calibração, o fator de escala (TILT_SCALE_CORRECTION)
+    // e o clamp de faixa — a forma em que o ângulo sai deste sensor, seja
+    // como leitura corrente ou como extremo.
     float toReported(float rawDeg) const;
 
     // Coeficiente de uma média móvel exponencial de 1 polo para a frequência

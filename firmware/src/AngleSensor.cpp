@@ -108,11 +108,11 @@ float AngleSensor::readRelativeAngleDeg() {
     if (!readRawAngleDeg(rawDeg)) {
         rawDeg = _lastRawDeg;  // amostra perdida: repete a última válida
     }
-    return rawDeg - _offsetDeg;
+    return (rawDeg - _offsetDeg) * TILT_SCALE_CORRECTION;
 }
 
 float AngleSensor::toReported(float rawDeg) const {
-    float angle = rawDeg - _offsetDeg;
+    float angle = (rawDeg - _offsetDeg) * TILT_SCALE_CORRECTION;
     if (angle < ANGLE_MIN_DEG) angle = ANGLE_MIN_DEG;
     if (angle > ANGLE_MAX_DEG) angle = ANGLE_MAX_DEG;
     return angle;

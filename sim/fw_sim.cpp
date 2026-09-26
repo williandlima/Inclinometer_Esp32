@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include "Arduino.h"
+#include "Config.h"
 #include "Mpu6050.h"
 #include "BLEMock.h"
 
@@ -24,7 +25,10 @@ static const double BGY = 3.0, BGZ = -2.0;
 static std::mt19937 rng(7);
 static std::normal_distribution<double> nz(0.0, 0.02);
 static double tNow() { return g_now_us / 1e6; }
-static double tiltRad() { return (TILT_AMP_DEG * sin(2 * M_PI * TILT_HZ * tNow())) * M_PI / 180; }
+// Sensibilidade do acelerômetro ~5% abaixo do nominal (ver TILT_SCALE_CORRECTION
+// em Config.h): a oscilação real é TILT_AMP_DEG, mas o sensor "vê" uma
+// amplitude menor — a correção do firmware restaura a amplitude verdadeira.
+static double tiltRad() { return (TILT_AMP_DEG / TILT_SCALE_CORRECTION * sin(2 * M_PI * TILT_HZ * tNow())) * M_PI / 180; }
 bool Mpu6050::begin() { return true; }
 void Mpu6050::maintain() {}
 bool Mpu6050::readAccelG(float &ax, float &ay, float &az) {
@@ -32,9 +36,7 @@ bool Mpu6050::readAccelG(float &ax, float &ay, float &az) {
 }
 bool Mpu6050::readMotion(float &ax, float &ay, float &az, float &gx, float &gy, float &gz) {
     readAccelG(ax, ay, az);
-    // PAN_SENSOR_SCALE: ver sim/pan_sim.cpp e PAN_SCALE_CORRECTION em Config.h.
-    static const double PAN_SENSOR_SCALE = 1.0 / 1.051;
-    double t = tiltRad(), w = PAN_AMP_DPS * PAN_SENSOR_SCALE * sin(2 * M_PI * PAN_HZ * tNow());
+    double t = tiltRad(), w = PAN_AMP_DPS * sin(2 * M_PI * PAN_HZ * tNow());
     gx = nz(rng); gy = -w * sin(t) + BGY + nz(rng); gz = w * cos(t) + BGZ + nz(rng);
     return true;
 }
