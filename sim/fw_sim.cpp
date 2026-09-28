@@ -25,10 +25,15 @@ static const double BGY = 3.0, BGZ = -2.0;
 static std::mt19937 rng(7);
 static std::normal_distribution<double> nz(0.0, 0.02);
 static double tNow() { return g_now_us / 1e6; }
-// Sensibilidade do acelerômetro ~5% abaixo do nominal (ver TILT_SCALE_CORRECTION
-// em Config.h): a oscilação real é TILT_AMP_DEG, mas o sensor "vê" uma
+// Sensibilidade do acelerômetro abaixo do nominal, assimétrica entre
+// inclinação positiva e negativa (ver TILT_SCALE_CORRECTION_NEG/_POS em
+// Config.h): a oscilação real é TILT_AMP_DEG, mas o sensor "vê" uma
 // amplitude menor — a correção do firmware restaura a amplitude verdadeira.
-static double tiltRad() { return (TILT_AMP_DEG / TILT_SCALE_CORRECTION * sin(2 * M_PI * TILT_HZ * tNow())) * M_PI / 180; }
+static double tiltRad() {
+    double trueDeg = TILT_AMP_DEG * sin(2 * M_PI * TILT_HZ * tNow());
+    double scale = trueDeg >= 0 ? TILT_SCALE_CORRECTION_POS : TILT_SCALE_CORRECTION_NEG;
+    return (trueDeg / scale) * M_PI / 180;
+}
 bool Mpu6050::begin() { return true; }
 void Mpu6050::maintain() {}
 bool Mpu6050::readAccelG(float &ax, float &ay, float &az) {

@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.9`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.10`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -215,7 +215,7 @@ degraus de 0,25° com histerese (evita alternar entre dois degraus quando o
 valor fica na fronteira). Isso é só apresentação: histórico, mín/máx e
 relatórios continuam usando o ângulo bruto.
 
-### Fator de escala (`TILT_SCALE_CORRECTION`, v1.6.8)
+### Fator de escala (`TILT_SCALE_CORRECTION_NEG`/`_POS`, v1.6.8/1.6.10)
 
 Resolvido pelo `atan2` entre os dois eixos do acelerômetro (sem singularidade
 nem necessidade de bias, diferente do giroscópio do pan), o tilt não deveria
@@ -229,10 +229,23 @@ Mitutoyo PRO3600 (nº F4020023), comparado com a leitura do PAN-TILT METER em
 24 pontos entre −8,6° e +7,7° de inclinação (esses mesmos 24 pontos foram
 atribuídos por engano ao azimute na 1.6.7 — ver `PAN_SCALE_CORRECTION`
 acima). Antes da correção o desvio-padrão do erro era 0,255°; um ajuste de
-escala pura (sem deslocamento) reduziu para 0,073° (máximo 0,20°) —
-confirmando que o erro é mesmo de escala. `TILT_SCALE_CORRECTION` foi de
-`1.0` (nunca calibrado) para `1.051`. Refazer esta calibração se o MPU6050
-físico desta unidade for substituído.
+escala pura (sem deslocamento) reduziu para 0,073° (máximo 0,20°) — usando
+uma única constante (`1,051`) para os dois lados.
+
+**Refinado na 1.6.10**: separando os mesmos 24 pontos por sinal, o fator
+medido não é igual dos dois lados — 0,9593 do lado negativo, 0,9408 do
+positivo. Uma correção única deixava um viés residual de −0,047°/−0,076° em
+cada lado (confirmado depois em campo com pontos novos entre +1° e +2°).
+Duas constantes agora, `TILT_SCALE_CORRECTION_NEG` (1,042) e `_POS` (1,063),
+escolhidas pelo **sinal do ângulo bruto absoluto** (`rawDeg`, antes de
+subtrair a calibração) — não pelo sinal relativo à calibração. Isso importa:
+a assimetria é uma característica física do sensor/montagem, fixa no zero
+MECÂNICO, então calibrar longe dele (ex.: com o pan-tilt já inclinado) não
+pode fazer a leitura escolher o lado errado. Reduz o erro máximo de 0,207°
+para 0,164° nos 24 pontos, ao custo de mais dispersão ponto a ponto (cada
+lado passa a ter só 9 pontos de calibração em vez de 18) — juntar mais
+pontos, de cada lado, melhora isso. Refazer toda esta calibração se o
+MPU6050 físico desta unidade for substituído.
 
 ## Azimute (pan) pelo giroscópio (v1.2.0)
 

@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.9";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10609;
+constexpr char FIRMWARE_VERSION[] = "1.6.10";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10610;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -145,13 +145,25 @@ constexpr float ANGLE_MAX_DEG = 60.0f;
 // mas aqui provavelmente por um descasamento de sensibilidade entre os
 // dois eixos do acelerômetro usados no atan2 (Y e Z), e não por bias.
 //
-// Valor medido nesta unidade (firmware 1.6.8): inclinômetro de referência
-// Mitutoyo PRO3600 (nº F4020023), 24 pontos entre -8,6° e +7,7° de
-// inclinação. Ajuste por escala pura (sem offset): leitura = 0,951 x
-// referência — desvio cai de 0,255° (sem correção) para 0,073° (com ela).
-// TILT_SCALE_CORRECTION = 1/0,951. Refazer esta calibração se o MPU6050
-// físico for substituído.
-constexpr float TILT_SCALE_CORRECTION = 1.051f;
+// Valor medido nesta unidade contra o inclinômetro de referência Mitutoyo
+// PRO3600 (nº F4020023), 24 pontos entre -8,6° e +7,7° de inclinação
+// (firmware 1.6.8): ajuste por escala pura (sem offset) = 0,951 x
+// referência — desvio cai de 0,255° (sem correção) para 0,073° (com uma
+// correção única para os dois lados).
+//
+// Firmware 1.6.10: o erro NÃO é simétrico entre inclinação positiva e
+// negativa — separando os mesmos 24 pontos por sinal, o fator medido é
+// 0,9593 do lado negativo e 0,9408 do lado positivo (uma correção única
+// deixava um viés residual de -0,047°/-0,076° em cada lado). Assimetria
+// assim não vem de um descasamento Y/Z puro (que seria simétrico, por
+// atan2 ser função ímpar) — mais provável é um pequeno desalinhamento de
+// montagem do sensor, ou o zero de calibração não coincidir exatamente com
+// o zero mecânico. Corrigido com dois fatores, aplicados conforme o sinal
+// do ângulo relativo à calibração (ver AngleSensor::toReported()). Refazer
+// esta calibração (os dois lados, com mais pontos se possível) se o
+// MPU6050 físico for substituído.
+constexpr float TILT_SCALE_CORRECTION_NEG = 1.042f;  // 1 / 0,9593
+constexpr float TILT_SCALE_CORRECTION_POS = 1.063f;  // 1 / 0,9408
 
 // ============================================================================
 // Filtro da leitura contínua (só do ângulo "normal" — o Modo Vibração NÃO

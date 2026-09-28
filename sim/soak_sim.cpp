@@ -91,13 +91,16 @@ static int16_t toRaw(double v, double scale) {
 static void dataFrame(uint8_t out[14]) {
     memset(out, 0, 14);
     if (regs[0x6B] & 0x40) return;  // dormindo: registradores de dado zerados
-    // Sensibilidade do acelerômetro ~5% abaixo do nominal entre os eixos Y/Z
-    // usados no atan2 (ver TILT_SCALE_CORRECTION em firmware/src/Config.h): o
-    // sensor "vê" um ângulo th menor que o real T.tilt. Isso entra tanto no
-    // atan2 do tilt quanto na projeção do giro do pan logo abaixo — o
-    // PanSensor recalcula seu próprio atan2 a partir do MESMO acelerômetro,
-    // sem a correção, que só existe do lado do consumidor em AngleSensor.
-    double t = nowS(), th = (T.tilt / TILT_SCALE_CORRECTION) * M_PI / 180;
+    // Sensibilidade do acelerômetro abaixo do nominal entre os eixos Y/Z
+    // usados no atan2, assimétrica entre inclinação positiva e negativa (ver
+    // TILT_SCALE_CORRECTION_NEG/_POS em firmware/src/Config.h): o sensor "vê"
+    // um ângulo th menor que o real T.tilt. Isso entra tanto no atan2 do
+    // tilt quanto na projeção do giro do pan logo abaixo — o PanSensor
+    // recalcula seu próprio atan2 a partir do MESMO acelerômetro, sem a
+    // correção, que só existe do lado do consumidor em AngleSensor.
+    double t = nowS();
+    double tiltScale = T.tilt >= 0 ? TILT_SCALE_CORRECTION_POS : TILT_SCALE_CORRECTION_NEG;
+    double th = (T.tilt / tiltScale) * M_PI / 180;
     double g[3];
     for (int i = 0; i < 3; i++) {
         g[i] = E.b0[i] + E.drift[i] * (1 - exp(-t / E.tau)) +

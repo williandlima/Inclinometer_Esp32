@@ -55,10 +55,11 @@ extern BleServer bleServer;
 static std::mt19937 rng(11);
 static std::normal_distribution<double> nz(0.0, 0.02);
 static double tNow() { return g_now_us / 1e6; }
-// Sensibilidade do acelerômetro ~5% abaixo do nominal (ver TILT_SCALE_CORRECTION
-// em Config.h): o sensor "vê" um ângulo menor que o real 10°+0,5°; a correção
-// do firmware restaura o valor verdadeiro.
-static double tiltRad() { return ((10.0 + 0.5 * sin(2 * M_PI * 3.0 * tNow())) / TILT_SCALE_CORRECTION) * M_PI / 180; }
+// Sensibilidade do acelerômetro abaixo do nominal (ver
+// TILT_SCALE_CORRECTION_NEG/_POS em Config.h): o sensor "vê" um ângulo menor
+// que o real 10°+0,5°; a correção do firmware restaura o valor verdadeiro.
+// Sempre positivo aqui (10°±0,5°), então é sempre o lado POS.
+static double tiltRad() { return ((10.0 + 0.5 * sin(2 * M_PI * 3.0 * tNow())) / TILT_SCALE_CORRECTION_POS) * M_PI / 180; }
 bool Mpu6050::begin() { return true; }
 void Mpu6050::maintain() {}
 bool Mpu6050::readAccelG(float &ax, float &ay, float &az) {
