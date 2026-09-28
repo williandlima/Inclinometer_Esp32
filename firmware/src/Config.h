@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.8";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10608;
+constexpr char FIRMWARE_VERSION[] = "1.6.9";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10609;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -309,12 +309,20 @@ constexpr float PAN_SPIKE_REPORT_DPS = 30.0f;
 // com o número de movimentos. Calibração de bancada: girar o eixo entre duas
 // posições de separação angular conhecida e usar (ângulo real / integrado).
 //
-// Ainda não calibrado: os 24 pontos de bancada obtidos com a mesa Mitutoyo
-// (v1.6.7) eram na verdade um teste de INCLINAÇÃO com o Mitutoyo PRO3600,
-// não de azimute — ver TILT_SCALE_CORRECTION em vez desta. Refazer esta
-// calibração para o pan quando houver dados de bancada de fato do azimute
-// (girar o eixo entre duas posições conhecidas com a mesa/referência).
-constexpr float PAN_SCALE_CORRECTION = 1.0f;
+// Calibração PRELIMINAR (firmware 1.6.9), com só 2 pontos, contra mesa
+// giratória/goniômetro com escala angular: alvo 8,00° -> lido 7,75°; alvo
+// 9,00° -> lido 8,75° (erro crescendo com o deslocamento — assinatura de
+// escala, não de offset — e batendo com a tolerância de fábrica do giro).
+// Ajuste por escala pura: leitura = 0,9707 x referência (b = Σdr/Σr²).
+// PAN_SCALE_CORRECTION = 1/0,9707 ≈ 1,030. Com a correção, o resíduo nos
+// dois pontos cai para ±0,02° (de ±0,25° sem ela).
+//
+// Diferente do TILT_SCALE_CORRECTION (24 pontos contra um inclinômetro
+// certificado ±0,02°), isto vem de só 2 pontos contra uma mesa/goniômetro de
+// precisão não quantificada aqui — refinar com mais pontos (e idealmente
+// mais afastados de zero, ex.: 45°/90°) quando possível, e sempre que o
+// MPU6050 físico desta unidade for substituído.
+constexpr float PAN_SCALE_CORRECTION = 1.030f;
 
 // Teto para o dt de uma única integração. Protege contra um loop que atrasou
 // muito (ou millis() dando a volta) virar um salto grande no ângulo. Não pode

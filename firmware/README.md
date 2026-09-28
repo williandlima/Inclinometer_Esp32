@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.8`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.9`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -275,13 +275,22 @@ cabeçalho do header):
    acumula com o tempo nem com o número de movimentos — e some quando o eixo
    volta ao zero.
 
-   **Ainda não calibrado** (`PAN_SCALE_CORRECTION = 1.0`): os 24 pontos de
-   bancada obtidos com a mesa Mitutoyo AVB007451 (v1.6.7) eram na verdade um
-   teste de **inclinação** com o inclinômetro Mitutoyo PRO3600, não de
-   azimute — ver `TILT_SCALE_CORRECTION` na seção "Estabilidade da leitura"
-   abaixo. Calibração de bancada pendente: girar o eixo entre duas posições
-   de separação angular conhecida (mesa/referência de azimute de fato) e
-   usar `(ângulo real / integrado)`.
+   Os 24 pontos de bancada obtidos com a mesa Mitutoyo AVB007451 (v1.6.7)
+   eram na verdade um teste de **inclinação** com o inclinômetro Mitutoyo
+   PRO3600, não de azimute — ver `TILT_SCALE_CORRECTION` na seção
+   "Estabilidade da leitura" abaixo, e `PAN_SCALE_CORRECTION` voltou a `1.0`
+   por uma versão (v1.6.8).
+
+   **Calibração PRELIMINAR na 1.6.9**, com só 2 pontos contra mesa
+   giratória/goniômetro com escala angular: alvo 8,00° → lido 7,75°; alvo
+   9,00° → lido 8,75°. Erro crescendo com o deslocamento (assinatura de
+   escala, não de offset), e batendo com a tolerância de fábrica do giro.
+   Ajuste por escala pura: leitura = 0,9707 × referência.
+   `PAN_SCALE_CORRECTION` foi de `1,0` para `1,030` — reduz o resíduo nos
+   dois pontos de ±0,25° para ±0,02°. Diferente do tilt (24 pontos contra um
+   inclinômetro certificado ±0,02°), aqui é só 2 pontos contra uma
+   referência de precisão não quantificada: **refinar com mais pontos**
+   (e idealmente mais afastados de zero, ex.: 45°/90°) quando possível.
 
 ### Validação feita até agora
 
@@ -593,10 +602,12 @@ tela de configuração, em vez de truncar em silêncio.
   em ±90° até a mecânica do pan estar definida. Só limita o valor
   reportado — o integrador interno não é clampado, então voltar para dentro
   da faixa recupera a leitura correta.
-- **[1.2.0] `PAN_SCALE_CORRECTION` ainda em 1.0.** Calibração de bancada
-  pendente: girar o eixo entre duas posições de separação angular conhecida
-  e usar `(ângulo real / integrado)`. Sem isso, sobra a tolerância de
-  fábrica do giro (~±3%, ou ~2,7° no extremo de um curso de ±90°).
+- **[corrigido parcialmente na 1.6.9] `PAN_SCALE_CORRECTION` calibrado com
+  só 2 pontos.** Ver "Azimute (pan) pelo giroscópio" acima — reduz o erro de
+  ±0,25° a 8-9° para ±0,02° nesses dois pontos, mas com uma referência de
+  precisão não quantificada e só 2 pontos (o tilt teve 24, contra um
+  inclinômetro certificado). Refazer com mais pontos, mais afastados de
+  zero, quando possível.
 - **[1.2.0] Sinal do termo de compensação de tilt a confirmar.** O termo
   `−gy·sin(θ)` depende da handedness real da montagem. Perto de `θ=0` ele
   some (só sobra `gz·cos θ`), então um sinal trocado **não apareceria** nos

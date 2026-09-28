@@ -4,6 +4,7 @@
 #include <random>
 #include <cmath>
 #include "Arduino.h"
+#include "Config.h"
 #include "Mpu6050.h"
 #include "PanSensor.h"
 
@@ -27,9 +28,12 @@ bool Mpu6050::readAccelG(float &ax, float &ay, float &az) {
 bool Mpu6050::readMotion(float &ax, float &ay, float &az, float &gx, float &gy, float &gz) {
     readAccelG(ax, ay, az);
     double t = g_tiltDeg * M_PI / 180;
+    // Sensibilidade do giroscópio ~3% abaixo do nominal (ver PAN_SCALE_CORRECTION
+    // em firmware/src/Config.h, calibrado em bancada na 1.6.9).
+    static const double PAN_SENSOR_SCALE = 1.0 / PAN_SCALE_CORRECTION;
     gx = g_tiltRateDps + BGX + noise(rng);
-    gy = -g_panRateDps * sin(t) + BGY + noise(rng);
-    gz =  g_panRateDps * cos(t) + BGZ + noise(rng);
+    gy = -g_panRateDps * PAN_SENSOR_SCALE * sin(t) + BGY + noise(rng);
+    gz =  g_panRateDps * PAN_SENSOR_SCALE * cos(t) + BGZ + noise(rng);
     // Uma leitura a cada 10 ms (ANGLE_SAMPLE_INTERVAL_MS).
     if (g_spikeEveryMs && ++g_readCount % (g_spikeEveryMs / 10) == 0) gz = g_spikeDps;
     return true;
