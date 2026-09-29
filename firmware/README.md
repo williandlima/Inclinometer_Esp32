@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.10`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.11`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -215,7 +215,7 @@ degraus de 0,25° com histerese (evita alternar entre dois degraus quando o
 valor fica na fronteira). Isso é só apresentação: histórico, mín/máx e
 relatórios continuam usando o ângulo bruto.
 
-### Fator de escala (`TILT_SCALE_CORRECTION_NEG`/`_POS`, v1.6.8/1.6.10)
+### Fator de escala (`TILT_SCALE_CORRECTION_NEG`/`_POS`, v1.6.8/1.6.10/1.6.11)
 
 Resolvido pelo `atan2` entre os dois eixos do acelerômetro (sem singularidade
 nem necessidade de bias, diferente do giroscópio do pan), o tilt não deveria
@@ -236,16 +236,25 @@ uma única constante (`1,051`) para os dois lados.
 medido não é igual dos dois lados — 0,9593 do lado negativo, 0,9408 do
 positivo. Uma correção única deixava um viés residual de −0,047°/−0,076° em
 cada lado (confirmado depois em campo com pontos novos entre +1° e +2°).
-Duas constantes agora, `TILT_SCALE_CORRECTION_NEG` (1,042) e `_POS` (1,063),
-escolhidas pelo **sinal do ângulo bruto absoluto** (`rawDeg`, antes de
-subtrair a calibração) — não pelo sinal relativo à calibração. Isso importa:
-a assimetria é uma característica física do sensor/montagem, fixa no zero
+Duas constantes agora, `TILT_SCALE_CORRECTION_NEG` e `_POS`, escolhidas pelo
+**sinal do ângulo bruto absoluto** (`rawDeg`, antes de subtrair a
+calibração) — não pelo sinal relativo à calibração. Isso importa: a
+assimetria é uma característica física do sensor/montagem, fixa no zero
 MECÂNICO, então calibrar longe dele (ex.: com o pan-tilt já inclinado) não
-pode fazer a leitura escolher o lado errado. Reduz o erro máximo de 0,207°
-para 0,164° nos 24 pontos, ao custo de mais dispersão ponto a ponto (cada
-lado passa a ter só 9 pontos de calibração em vez de 18) — juntar mais
-pontos, de cada lado, melhora isso. Refazer toda esta calibração se o
-MPU6050 físico desta unidade for substituído.
+pode fazer a leitura escolher o lado errado.
+
+**Lado positivo recalibrado na 1.6.11** com 15 pontos novos de bancada
+(0,48° a 21,5°, complementando os 9 originais que iam só até 6,99°): o
+fator de `1,063` vinha ficando cada vez mais curto acima de uns 4°,
+chegando a −0,30° de erro em 21,5° — sinal de que 8,6° não era faixa
+suficiente para extrapolar. Com os 24 pontos positivos juntos, o fator
+medido é 0,9291 (era 0,9408 só com os 9 originais); `TILT_SCALE_CORRECTION_POS`
+passa para **1,076**, e o resíduo cai para entre −0,05° e +0,03° em toda a
+faixa testada. O lado negativo (`TILT_SCALE_CORRECTION_NEG = 1,042`) segue
+com só os 9 pontos originais (até −8,6°) — sujeito ao mesmo risco de ficar
+curto fora dessa faixa; mais pontos desse lado, numa faixa maior, teriam o
+mesmo benefício que tiveram no lado positivo. Refazer toda esta calibração
+se o MPU6050 físico desta unidade for substituído.
 
 ## Azimute (pan) pelo giroscópio (v1.2.0)
 
