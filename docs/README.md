@@ -51,6 +51,7 @@ problemas.
 | [procedimento-instalacao-software-python.docx](procedimento-instalacao-software-python.docx) | PTI | 00 | Instalação e verificação do software desktop (Python/PyQt5) em PC. |
 | [procedimento-instalacao-software-android.docx](procedimento-instalacao-software-android.docx) | PTI | 00 | Compilação e instalação do aplicativo Android (Kotlin/Jetpack Compose). |
 | [procedimento-gravacao-firmware.docx](procedimento-gravacao-firmware.docx) | PTG | 00 | Compilação e gravação (upload) do firmware do ESP32 via PlatformIO. |
+| [procedimento-utilizacao-software-python.docx](procedimento-utilizacao-software-python.docx) | PTO | 00 | Utilização do software desktop (app Python, v2.2.0) do pan-tilt meter em PC Windows: tela principal, configuração da conexão (USB/BLE), leitura, calibração, mínimos/máximos, resolução de exibição, Modo Vibração e relatórios PDF, com capturas reais do app (modo Simulação, em [`capturas-app-python/`](capturas-app-python/)) e resolução de problemas. |
 | [procedimento-configuracao-reset-ptu-d300e.docx](procedimento-configuracao-reset-ptu-d300e.docx) | PTC | 00 | Configuração das velocidades de reset do pan-tilt FLIR PTU-D300E (RPS e RTS em 500 posições/s) e gravação como padrão de inicialização (DS), via RS-485 com conversor USB e Docklight no Windows, com tabela de registro e resolução de problemas. |
 | [procedimento-simplificado-velocidade-ptu-d300e.docx](procedimento-simplificado-velocidade-ptu-d300e.docx) | PTC | 00 | Versão simplificada (2 páginas) do procedimento acima: RPS500, RTS500 e DS pelo Docklight, com tabela de passos e resposta esperada. |
 | [procedimento-teste-funcional-ptu-d300e.docx](procedimento-teste-funcional-ptu-d300e.docx) | PTE | 00 | Teste funcional do pan-tilt FLIR PTU-D300E após a configuração de RPS/RTS = 500 pos/s, via RS-485 e Docklight: montagem e cablagem, setup, 9 testes (comunicação, valores programados, permanência após religar, ciclo de reset, posição e movimento dos dois eixos) com critério de aceitação e registro. Tópicos conforme o modelo do procedimento de teste funcional da empresa. |
@@ -58,7 +59,7 @@ problemas.
 A revisão 01 do PTE (aplicativos 2.2.0) inclui, no item 4.3, a verificação
 da resolução de exibição de 0,25°/0,1° em cada eixo.
 
-Os códigos de tipo (PTE/PTI/PTG/PTC), revisão, folha, código e PN nas caixas de
+Os códigos de tipo (PTE/PTI/PTG/PTC/PTO), revisão, folha, código e PN nas caixas de
 identificação são inferência própria a partir do modelo mostrado (campos
 deixados em branco no original) — ajustar conforme a numeração real da
 empresa antes de uso formal.
