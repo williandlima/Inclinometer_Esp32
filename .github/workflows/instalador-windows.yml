@@ -1,0 +1,68 @@
+# Gera, numa máquina Windows do GitHub, o executável do app Python
+# (PyInstaller) e o instalador Setup.exe (Inno Setup), com ícone na Área de
+# Trabalho e no Menu Iniciar. Assim ninguém precisa montar o build à mão nem
+# abrir o VSCode para usar o software.
+#
+# Onde baixar: aba Actions do GitHub → "Instalador Windows" → execução mais
+# recente → seção Artifacts → "Inclinometro-2Eixos-Setup". Para gerar sob
+# demanda, use o botão "Run workflow" da mesma página.
+name: Instalador Windows
+
+on:
+  push:
+    paths:
+      - "python-app/**"
+      - ".github/workflows/instalador-windows.yml"
+  workflow_dispatch:
+
+jobs:
+  instalador:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Dependências do app e do PyInstaller
+        run: pip install -r python-app/requirements.txt -r python-app/windows/requirements-build.txt
+
+      - name: Executável (PyInstaller)
+        working-directory: python-app
+        run: pyinstaller --noconfirm windows/Inclinometro.spec
+
+      - name: Confere que o executável abre e importa tudo
+        shell: pwsh
+        working-directory: python-app
+        run: |
+          $exe = "dist\Inclinometro2Eixos\Inclinometro2Eixos.exe"
+          if (-not (Test-Path $exe)) { throw "Executável não gerado" }
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) { throw "O executável fechou sozinho (código $($p.ExitCode))" }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "OK: o executável continuou aberto por 20 s"
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          & $iscc python-app\windows\Inclinometro.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC falhou" }
+
+      - name: Publica o instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: Inclinometro-2Eixos-Setup
+          path: python-app/windows/installer_output/*.exe
+          retention-days: 90
+
+      - name: Publica a versão portátil (pasta com o .exe, sem instalar)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Inclinometro-2Eixos-Portatil
+          path: python-app/dist/Inclinometro2Eixos/
+          retention-days: 90

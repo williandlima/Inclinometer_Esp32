@@ -14,6 +14,33 @@ Existem três caminhos, dependendo de quem vai usar o resultado:
 > Windows, sem terminal, sem arquivo `.bat` e sem editor de código. As
 > Opções 1 e 2 abaixo são só para quem desenvolve/mantém o software.
 
+## Caminho rápido — baixar o instalador pronto do GitHub (sem VSCode, sem Python)
+
+O GitHub gera o instalador automaticamente, numa máquina Windows dele, a
+cada alteração em `python-app/` (workflow `.github/workflows/instalador-windows.yml`):
+
+1. No GitHub do repositório, abrir a aba **Actions** → **Instalador Windows**.
+2. Clicar na execução mais recente com ✓ verde (ou em **Run workflow** para
+   gerar uma nova agora).
+3. Em **Artifacts**, baixar **Inclinometro-2Eixos-Setup** (vem em `.zip`;
+   extrair o `Inclinometro-2Eixos-Setup-2.2.0.exe`).
+4. Executar o Setup no PC e marcar **Criar atalho na Área de Trabalho**.
+   O programa passa a abrir pelo ícone com a logo, como qualquer programa.
+
+O artifact **Inclinometro-2Eixos-Portatil** é a mesma coisa sem instalar:
+uma pasta com `Inclinometro2Eixos.exe` que roda direto (pendrive, rede).
+Os artifacts ficam disponíveis por 90 dias; depois, basta rodar o workflow
+de novo. Copie o Setup para a mídia offline da fábrica junto com o resto.
+
+## Atalho para o código-fonte (quem já roda pelo VSCode)
+
+Para quem já tem o código e as bibliotecas instalados (o mesmo Python que o
+VSCode usa, ou o `.venv` de `install.bat`): dar duplo clique em
+`windows\criar_atalho.bat`. Ele cria na Área de Trabalho o atalho
+**Inclinometro 2 Eixos (Avibras Aeroco)**, com a logo, que abre o app
+direto pelo `pythonw.exe`, sem VSCode e sem janela de terminal. Se a pasta
+do código mudar de lugar, rode o `criar_atalho.bat` de novo.
+
 ## Opção 1 — Instalar e rodar a partir do código-fonte (uso: desenvolvimento)
 
 Requisito: **Python 3.10 ou superior** instalado no computador.
@@ -85,7 +112,7 @@ Passos (em um Windows com Python instalado):
 ## Opção 3 — Gerar um instalador (Setup.exe) com atalhos e desinstalador (USE ESTA para o operador final)
 
 A forma mais próxima de um "programa instalado de verdade": um único
-arquivo `Inclinometro-2Eixos-Setup-2.0.0.exe` que, ao ser executado no computador
+arquivo `Inclinometro-2Eixos-Setup-2.2.0.exe` que, ao ser executado no computador
 de destino, instala o programa em `Arquivos de Programas`, cria atalho no
 Menu Iniciar (e, opcionalmente, na Área de Trabalho) e registra um
 desinstalador em "Adicionar ou remover programas" — sem precisar de Python
@@ -101,7 +128,7 @@ Passos (em um Windows com Python **e** Inno Setup instalados):
 2. Dê duplo clique em `windows\build_installer.bat`.
    - Gera o executável autônomo (mesmo processo da Opção 2).
    - Compila o instalador com o Inno Setup.
-   - Ao final, gera `windows\installer_output\Inclinometro-2Eixos-Setup-2.0.0.exe`.
+   - Ao final, gera `windows\installer_output\Inclinometro-2Eixos-Setup-2.2.0.exe`.
 3. Copie esse único arquivo `.exe` para o(s) computador(es) de destino e
    execute — o assistente de instalação cuida do resto. Não precisa
    instalar Python nem Inno Setup nesses computadores.
@@ -123,7 +150,7 @@ por ele que o Windows decide se uma instalação é um app novo ou um
 |---|---|---|
 | Nome no Menu Iniciar | Inclinometro Avibras Aeroco | Inclinometro 2 Eixos (Avibras Aeroco) |
 | Pasta de instalação | `Arquivos de Programas\Inclinometro` | `Arquivos de Programas\Inclinometro2Eixos` |
-| Instalador gerado | `Inclinometro-Setup-1.0.0.exe` | `Inclinometro-2Eixos-Setup-2.0.0.exe` |
+| Instalador gerado | `Inclinometro-Setup-1.0.0.exe` | `Inclinometro-2Eixos-Setup-2.2.0.exe` |
 | Firmware correspondente | 1.1.1 | 1.3.1 |
 
 Para gerar o instalador da **versão 2**, siga a Opção 3 acima com o código
