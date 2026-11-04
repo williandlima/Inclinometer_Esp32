@@ -63,7 +63,24 @@ jobs:
       - name: Prepara a versão portátil
         shell: pwsh
         run: |
-          Copy-Item python-app\windows\portatil_criar_atalho.bat "python-app\dist\Inclinometro2Eixos\CRIAR ATALHO NA AREA DE TRABALHO.bat"
+          Copy-Item python-app\windows\instalar_inclinometro.bat "python-app\dist\Inclinometro2Eixos\INSTALAR - criar icone na Area de Trabalho.bat"
+
+      - name: Testa o instalar_inclinometro.bat (cópia, desbloqueio e atalhos)
+        shell: pwsh
+        run: |
+          $bat = "python-app\dist\Inclinometro2Eixos\INSTALAR - criar icone na Area de Trabalho.bat"
+          cmd /c "`"$bat`" < NUL"
+          $dest = Join-Path $env:LOCALAPPDATA "Programs\Inclinometro2Eixos\Inclinometro2Eixos.exe"
+          $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) "Inclinometro 2 Eixos (Avibras Aeroco).lnk"
+          $menu = Join-Path ([Environment]::GetFolderPath('Programs')) "Inclinometro 2 Eixos (Avibras Aeroco).lnk"
+          foreach ($f in @($dest, $lnk, $menu)) { if (-not (Test-Path $f)) { throw "Não criado: $f" } else { Write-Host "OK: $f" } }
+          $alvo = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
+          if ($alvo -ne $dest) { throw "Atalho aponta para $alvo" }
+          Start-Sleep -Seconds 10
+          $p = Get-Process Inclinometro2Eixos -ErrorAction SilentlyContinue
+          if (-not $p) { throw "O programa não ficou aberto depois da instalação" }
+          Write-Host "OK: programa aberto pelo .bat"
+          $p | Stop-Process -Force
 
       - name: Publica a versão portátil (pasta com o .exe, sem instalar)
         uses: actions/upload-artifact@v4

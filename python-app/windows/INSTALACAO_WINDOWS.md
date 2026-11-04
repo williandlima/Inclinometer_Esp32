@@ -40,7 +40,8 @@ uma pasta com `Inclinometro2Eixos.exe` que roda direto (pendrive, rede).
 **Nunca copie só o `Inclinometro2Eixos.exe` para a Área de Trabalho**: ele
 depende da pasta `_internal` ao lado e não abre sozinho. Coloque a pasta
 inteira num lugar fixo (ex.: `C:\Inclinometro2Eixos`) e dê duplo clique em
-`CRIAR ATALHO NA AREA DE TRABALHO.bat`, dentro dela: ele desbloqueia os
+`INSTALAR - criar icone na Area de Trabalho.bat`, dentro dela: ele copia a
+pasta para `%LOCALAPPDATA%\Programs\Inclinometro2Eixos`, desbloqueia os
 arquivos e cria o atalho com a logo na Área de Trabalho.
 Os artifacts ficam disponíveis por 90 dias; depois, basta rodar o workflow
 de novo. Copie o Setup para a mídia offline da fábrica junto com o resto.
