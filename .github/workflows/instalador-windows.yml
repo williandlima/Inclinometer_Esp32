@@ -60,6 +60,11 @@ jobs:
           path: python-app/windows/installer_output/*.exe
           retention-days: 90
 
+      - name: Prepara a versão portátil
+        shell: pwsh
+        run: |
+          Copy-Item python-app\windows\portatil_criar_atalho.bat "python-app\dist\Inclinometro2Eixos\CRIAR ATALHO NA AREA DE TRABALHO.bat"
+
       - name: Publica a versão portátil (pasta com o .exe, sem instalar)
         uses: actions/upload-artifact@v4
         with:

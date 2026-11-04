@@ -27,8 +27,21 @@ cada alteração em `python-app/` (workflow `.github/workflows/instalador-window
 4. Executar o Setup no PC e marcar **Criar atalho na Área de Trabalho**.
    O programa passa a abrir pelo ícone com a logo, como qualquer programa.
 
+**"O Windows protegeu o computador" / arquivo perigoso:** o `.exe` não tem
+assinatura digital, então o SmartScreen avisa na primeira vez. Antes de
+extrair, clique com o botão direito no `.zip` baixado → **Propriedades** →
+marque **Desbloquear** → OK; depois extraia. Se o aviso azul aparecer
+mesmo assim, clique em **Mais informações → Executar assim mesmo** (só na
+primeira vez). Se o antivírus da empresa apagar o arquivo, peça à TI uma
+exceção para a pasta do programa.
+
 O artifact **Inclinometro-2Eixos-Portatil** é a mesma coisa sem instalar:
 uma pasta com `Inclinometro2Eixos.exe` que roda direto (pendrive, rede).
+**Nunca copie só o `Inclinometro2Eixos.exe` para a Área de Trabalho**: ele
+depende da pasta `_internal` ao lado e não abre sozinho. Coloque a pasta
+inteira num lugar fixo (ex.: `C:\Inclinometro2Eixos`) e dê duplo clique em
+`CRIAR ATALHO NA AREA DE TRABALHO.bat`, dentro dela: ele desbloqueia os
+arquivos e cria o atalho com a logo na Área de Trabalho.
 Os artifacts ficam disponíveis por 90 dias; depois, basta rodar o workflow
 de novo. Copie o Setup para a mídia offline da fábrica junto com o resto.
 
