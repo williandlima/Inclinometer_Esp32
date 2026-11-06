@@ -11,8 +11,14 @@ REM      (e extrai sozinho);
 REM   2) copia a pasta inteira para %LOCALAPPDATA%\Programs\Inclinometro2Eixos;
 REM   3) tira o bloqueio "baixado da internet" de todos os arquivos
 REM      (e isso que faz o Windows tratar o .exe como perigoso);
-REM   4) cria os atalhos com a logo e abre o programa.
+REM   4) cria os atalhos com a logo, REMOVE atalhos de versoes antigas
+REM      (ex: do Setup.exe em Arquivos de Programas) e abre o programa.
 REM  Opcional: adiciona uma excecao no Windows Defender (pede administrador).
+REM
+REM  Rodado de DENTRO DO CODIGO-FONTE (python-app\windows, sem .exe ao
+REM  lado), nao instala .exe nenhum: chama o criar_atalho.bat, que faz o
+REM  icone abrir o codigo desta pasta. Antes ele pegava o .zip que estivesse
+REM  em Downloads - quase sempre uma versao velha.
 REM ======================================================================
 
 setlocal EnableExtensions
@@ -21,8 +27,21 @@ set "EXE=Inclinometro2Eixos.exe"
 set "DEST=%LOCALAPPDATA%\Programs\Inclinometro2Eixos"
 set "LNKNAME=Inclinometro 2 Eixos (Avibras Aeroco)"
 set "SRC="
+set "ZIP="
 set "TMPX="
 
+REM ---- 0) Dentro do codigo-fonte? Usa o codigo, nao um .exe velho -----
+if exist "%~dp0%EXE%" goto :portatil
+if exist "%~dp0Inclinometro2Eixos\%EXE%" goto :portatil
+if not exist "%~dp0..\main.py" goto :portatil
+if not exist "%~dp0criar_atalho.bat" goto :portatil
+echo.
+echo Este arquivo esta dentro da pasta do codigo-fonte: o icone vai abrir
+echo o codigo desta pasta ^(sempre a versao do "git pull"^).
+call "%~dp0criar_atalho.bat"
+exit /b %errorlevel%
+
+:portatil
 echo.
 echo === Inclinometro 2 Eixos - instalacao portatil ===
 echo.
@@ -54,6 +73,20 @@ if not exist "%SRC%_internal" (
     goto :fim_erro
 )
 echo Programa encontrado em: %SRC%
+set "SRCEXE=%SRC%%EXE%"
+set "VER=?"
+powershell -NoProfile -Command "(Get-Item -LiteralPath $env:SRCEXE).VersionInfo.ProductVersion" > "%TEMP%\inclinometro_ver.txt" 2>nul
+set /p VER=<"%TEMP%\inclinometro_ver.txt"
+del "%TEMP%\inclinometro_ver.txt" >nul 2>nul
+echo Versao deste programa: %VER%
+if not defined ZIP goto :copiar
+echo.
+echo [ATENCAO] Usando o .zip de Downloads: %ZIP%
+echo           Se a versao acima nao for a mais recente, apague os zips antigos de
+echo           Downloads e baixe o "Inclinometro-2Eixos-Portatil" do run mais recente
+echo           em GitHub ^> Actions ^> Instalador Windows.
+echo.
+:copiar
 
 REM ---- 2) Fecha o programa se estiver aberto e copia ------------------
 taskkill /im "%EXE%" /f >nul 2>nul
@@ -70,10 +103,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Get-ChildItem -LiteralPath $env:DEST -Recurse -File | Unblock-File;" ^
   "$w=New-Object -ComObject WScript.Shell;" ^
   "$exe=Join-Path $env:DEST $env:EXE;" ^
+  "$keep=@();" ^
   "foreach ($d in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {" ^
-  "  $s=$w.CreateShortcut((Join-Path $d ($env:LNKNAME + '.lnk')));" ^
-  "  $s.TargetPath=$exe; $s.WorkingDirectory=$env:DEST; $s.IconLocation=$exe + ',0';" ^
-  "  $s.Description='Pan-tilt meter - Inclinometro Avibras Aeroco'; $s.Save() }"
+  "  $p=Join-Path $d ($env:LNKNAME + '.lnk'); $s=$w.CreateShortcut($p);" ^
+  "  $s.TargetPath=$exe; $s.Arguments=''; $s.WorkingDirectory=$env:DEST; $s.IconLocation=$exe + ',0';" ^
+  "  $s.Description='Pan-tilt meter - Inclinometro Avibras Aeroco'; $s.Save(); $keep+=$p }" ^
+  "foreach ($d in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('CommonDesktopDirectory'), [Environment]::GetFolderPath('CommonPrograms'))) {" ^
+  "  if (-not $d -or -not (Test-Path -LiteralPath $d)) { continue }" ^
+  "  Get-ChildItem -LiteralPath $d -Filter 'Inclinometro*.lnk' -Recurse -Depth 1 -ErrorAction SilentlyContinue | ForEach-Object {" ^
+  "    if ($keep -contains $_.FullName) { return }" ^
+  "    $t=$w.CreateShortcut($_.FullName).TargetPath;" ^
+  "    if ($t -like '*\Inclinometro2Eixos.exe' -and $t -ne $exe) {" ^
+  "      try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop; Write-Host ('Atalho antigo removido: ' + $_.FullName) }" ^
+  "      catch { Write-Host ('[AVISO] Atalho da versao antiga que nao pude apagar: ' + $_.FullName); Write-Host '        Desinstale a versao antiga em Configuracoes > Aplicativos, ou apague esse atalho.' } } } }"
 if errorlevel 1 (
     echo [ERRO] Nao foi possivel criar os atalhos.
     goto :fim_erro
@@ -82,6 +124,7 @@ if defined TMPX rd /s /q "%TMPX%" 2>nul
 
 echo.
 echo OK: atalho "%LNKNAME%" criado na Area de Trabalho e no Menu Iniciar.
+echo Versao instalada: %VER%   ^(aparece no topo da tela: "App v%VER%"^)
 echo.
 
 REM ---- Opcional: excecao no Windows Defender --------------------------
