@@ -41,7 +41,7 @@ if errorlevel 1 (
 echo.
 echo ============================================
 echo  Instalador gerado em:
-echo  windows\installer_output\Inclinometro-2Eixos-Setup-2.2.0.exe
+echo  windows\installer_output\Inclinometro-2Eixos-Setup-2.3.0.exe
 echo.
 echo  Esse arquivo unico pode ser copiado para qualquer
 echo  computador Windows (10/11, 64 bits) e instala o

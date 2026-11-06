@@ -106,7 +106,7 @@ do sensor nem do dado gravado no histórico/relatório (ambos já são de 0,01°
 só o arredondamento mostrado na tela. Regra em `ui/angle_display.py`, a mesma
 do app Android; testada em `sim/exibicao_test.py` (ver `sim/run.sh`).
 
-## Aquisição para o relatório PDF
+## Aquisição para o relatório PDF (app 2.3.0)
 
 O botão **"Gerar relatório PDF"** usa as leituras de **uma aquisição**:
 
