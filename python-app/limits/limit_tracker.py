@@ -33,12 +33,18 @@ PAN_AXIS = "pan"
 
 AXIS_LABELS = {TILT_AXIS: "Inclinação", PAN_AXIS: "Azimute"}
 
+# De onde veio o valor de um extremo — vai para o relatório, que precisa dizer
+# com que taxa o mín/máx foi medido.
+SOURCE_FIRMWARE = "firmware"  # medido no ESP32 a 100 Hz (firmware v1.5.0+)
+SOURCE_APP = "app"  # calculado aqui, a partir das leituras recebidas (~4-5 Hz)
+
 
 @dataclass
 class LimitEvent:
     kind: str  # "min" | "max"
     reading: AngleReading
     axis: str = TILT_AXIS
+    source: str = SOURCE_APP  # SOURCE_FIRMWARE | SOURCE_APP
 
     @property
     def value_deg(self) -> float:
@@ -126,6 +132,13 @@ class LimitTracker:
                 self._min_reading = candidate_reading
             else:
                 self._max_reading = candidate_reading
-            events.append(LimitEvent(kind=kind, reading=candidate_reading, axis=self._axis))
+            events.append(
+                LimitEvent(
+                    kind=kind,
+                    reading=candidate_reading,
+                    axis=self._axis,
+                    source=SOURCE_APP if peak is None else SOURCE_FIRMWARE,
+                )
+            )
 
         return events

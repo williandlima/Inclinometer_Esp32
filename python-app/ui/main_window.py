@@ -31,6 +31,13 @@ from data_source.simulated_source import SimulatedAngleSource
 from limits.history_store import HistoryStore
 from limits.limit_tracker import PAN_AXIS, TILT_AXIS, LimitTracker
 from limits.vibration_stats import analyze_axis, has_pan_samples
+from report.acquisition import (
+    ACQUISITION_DURATIONS_S,
+    format_clock,
+    format_duration,
+    format_planned,
+    summarize_acquisition,
+)
 from report.report_generator import generate_report, generate_vibration_report
 from ui.angle_display import DISPLAY_STEPS_DEG, angle_for_display, format_angle, normalize_step, short_step_label
 from ui.settings_dialog import AppSettings, SettingsDialog, load_display_steps, save_display_steps
@@ -153,6 +160,13 @@ class MainWindow(QMainWindow):
         self._firmware_warned = False
         # Pasta do último relatório salvo (ver `_ask_report_path`).
         self._report_dir: str | None = None
+        # Aquisição para o relatório (ver `report.acquisition`): início e
+        # contagem de leituras da aquisição atual, para o cronômetro da tela.
+        self._acq_started_at: float | None = None
+        self._acq_readings = 0
+        self._acq_timer = QTimer(self)
+        self._acq_timer.setInterval(250)  # fim do tempo programado com no máx. 0,25 s de atraso
+        self._acq_timer.timeout.connect(self._tick_acquisition)
         # Degrau atualmente exibido em cada eixo (histerese da exibição) e a
         # última leitura bruta, para redesenhar na hora ao trocar a resolução.
         self._displayed: dict[str, float | None] = {TILT_AXIS: None, PAN_AXIS: None}
@@ -215,6 +229,8 @@ class MainWindow(QMainWindow):
         axes_row.addWidget(self._axis_widgets[PAN_AXIS]["frame"], 1)
         root.addLayout(axes_row, 1)
 
+        root.addLayout(self._build_acquisition_row())
+
         buttons_row = QHBoxLayout()
         buttons_row.setSpacing(16)
         self.start_stop_btn = QPushButton("Iniciar")
@@ -246,6 +262,87 @@ class MainWindow(QMainWindow):
         root.addLayout(buttons_row)
 
         self.statusBar().showMessage("Pronto.")
+
+    def _build_acquisition_row(self) -> QHBoxLayout:
+        """Linha "Aquisição para relatório": o tempo programado e, durante a
+        leitura, o cronômetro e quantas leituras já entraram no relatório.
+
+        Antes não havia nada disso na tela: o relatório usava a sessão
+        inteira, desde o "Iniciar" (ou o último "Resetar limites"), sem dizer
+        em lugar nenhum de quando a quando nem quantas leituras."""
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        title = QLabel("Aquisição para relatório:")
+        title.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.acq_duration_combo = QComboBox()
+        for planned in ACQUISITION_DURATIONS_S:
+            self.acq_duration_combo.addItem(format_planned(planned), planned)
+        self.acq_duration_combo.setToolTip(
+            "Tempo da aquisição usada no relatório PDF. Com um tempo definido, a leitura "
+            "para sozinha ao fim dele e o app oferece gerar o relatório."
+        )
+        self.acq_status_label = QLabel()
+        self.acq_status_label.setStyleSheet("font-size: 14px;")
+        row.addStretch(1)
+        row.addWidget(title)
+        row.addWidget(self.acq_duration_combo)
+        row.addWidget(self.acq_status_label)
+        row.addStretch(1)
+        self._update_acquisition_label()
+        return row
+
+    def _planned_duration_s(self) -> float | None:
+        return self.acq_duration_combo.currentData()
+
+    def _begin_acquisition(self) -> None:
+        """Abre uma aquisição nova no histórico (é ela que vai para o PDF)."""
+        self._history.start_session(mode=self._settings.mode, planned_duration_s=self._planned_duration_s())
+        session = self._history.get_session(self._history.current_session_id)
+        self._acq_started_at = session.started_at if session else None
+        self._acq_readings = 0
+        self._update_acquisition_label()
+
+    def _update_acquisition_label(self) -> None:
+        if not self._running or self._acq_started_at is None:
+            last = self._history.latest_session_with_readings()
+            if last is None:
+                self.acq_status_label.setText("nenhuma aquisição registrada ainda")
+            else:
+                acq = summarize_acquisition(last, self._history.get_readings(last.id))
+                self.acq_status_label.setText(
+                    f"última: {_dt.datetime.fromtimestamp(acq.started_at):%d/%m %H:%M:%S}, "
+                    f"{format_duration(acq.duration_s)}, {acq.n_readings} leituras"
+                )
+            return
+        elapsed = max(0.0, _dt.datetime.now().timestamp() - self._acq_started_at)
+        planned = self._planned_duration_s()
+        clock = format_clock(elapsed)
+        if planned is not None:
+            clock += f" / {format_clock(planned)}"
+        self.acq_status_label.setText(f"● gravando {clock}  ·  {self._acq_readings} leituras")
+
+    def _tick_acquisition(self) -> None:
+        self._update_acquisition_label()
+        planned = self._planned_duration_s()
+        if planned is None or not self._running or self._acq_started_at is None:
+            return
+        if _dt.datetime.now().timestamp() - self._acq_started_at >= planned:
+            self._finish_timed_acquisition()
+
+    def _finish_timed_acquisition(self) -> None:
+        planned = self._planned_duration_s()
+        self._stop()
+        message = f"Aquisição de {format_planned(planned)} concluída."
+        self.statusBar().showMessage(message)
+        answer = QMessageBox.question(
+            self,
+            "Aquisição concluída",
+            f"{message}\n\nGerar o relatório PDF desta aquisição agora?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._generate_report()
 
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
@@ -472,7 +569,8 @@ class MainWindow(QMainWindow):
         for tracker in self._trackers.values():
             tracker.reset()
         self._displayed = {TILT_AXIS: None, PAN_AXIS: None}
-        self._history.start_session(mode=self._settings.mode)
+        self._running = True
+        self._begin_acquisition()
         self._source.start(
             on_reading=lambda r: self._bridge.reading.emit(r),
             on_error=lambda msg: self._bridge.error.emit(msg),
@@ -484,6 +582,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Conectado: {self._source.label}")
         self._firmware_warned = False
         self._update_version_label()
+        self.acq_duration_combo.setEnabled(False)
+        self._acq_timer.start()
 
     def _stop(self) -> None:
         if self._source is not None:
@@ -491,6 +591,10 @@ class MainWindow(QMainWindow):
             self._source = None
         self._history.end_session()
         self._running = False
+        self._acq_timer.stop()
+        self._acq_started_at = None
+        self.acq_duration_combo.setEnabled(True)
+        self._update_acquisition_label()
         self._displayed = {TILT_AXIS: None, PAN_AXIS: None}
         self.start_stop_btn.setText("Iniciar")
         self._update_mode_label()
@@ -503,7 +607,7 @@ class MainWindow(QMainWindow):
         mode = self._settings.mode
         if was_running:
             self._history.end_session()
-            self._history.start_session(mode=mode)
+            self._begin_acquisition()
 
         # Com firmware v1.5.0+ quem guarda os extremos é o ESP32 (ver
         # `limits.limit_tracker`). Zerar só o lado do app não adiantaria: a
@@ -529,27 +633,39 @@ class MainWindow(QMainWindow):
             widgets["max_value"].setText("--.--°")
             widgets["max_time"].setText("")
         self.statusBar().showMessage(
-            "Limites resetados (histórico anterior preservado)." if was_running
+            "Limites resetados — nova aquisição iniciada; o relatório começa a partir daqui "
+            "(a anterior continua no histórico)." if was_running
             else "Limites resetados."
         )
 
-    def _generate_report(self) -> None:
+    def _report_session(self):
+        """Aquisição que vai para o relatório: a atual, com a leitura em
+        andamento; senão, a mais recente que tem leituras."""
         session_id = self._history.current_session_id
-        if session_id is None:
-            sessions = self._history.list_sessions()
-            if not sessions:
-                QMessageBox.information(self, "Sem dados", "Ainda não há nenhuma sessão registrada.")
-                return
-            session_id = sessions[0].id
+        if session_id is not None:
+            return self._history.get_session(session_id)
+        return self._history.latest_session_with_readings()
+
+    def _generate_report(self) -> None:
+        session_info = self._report_session()
+        if session_info is None:
+            QMessageBox.information(self, "Sem dados", "Ainda não há nenhuma aquisição registrada.")
+            return
+        readings = self._history.get_readings(session_info.id)
+        if not readings:
+            QMessageBox.information(
+                self,
+                "Sem dados",
+                "A aquisição atual ainda não tem leituras — aguarde a conexão com o ESP32 "
+                "(ou a aquisição foi reiniciada agora por \"Resetar limites\"/\"Calibrar\").",
+            )
+            return
+        events = self._history.get_limit_events(session_info.id)
+        acq = summarize_acquisition(session_info, readings, events)
 
         path = self._ask_report_path("Salvar relatório", "relatorio_inclinometro")
         if not path:
             return
-
-        readings = self._history.get_readings(session_id)
-        events = self._history.get_limit_events(session_id)
-        sessions_by_id = {s.id: s for s in self._history.list_sessions()}
-        session_info = sessions_by_id.get(session_id)
 
         try:
             generate_report(path, session_info, readings, events)
@@ -557,7 +673,12 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Erro ao gerar relatório", str(exc))
             return
 
-        self._report_saved(path)
+        started = _dt.datetime.fromtimestamp(acq.started_at).strftime("%d/%m/%Y %H:%M:%S")
+        self._report_saved(
+            path,
+            f"Aquisição de {started}{' (em andamento)' if acq.in_progress else ''}: "
+            f"{format_duration(acq.duration_s)}, {acq.n_readings} leituras.",
+        )
 
     def _ask_report_path(self, title: str, prefix: str) -> str:
         """Pergunta onde salvar um relatório, sugerindo um nome novo.
@@ -576,13 +697,14 @@ class MainWindow(QMainWindow):
             path += ".pdf"
         return path
 
-    def _report_saved(self, path: str) -> None:
+    def _report_saved(self, path: str, detail: str = "") -> None:
         """Confirma o relatório salvo e oferece abrir EXATAMENTE esse arquivo."""
         self._report_dir = os.path.dirname(path)
+        detail_text = f"{detail}\n\n" if detail else ""
         answer = QMessageBox.question(
             self,
             "Relatório gerado",
-            f"Relatório salvo em:\n{path}\n\nAbrir o relatório agora?",
+            f"{detail_text}Relatório salvo em:\n{path}\n\nAbrir o relatório agora?",
             QMessageBox.Open | QMessageBox.Close,
             QMessageBox.Open,
         )
@@ -639,6 +761,7 @@ class MainWindow(QMainWindow):
             ):
                 self._update_version_label()
         self._history.add_reading(reading)
+        self._acq_readings += 1
 
         values = {TILT_AXIS: reading.angle_deg, PAN_AXIS: reading.pan_deg}
         for axis, value in values.items():

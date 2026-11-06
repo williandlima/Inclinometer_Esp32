@@ -1,6 +1,7 @@
-"""Geração do relatório em PDF a partir do histórico de uma sessão:
-gráfico do ângulo ao longo do tempo (com os extremos marcados), tabela de
-eventos de limite e um resumo textual da sessão.
+"""Geração do relatório em PDF a partir do histórico de uma aquisição:
+como os dados foram adquiridos (janela, duração, taxa, interrupções, origem
+dos mín/máx — ver `report.acquisition`), gráfico do ângulo ao longo do tempo
+(com os extremos marcados) e tabela de eventos de limite.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.platypus import (
     Image,
+    KeepTogether,
     PageBreak,
     Paragraph,
     SimpleDocTemplate,
@@ -27,7 +29,13 @@ from reportlab.platypus import (
 )
 from reportlab.lib.styles import getSampleStyleSheet
 
-from limits.limit_tracker import PAN_AXIS, TILT_AXIS
+from limits.limit_tracker import PAN_AXIS, SOURCE_FIRMWARE, TILT_AXIS
+from report.acquisition import (
+    AcquisitionSummary,
+    format_duration,
+    format_planned,
+    summarize_acquisition,
+)
 
 if TYPE_CHECKING:
     from data_source.base import AngleReading
@@ -87,25 +95,64 @@ def _axis_extremes(
     return min(values), max(values)
 
 
+def _time_scale(duration_s: float) -> tuple[float, str]:
+    """Divisor e rótulo do eixo de tempo: segundos até 5 min, minutos até
+    3 h, horas acima disso — um eixo com "3600" não diz nada a ninguém."""
+    if duration_s > 3 * 3600:
+        return 3600.0, "Tempo desde o início da aquisição (h)"
+    if duration_s > 300:
+        return 60.0, "Tempo desde o início da aquisição (min)"
+    return 1.0, "Tempo desde o início da aquisição (s)"
+
+
 def _build_chart_image(
-    readings: list["AngleReading"], events: list["LimitEvent"], axis: str = TILT_AXIS
+    readings: list["AngleReading"],
+    events: list["LimitEvent"],
+    axis: str = TILT_AXIS,
+    acquisition: AcquisitionSummary | None = None,
 ) -> Image:
     series_label, y_label, color, y_limits = _AXIS_CHART_CONFIG[axis]
     fig, ax = plt.subplots(figsize=(16, 8))
+    if acquisition is None:
+        acquisition = summarize_acquisition(None, readings, events)
+
+    # O zero do eixo de tempo é o INÍCIO DA AQUISIÇÃO (não a primeira leitura),
+    # para o gráfico e a tabela "Aquisição dos dados" falarem do mesmo tempo.
+    t0 = acquisition.started_at if acquisition.started_at is not None else (
+        readings[0].timestamp if readings else 0.0
+    )
+    div, x_label = _time_scale(acquisition.duration_s)
 
     # Leituras sem valor neste eixo são puladas (não viram zero na curva).
     points = [(r, _axis_value(r, axis)) for r in readings]
     points = [(r, v) for r, v in points if v is not None]
     if points:
-        t0 = readings[0].timestamp
-        xs = [(r.timestamp - t0) for r, _ in points]
-        ys = [v for _, v in points]
+        # Uma interrupção vira um buraco na curva (NaN), e não uma reta
+        # ligando as duas pontas como se o ângulo tivesse sido medido ali.
+        gap_starts = {g.start for g in acquisition.gaps}
+        xs: list[float] = []
+        ys: list[float] = []
+        for r, v in points:
+            xs.append((r.timestamp - t0) / div)
+            ys.append(v)
+            if r.timestamp in gap_starts:
+                xs.append(float("nan"))
+                ys.append(float("nan"))
         ax.plot(xs, ys, color=color, linewidth=1, label=series_label)
+        for i, g in enumerate(acquisition.gaps):
+            ax.axvspan(
+                (g.start - t0) / div,
+                (g.end - t0) / div,
+                color="#ff9800",
+                alpha=0.18,
+                label="Sem leitura (interrupção)" if i == 0 else None,
+            )
+        ys = [v for _, v in points]
 
         axis_events = [e for e in events if e.axis == axis]
-        mins_x = [(e.reading.timestamp - t0) for e in axis_events if e.kind == "min"]
+        mins_x = [(e.reading.timestamp - t0) / div for e in axis_events if e.kind == "min"]
         mins_y = [e.value_deg for e in axis_events if e.kind == "min"]
-        maxs_x = [(e.reading.timestamp - t0) for e in axis_events if e.kind == "max"]
+        maxs_x = [(e.reading.timestamp - t0) / div for e in axis_events if e.kind == "max"]
         maxs_y = [e.value_deg for e in axis_events if e.kind == "max"]
         ax.scatter(mins_x, mins_y, color="#d62728", marker="v", zorder=3, label="Novo mínimo")
         ax.scatter(maxs_x, maxs_y, color="#2ca02c", marker="^", zorder=3, label="Novo máximo")
@@ -124,9 +171,11 @@ def _build_chart_image(
             margin = max((data_max - data_min) * 0.05, 1.0)
             y_limits = (min(fixed_lo, data_min - margin), max(fixed_hi, data_max + margin))
 
-    ax.set_xlabel("Tempo (s)")
+    ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
     ax.set_ylim(*y_limits)
+    if acquisition.duration_s > 0:
+        ax.set_xlim(0, acquisition.duration_s / div)
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend(loc="upper right")
     fig.tight_layout()
@@ -140,6 +189,115 @@ def _build_chart_image(
     return img
 
 
+_SOURCE_TEXT = {
+    SOURCE_FIRMWARE: "medidos no ESP32 a 100 Hz (firmware v1.5.0+)",
+    "app": "calculados pelo app a partir das leituras (~4-5 Hz)",
+    None: "-",
+}
+
+
+def _acquisition_rows(acq: AcquisitionSummary, mode_label: str) -> list[list[str]]:
+    if acq.in_progress:
+        end_text = (
+            f"em andamento — dados até {_fmt_dt(acq.last_reading_at)}"
+            if acq.last_reading_at is not None
+            else "em andamento — nenhuma leitura ainda"
+        )
+    elif acq.ended_at is not None:
+        end_text = _fmt_dt(acq.ended_at)
+    else:
+        end_text = "-"
+
+    planned = format_planned(acq.planned_duration_s)
+    if acq.completed_planned is True:
+        planned += "  —  concluída"
+    elif acq.completed_planned is False:
+        planned += "  —  em andamento" if acq.in_progress else "  —  interrompida antes do fim"
+
+    rate = acq.mean_rate_hz
+    rate_text = "-"
+    if rate is not None:
+        rate_text = f"{rate:.1f} leituras/s"
+        if acq.median_interval_s is not None:
+            rate_text += f"  (uma a cada {acq.median_interval_s * 1000:.0f} ms)"
+
+    if acq.gaps:
+        longest = max(g.duration_s for g in acq.gaps)
+        gaps_text = (
+            f"{len(acq.gaps)} — {format_duration(acq.gap_total_s)} sem leitura no total "
+            f"(maior: {format_duration(longest)})"
+        )
+    else:
+        gaps_text = "nenhuma"
+
+    coverage = acq.coverage_pct
+    pan_count = (
+        str(acq.n_pan_readings) if acq.n_pan_readings else "0 (firmware sem eixo de azimute)"
+    )
+    return [
+        ["Modo", mode_label],
+        ["Início da aquisição", _fmt_dt(acq.started_at) if acq.started_at is not None else "-"],
+        ["Fim da aquisição", end_text],
+        ["Duração da aquisição", format_duration(acq.duration_s)],
+        ["Tempo programado", planned],
+        ["Leituras de inclinação", str(acq.n_readings)],
+        ["Leituras de azimute", pan_count],
+        ["Taxa média de leitura", rate_text],
+        ["Interrupções (> 2 s sem leitura)", gaps_text],
+        ["Cobertura da aquisição", f"{coverage:.1f} %" if coverage is not None else "-"],
+        ["Mín/máx de inclinação", _extremes_source_text(acq, TILT_AXIS)],
+        ["Mín/máx de azimute", _extremes_source_text(acq, PAN_AXIS)],
+    ]
+
+
+def _extremes_source_text(acq: AcquisitionSummary, axis: str) -> str:
+    source = acq.extremes_source.get(axis)
+    if source is not None:
+        return _SOURCE_TEXT.get(source, source)
+    # Sem evento gravado o resumo usa as próprias leituras (_axis_extremes).
+    has_values = acq.n_pan_readings if axis == PAN_AXIS else acq.n_readings
+    return "calculados a partir das leituras (sem eventos de limite gravados)" if has_values else "-"
+
+
+def _acquisition_explanation(acq: AcquisitionSummary) -> str:
+    planned = (
+        f"programada para {format_planned(acq.planned_duration_s)}"
+        if acq.planned_duration_s is not None
+        else "livre, encerrada no botão \"Parar\""
+    )
+    return (
+        "<b>Como os dados foram adquiridos.</b> Este relatório usa todas as leituras de uma"
+        " única aquisição: ela começa no botão \"Iniciar\" (ou em \"Resetar limites\"/"
+        "\"Calibrar\" com a leitura em andamento, que abrem uma aquisição nova) e termina em"
+        f" \"Parar\" ou no fim do tempo programado. Esta aquisição foi {planned}. Cada leitura"
+        " é o valor exibido na tela, recebido do ESP32 cerca de 4 a 5 vezes por segundo, e é"
+        " o que forma as curvas abaixo. Os mínimos e máximos são medidos pelo próprio ESP32"
+        " a 100 Hz quando o firmware oferece (v1.5.0 ou mais nova), por isso um extremo pode"
+        " aparecer fora da curva: a curva mostra o que a tela mostrou, o marcador mostra o que"
+        " de fato aconteceu. Trechos sem leitura por mais de 2 s (queda de conexão, por"
+        " exemplo) aparecem em laranja nos gráficos e não entram na curva."
+    )
+
+
+def _summary_table(rows: list[list[str]], first_col_cm: float = 6.0) -> Table:
+    # Valores em Paragraph para quebrarem linha dentro da célula, em vez de
+    # vazarem para fora da tabela quando o texto é longo.
+    cell_style = getSampleStyleSheet()["BodyText"]
+    rows = [[label, Paragraph(value, cell_style)] for label, value in rows]
+    table = Table(rows, colWidths=[first_col_cm * cm, (17 - first_col_cm) * cm])
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+    return table
+
+
 def generate_report(
     path: str,
     session_info: "SessionInfo | None",
@@ -151,12 +309,10 @@ def generate_report(
     story = []
 
     story.append(Paragraph("Relatório do Inclinômetro", styles["Title"]))
-    story.append(Spacer(1, 0.5 * cm))
+    story.append(Spacer(1, 0.3 * cm))
 
+    acq = summarize_acquisition(session_info, readings, events)
     mode_label = _MODE_LABELS.get(session_info.mode, session_info.mode) if session_info else "-"
-    started = _fmt_dt(session_info.started_at) if session_info else "-"
-    ended = _fmt_dt(session_info.ended_at) if (session_info and session_info.ended_at) else "em andamento"
-    n_readings = len(readings)
     angle_min, angle_max = _axis_extremes(readings, events, TILT_AXIS)
     pan_values = [r.pan_deg for r in readings if r.pan_deg is not None]
     pan_min, pan_max = _axis_extremes(readings, events, PAN_AXIS)
@@ -166,41 +322,52 @@ def generate_report(
             return "-"
         return f"{low:.2f}°  /  {high:.2f}°"
 
-    summary_rows = [
-        ["Modo", mode_label],
-        ["Início", started],
-        ["Fim", ended],
-        ["Leituras registradas", str(n_readings)],
-        ["Inclinação mín. / máx. registrada", _fmt_range(angle_min, angle_max)],
-        [
-            "Azimute mín. / máx. registrado",
-            _fmt_range(pan_min, pan_max)
-            if pan_values
-            else "não registrado (firmware sem eixo de azimute)",
-        ],
-    ]
-    summary_table = Table(summary_rows, colWidths=[6 * cm, 10 * cm])
-    summary_table.setStyle(
-        TableStyle(
+    story.append(Paragraph("Resultado", styles["Heading2"]))
+    story.append(
+        _summary_table(
             [
-                ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
-                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ["Inclinação mín. / máx.", _fmt_range(angle_min, angle_max)],
+                [
+                    "Azimute mín. / máx.",
+                    _fmt_range(pan_min, pan_max)
+                    if pan_values
+                    else "não registrado (firmware sem eixo de azimute)",
+                ],
+                ["Duração da aquisição", format_duration(acq.duration_s)],
             ]
         )
     )
-    story.append(summary_table)
+    story.append(Spacer(1, 0.5 * cm))
+
+    story.append(Paragraph("Aquisição dos dados", styles["Heading2"]))
+    story.append(_summary_table(_acquisition_rows(acq, mode_label)))
+    story.append(Spacer(1, 0.3 * cm))
+    story.append(Paragraph(_acquisition_explanation(acq), styles["Normal"]))
+    story.append(Spacer(1, 0.6 * cm))
+
+    # Título e gráfico juntos: sem isso o título ficava no pé de uma página
+    # e o gráfico na seguinte.
+    story.append(
+        KeepTogether(
+            [
+                Paragraph("Inclinação (tilt) ao longo do tempo", styles["Heading2"]),
+                _build_chart_image(readings, events, TILT_AXIS, acq),
+            ]
+        )
+    )
     story.append(Spacer(1, 0.8 * cm))
 
-    story.append(Paragraph("Inclinação (tilt) ao longo do tempo", styles["Heading2"]))
-    story.append(_build_chart_image(readings, events, TILT_AXIS))
-    story.append(Spacer(1, 0.8 * cm))
-
-    story.append(Paragraph("Azimute (pan) ao longo do tempo", styles["Heading2"]))
     if pan_values:
-        story.append(_build_chart_image(readings, events, PAN_AXIS))
+        story.append(
+            KeepTogether(
+                [
+                    Paragraph("Azimute (pan) ao longo do tempo", styles["Heading2"]),
+                    _build_chart_image(readings, events, PAN_AXIS, acq),
+                ]
+            )
+        )
     else:
+        story.append(Paragraph("Azimute (pan) ao longo do tempo", styles["Heading2"]))
         story.append(
             Paragraph(
                 "Nenhum valor de azimute foi registrado nesta sessão — o ESP32 conectado"
@@ -212,14 +379,17 @@ def generate_report(
 
     story.append(Paragraph("Histórico de limites atingidos", styles["Heading2"]))
     if events:
-        event_rows = [["#", "Eixo", "Tipo", "Valor", "Data/Hora"]]
+        event_rows = [["#", "Eixo", "Tipo", "Valor", "Data/Hora", "Medido por"]]
         for i, e in enumerate(events, start=1):
             tipo = "Novo mínimo" if e.kind == "min" else "Novo máximo"
             eixo = "Azimute" if e.axis == PAN_AXIS else "Inclinação"
+            origem = "ESP32 (100 Hz)" if e.source == SOURCE_FIRMWARE else "App (leituras)"
             event_rows.append(
-                [str(i), eixo, tipo, f"{e.value_deg:.2f}°", _fmt_dt(e.reading.timestamp)]
+                [str(i), eixo, tipo, f"{e.value_deg:.2f}°", _fmt_dt(e.reading.timestamp), origem]
             )
-        events_table = Table(event_rows, colWidths=[1.2 * cm, 3 * cm, 3.5 * cm, 2.8 * cm, 5 * cm])
+        events_table = Table(
+            event_rows, colWidths=[1.0 * cm, 2.6 * cm, 3.0 * cm, 2.2 * cm, 4.4 * cm, 3.8 * cm]
+        )
         events_table.setStyle(
             TableStyle(
                 [
@@ -233,7 +403,7 @@ def generate_report(
         )
         story.append(events_table)
     else:
-        story.append(Paragraph("Nenhum evento de limite registrado nesta sessão.", styles["Normal"]))
+        story.append(Paragraph("Nenhum evento de limite registrado nesta aquisição.", styles["Normal"]))
 
     doc.build(story)
 

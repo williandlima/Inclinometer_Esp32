@@ -106,6 +106,35 @@ do sensor nem do dado gravado no histórico/relatório (ambos já são de 0,01°
 só o arredondamento mostrado na tela. Regra em `ui/angle_display.py`, a mesma
 do app Android; testada em `sim/exibicao_test.py` (ver `sim/run.sh`).
 
+## Aquisição para o relatório PDF
+
+O botão **"Gerar relatório PDF"** usa as leituras de **uma aquisição**:
+
+- **Começa** no **Iniciar** — ou em **Resetar limites**/**Calibrar** com a
+  leitura em andamento, que abrem uma aquisição nova (os mín/máx de antes do
+  reset não valem mais; a aquisição anterior continua no histórico).
+- **Termina** no **Parar**, ou sozinha ao fim do **tempo programado**.
+- Gerado com a leitura em andamento, o relatório usa os dados até o momento;
+  com a leitura parada, usa a última aquisição que tem leituras.
+
+Acima dos botões, a linha **"Aquisição para relatório"** escolhe o tempo —
+**Livre (até "Parar")** (padrão), 1, 5, 10, 30 min ou 1 h — e, durante a
+leitura, mostra o cronômetro (`gravando 03:12 / 10:00 · 768 leituras`). Com
+um tempo definido, a leitura para sozinha ao fim dele e o app oferece gerar o
+relatório. Parada, a linha mostra a última aquisição (início, duração,
+leituras).
+
+Cada leitura é o valor da tela, recebido a ~4-5 Hz (poll Modbus de 250 ms,
+notify BLE de ~200 ms); os mín/máx vêm do próprio ESP32, medidos a 100 Hz,
+com firmware v1.5.0+. O PDF abre com **Resultado** (mín/máx e duração) e
+**Aquisição dos dados**: início, fim, duração, tempo programado (concluída /
+interrompida / em andamento), leituras de cada eixo, taxa média e intervalo
+típico, interrupções (> 2 s sem leitura, ex: queda do Bluetooth — em laranja
+nos gráficos, fora da curva), cobertura e de onde vieram os mín/máx (também
+por evento, na coluna **"Medido por"**). O eixo de tempo dos gráficos conta a
+partir do início da aquisição, em s, min ou h conforme a duração. Cálculo em
+`report/acquisition.py`; testes em `sim/relatorio_test.py`.
+
 ## Modo Vibração
 
 A leitura contínua normal (poll a cada ~250ms) é boa para acompanhar o
