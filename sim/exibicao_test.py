@@ -98,9 +98,12 @@ from ui.main_window import MainWindow  # noqa: E402
 
 w = MainWindow()
 tilt, pan = w._axis_widgets[TILT_AXIS], w._axis_widgets[PAN_AXIS]
+# A tela só aceita leituras da fonte em execução (ver _is_current_source).
+_fonte = object()
+w._source, w._running = _fonte, True
 check("padrão 0,25° nos dois eixos", tilt["resolution"].currentData() == 0.25 and pan["resolution"].currentData() == 0.25)
 
-w._on_reading(AngleReading(angle_deg=12.34, timestamp=time.time(), pan_deg=40.07))
+w._on_reading((_fonte, AngleReading(angle_deg=12.34, timestamp=time.time(), pan_deg=40.07)))
 check("tilt 12,34 em 0,25°", tilt["value"].text() == "12.25°", tilt["value"].text())
 check("pan 40,07 em 0,25°", pan["value"].text() == "40.00°", pan["value"].text())
 
@@ -108,7 +111,7 @@ tilt["resolution"].setCurrentIndex(tilt["resolution"].findData(0.1))
 check("tilt troca para 0,1° na hora", tilt["value"].text() == "12.3°", tilt["value"].text())
 check("pan não muda com o tilt", pan["value"].text() == "40.00°", pan["value"].text())
 
-w._on_reading(AngleReading(angle_deg=12.41, timestamp=time.time(), pan_deg=40.07))
+w._on_reading((_fonte, AngleReading(angle_deg=12.41, timestamp=time.time(), pan_deg=40.07)))
 check("tilt 12,41 em 0,1°", tilt["value"].text() == "12.4°", tilt["value"].text())
 
 pan["resolution"].setCurrentIndex(pan["resolution"].findData(0.1))
@@ -130,6 +133,7 @@ for axis in (TILT_AXIS, PAN_AXIS):
 check("Configurações atualiza o cartão do pan", pan["resolution"].currentData() == 0.1 and pan["value"].text() == "40.1°",
       pan["value"].text())
 pan["resolution"].setCurrentIndex(pan["resolution"].findData(0.25))
+w._source, w._running = None, False
 w.close()
 
 w2 = MainWindow()

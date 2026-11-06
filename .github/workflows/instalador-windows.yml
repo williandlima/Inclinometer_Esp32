@@ -65,11 +65,30 @@ jobs:
         run: |
           Copy-Item python-app\windows\instalar_inclinometro.bat "python-app\dist\Inclinometro2Eixos\INSTALAR - criar icone na Area de Trabalho.bat"
 
+      - name: Simula uma versão antiga instalada pelo Setup (ícone na Área de Trabalho pública)
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem python-app\windows\installer_output\*.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=desktopicon' -Wait
+          $pub = Get-ChildItem ([Environment]::GetFolderPath('CommonDesktopDirectory')) -Filter 'Inclinometro*.lnk'
+          if (-not $pub) { throw "O Setup não criou o ícone na Área de Trabalho pública" }
+          Write-Host "OK: ícone do Setup em $($pub.FullName)"
+
       - name: Testa o instalar_inclinometro.bat (cópia, desbloqueio e atalhos)
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $bat = "python-app\dist\Inclinometro2Eixos\INSTALAR - criar icone na Area de Trabalho.bat"
-          cmd /c "`"$bat`" < NUL"
+          # Saída para ARQUIVO, não para pipe: o programa que o .bat abre no
+          # fim herda a saída, e com pipe o PowerShell esperava ele fechar.
+          cmd /c "`"$bat`" < NUL > bat_portatil.log 2>&1"
+          $out = Get-Content bat_portatil.log -Raw
+          Write-Host $out
+          if ($out -notmatch 'Versao instalada: \d+\.\d+\.\d+') { throw "O .bat não mostrou a versão instalada" }
+          $velho = Get-ChildItem ([Environment]::GetFolderPath('CommonDesktopDirectory')) -Filter 'Inclinometro*.lnk' -ErrorAction SilentlyContinue
+          if ($velho) { throw "Ícone da versão antiga (Setup) não foi removido: $($velho.FullName)" }
+          Write-Host "OK: ícone da versão antiga removido"
           $dest = Join-Path $env:LOCALAPPDATA "Programs\Inclinometro2Eixos\Inclinometro2Eixos.exe"
           $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) "Inclinometro 2 Eixos (Avibras Aeroco).lnk"
           $menu = Join-Path ([Environment]::GetFolderPath('Programs')) "Inclinometro 2 Eixos (Avibras Aeroco).lnk"
@@ -81,6 +100,32 @@ jobs:
           if (-not $p) { throw "O programa não ficou aberto depois da instalação" }
           Write-Host "OK: programa aberto pelo .bat"
           $p | Stop-Process -Force
+
+      - name: Testa o .bat rodado de dentro do código-fonte (ícone abre o código, não um .exe)
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          cmd /c "`"python-app\windows\instalar_inclinometro.bat`" < NUL > bat_codigo.log 2>&1"
+          $out = Get-Content bat_codigo.log -Raw
+          Write-Host $out
+          $ver = (Select-String -Path python-app\app_version.py -Pattern 'APP_VERSION = "([0-9.]+)"').Matches[0].Groups[1].Value
+          if ($out -notmatch [regex]::Escape("Versao do app: $ver")) { throw "O .bat não mostrou a versão $ver do código" }
+          $w = New-Object -ComObject WScript.Shell
+          foreach ($d in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
+            $s = $w.CreateShortcut((Join-Path $d "Inclinometro 2 Eixos (Avibras Aeroco).lnk"))
+            if ($s.TargetPath -notlike '*\pythonw.exe' -or $s.Arguments -notlike '*main.py*') { throw "Atalho em $d aponta para $($s.TargetPath) $($s.Arguments)" }
+            Write-Host "OK: $d -> $($s.TargetPath) $($s.Arguments)"
+          }
+          $dirs = @('Desktop','Programs','CommonDesktopDirectory','CommonPrograms') | ForEach-Object { [Environment]::GetFolderPath($_) }
+          $exeLinks = $dirs | Where-Object { $_ -and (Test-Path $_) } | ForEach-Object { Get-ChildItem $_ -Filter 'Inclinometro*.lnk' -Recurse -Depth 1 } |
+            Where-Object { $w.CreateShortcut($_.FullName).TargetPath -like '*\Inclinometro2Eixos.exe' }
+          if ($exeLinks) { throw "Sobrou atalho abrindo o .exe antigo: $($exeLinks.FullName -join ', ')" }
+          Write-Host "OK: nenhum atalho abrindo o .exe antigo"
+          Start-Sleep -Seconds 15
+          $app = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'pythonw.exe' -and $_.CommandLine -like '*main.py*' }
+          if (-not $app) { throw "O app não ficou aberto pelo código-fonte" }
+          Write-Host "OK: app aberto pelo código-fonte"
+          $app | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
       - name: Publica a versão portátil (pasta com o .exe, sem instalar)
         uses: actions/upload-artifact@v4

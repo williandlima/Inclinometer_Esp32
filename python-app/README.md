@@ -88,9 +88,22 @@ imitando o real: o tilt oscila continuamente com ruído, e o pan fica parado a
 maior parte do tempo e se desloca em rajadas — que é justamente o padrão de
 uso que torna a medição por giroscópio confiável.
 
-O indicador abaixo do modo mostra o estado da conexão com o ESP32
-(conectando/conectado/falha), atualizado a cada leitura ou erro, seja via
-USB ou BLE.
+O indicador abaixo do modo mostra o estado da conexão com o ESP32, seja via
+USB ou BLE:
+
+- **◐ Conectando...** — de "Iniciar" até a primeira leitura (a barra de
+  status diz "Conectando a ...", nunca "Conectado" antes de chegar dado);
+- **● Conectado** (verde) — só enquanto chegam leituras da fonte em
+  execução;
+- **◐ Sem dados do ESP32** (laranja) — mais de 2 s sem leitura, antes de a
+  fonte declarar a queda (no BLE, a queda pode levar 5 s ou mais para ser
+  detectada; até lá o verde ficava aceso sem dado nenhum);
+- **● Falha de conexão** (vermelho) — erro ou queda reportada pela fonte;
+  volta ao verde sozinho quando a reconexão automática traz leituras.
+
+Leituras e erros que ainda estavam na fila quando se clica em "Parar" (ou de
+uma fonte anterior, após reiniciar) são descartados: antes eles acendiam o
+verde com a leitura parada. Testado em `sim/conexao_test.py`.
 
 **Resolução de exibição** (app 2.2.0): cada cartão de eixo tem um seletor
 **Resolução: 0,25° / 0,1°** logo abaixo do valor — o mesmo de Configurações

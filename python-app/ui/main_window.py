@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import threading
+import time
 
 from PyQt5.QtCore import QObject, QStandardPaths, Qt, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices, QFont, QPixmap
@@ -82,7 +83,18 @@ _CONN_STYLES = {
     "conectado": ("● Conectado", f"{_BADGE_STYLE} color: white; background-color: {GREEN};"),
     "erro": ("● Falha de conexão", f"{_BADGE_STYLE} color: white; background-color: {RED};"),
     "simulacao": ("● Simulação (interna)", f"color: {ORANGE}; background: transparent; font-weight: bold;"),
+    # Conectado, mas as leituras pararam de chegar (ver `_check_data_flow`).
+    "sem_dados": ("◐ Sem dados do ESP32", f"{_BADGE_STYLE} color: {NAVY}; background-color: {ORANGE};"),
 }
+
+# Tempo sem nenhuma leitura até a tela deixar de mostrar "● Conectado". As
+# leituras chegam a cada ~200-250 ms (notify BLE / poll Modbus), então 2 s
+# são ~8 leituras perdidas seguidas. Independe da fonte de dados: a fonte
+# BLE só declara a queda após NOTIFY_TIMEOUT_S (ou quando o Windows avisa,
+# que pode demorar bem mais), e até lá a tela mostrava verde sem receber
+# nada — a indicação de "conectado" tem de refletir dados chegando, não o
+# que a pilha Bluetooth acha do link.
+STALE_READING_S = 2.0
 
 _APP_STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -126,8 +138,10 @@ class _SignalBridge(QObject):
     """Ponte thread-safe: os data sources chamam callbacks em threads próprias;
     aqui os dados viram sinais Qt (fila automática para a thread da UI)."""
 
-    reading = pyqtSignal(object)  # AngleReading
-    error = pyqtSignal(str)
+    # (fonte, dado): a fonte que emitiu vai junto para a UI descartar o que
+    # chega atrasado de uma fonte já parada (ver `_is_current_source`).
+    reading = pyqtSignal(object)  # (IAngleDataSource, AngleReading)
+    error = pyqtSignal(object)  # (IAngleDataSource, str)
     calibration_done = pyqtSignal(bool, str)
     vibration_progress = pyqtSignal(float, str)  # percentual, rótulo da fase
     vibration_done = pyqtSignal(object, str, float, float)  # amostras|None, erro, duration_s, rate_hz
@@ -181,7 +195,12 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._update_mode_label()
-        self._conn_error_shown = False
+        self._conn_status = "parado"
+        self._last_reading_at = 0.0
+        # Vigia de dados: tira o "● Conectado" quando as leituras param.
+        self._data_flow_timer = QTimer(self)
+        self._data_flow_timer.setInterval(500)
+        self._data_flow_timer.timeout.connect(self._check_data_flow)
         self._set_connection_status("parado")
         self._update_version_label()
 
@@ -514,9 +533,32 @@ class MainWindow(QMainWindow):
         self.version_label.setStyleSheet(style)
 
     def _set_connection_status(self, status: str) -> None:
+        self._conn_status = status
         text, style = _CONN_STYLES[status]
         self.connection_label.setText(text)
         self.connection_label.setStyleSheet(style)
+
+    def _is_current_source(self, source) -> bool:
+        """Só a fonte em execução pode mexer na tela.
+
+        Sem isto, leituras que ainda estavam na fila de sinais do Qt quando o
+        usuário clicava em "Parar" (ou abria Configurações, ou a fonte era
+        trocada) chegavam DEPOIS e pintavam o indicador de "● Conectado"
+        verde com a leitura parada e nada conectado — além de gravarem
+        leituras fora da aquisição."""
+        return self._running and source is not None and source is self._source
+
+    def _check_data_flow(self) -> None:
+        if not self._running or self._settings.mode not in ("real", "ble"):
+            return
+        if self._conn_status != "conectado":
+            return
+        silent = time.monotonic() - self._last_reading_at
+        if silent > STALE_READING_S:
+            self._set_connection_status("sem_dados")
+            self.statusBar().showMessage(
+                f"Sem leituras do ESP32 há {silent:.0f} s — verificando a conexão..."
+            )
 
     # --------------------------------------------------------------- ações
     def _open_settings(self) -> None:
@@ -572,14 +614,21 @@ class MainWindow(QMainWindow):
         self._running = True
         self._begin_acquisition()
         self._source.start(
-            on_reading=lambda r: self._bridge.reading.emit(r),
-            on_error=lambda msg: self._bridge.error.emit(msg),
+            on_reading=lambda r, s=self._source: self._bridge.reading.emit((s, r)),
+            on_error=lambda msg, s=self._source: self._bridge.error.emit((s, msg)),
         )
         self._running = True
         self.start_stop_btn.setText("Parar")
         self._update_mode_label()
         self._set_connection_status("simulacao" if self._settings.mode == "simulado" else "conectando")
-        self.statusBar().showMessage(f"Conectado: {self._source.label}")
+        # "Conectando", não "Conectado": nada foi recebido ainda. A barra só
+        # passa a dizer "Conectado" na primeira leitura (`_on_reading`).
+        self.statusBar().showMessage(
+            f"Simulação: {self._source.label}" if self._settings.mode == "simulado"
+            else f"Conectando a {self._source.label}..."
+        )
+        self._last_reading_at = 0.0
+        self._data_flow_timer.start()
         self._firmware_warned = False
         self._update_version_label()
         self.acq_duration_combo.setEnabled(False)
@@ -591,6 +640,7 @@ class MainWindow(QMainWindow):
             self._source = None
         self._history.end_session()
         self._running = False
+        self._data_flow_timer.stop()
         self._acq_timer.stop()
         self._acq_started_at = None
         self.acq_duration_combo.setEnabled(True)
@@ -748,14 +798,18 @@ class MainWindow(QMainWindow):
         return format_angle(self._angle_for_display(axis, angle_deg), self._display_step(axis))
 
     # ------------------------------------------------------------ callbacks
-    def _on_reading(self, reading: AngleReading) -> None:
+    def _on_reading(self, item) -> None:
+        source, reading = item
+        if not self._is_current_source(source):
+            return
+        self._last_reading_at = time.monotonic()
         if self._settings.mode in ("real", "ble"):
-            self._set_connection_status("conectado")
-            if self._conn_error_shown and self._source is not None:
-                # A conexão voltou (reconexão automática ou retentativa):
-                # tira da barra o aviso de falha, que não tem timeout.
-                self._conn_error_shown = False
-                self.statusBar().showMessage(f"Conectado: {self._source.label}")
+            if self._conn_status != "conectado":
+                # Primeira leitura, ou a conexão voltou (reconexão automática
+                # ou retentativa): só agora a barra diz "Conectado", e o aviso
+                # de falha anterior (que não tem timeout) sai.
+                self._set_connection_status("conectado")
+                self.statusBar().showMessage(f"Conectado: {source.label}")
             if self._source is not None and not self.version_label.text().startswith(
                 f"App v{APP_VERSION}  ·  Firmware v"
             ):
@@ -784,10 +838,12 @@ class MainWindow(QMainWindow):
                 widgets[f"{prefix}_time"].setText(_fmt_time(event.reading.timestamp))
                 self._flash(widgets[f"{prefix}_value"])
 
-    def _on_error(self, message: str) -> None:
+    def _on_error(self, item) -> None:
+        source, message = item
+        if not self._is_current_source(source):
+            return
         if self._settings.mode in ("real", "ble"):
             self._set_connection_status("erro")
-            self._conn_error_shown = True
         # Sem timeout de propósito: com um timeout, a mensagem de erro some
         # sozinha depois de alguns segundos e a barra volta a mostrar o
         # "Conectado: ..." permanente deixado por `_start()` — dando a

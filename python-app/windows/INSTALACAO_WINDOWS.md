@@ -48,12 +48,34 @@ de novo. Copie o Setup para a mídia offline da fábrica junto com o resto.
 
 ## Atalho para o código-fonte (quem já roda pelo VSCode)
 
-Para quem já tem o código e as bibliotecas instalados (o mesmo Python que o
-VSCode usa, ou o `.venv` de `install.bat`): dar duplo clique em
-`windows\criar_atalho.bat`. Ele cria na Área de Trabalho o atalho
-**Inclinometro 2 Eixos (Avibras Aeroco)**, com a logo, que abre o app
-direto pelo `pythonw.exe`, sem VSCode e sem janela de terminal. Se a pasta
-do código mudar de lugar, rode o `criar_atalho.bat` de novo.
+Com o código baixado por `git clone`, dar duplo clique em
+`windows\criar_atalho.bat` (ou no `windows\instalar_inclinometro.bat`, que,
+rodado de dentro do código, faz a mesma coisa). Ele:
+
+1. **atualiza o código** (`git pull`) — numa pasta baixada como `.zip`
+   avisa que não dá para atualizar;
+2. acha o Python (`.venv` de `install.bat`, o do PATH ou o launcher `py`) e
+   **instala as bibliotecas que faltarem** (só na primeira vez);
+3. cria o ícone **Inclinometro 2 Eixos (Avibras Aeroco)** na Área de
+   Trabalho e no Menu Iniciar, abrindo o app pelo `pythonw.exe` (sem VSCode,
+   sem terminal e sem `.exe` — o Controle Inteligente de Aplicativos não
+   bloqueia);
+4. **remove os ícones antigos que abriam o `.exe` instalado** (portátil ou
+   Setup) — eles continuavam abrindo a versão velha, mesmo com o código
+   atualizado;
+5. mostra a versão (`Versao do app: 2.3.0`, a mesma do topo da tela) e abre
+   o programa.
+
+Para atualizar depois, basta rodar o `criar_atalho.bat` de novo. Se um ícone
+antigo estiver na Área de Trabalho pública (instalado pelo Setup como
+administrador) e não puder ser apagado, o `.bat` avisa: desinstale a versão
+antiga em **Configurações → Aplicativos**.
+
+O `instalar_inclinometro.bat` só instala um `.exe` quando está ao lado dele
+(na pasta da versão portátil) ou, sem código-fonte por perto, a partir do
+`Inclinometro-2Eixos-Portatil*.zip` mais recente de Downloads — e então
+mostra a versão do programa encontrado e avisa para conferir se é a mais
+recente.
 
 ## Opção 1 — Instalar e rodar a partir do código-fonte (uso: desenvolvimento)
 

@@ -23,6 +23,9 @@
 #                      de mín/máx, histórico (com migração de banco antigo),
 #                      resumo da aquisição, conteúdo do PDF (pdftotext) e a
 #                      aquisição com tempo programado na janela REAL (offscreen)
+#   conexao_test    -> indicador de conexão da janela REAL: verde só com dados
+#                      chegando da fonte em execução (sem dados, erro, leitura
+#                      atrasada após Parar, fonte antiga após reiniciar)
 # O mock BLE reproduz a contabilidade de handles GATT do Bluedroid
 # (default de 15 por serviço). Requer g++, python3, numpy e as dependências
 # do app (pip install -r python-app/requirements.txt: pymodbus, pyserial).
@@ -46,6 +49,8 @@ echo
 python3 exibicao_test.py 2>/dev/null
 echo
 python3 relatorio_test.py 2>/dev/null
+echo
+python3 conexao_test.py 2>/dev/null
 # Mesma regra no app Android (AngleDisplay.kt), com kotlinc puro, se houver
 # (KOTLINC=/caminho/kotlinc ou kotlinc no PATH; o SDK do Android não é preciso).
 KOTLINC=${KOTLINC:-$(command -v kotlinc || true)}
