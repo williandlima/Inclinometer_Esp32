@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.17";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10617;
+constexpr char FIRMWARE_VERSION[] = "1.6.18";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10618;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -203,12 +203,15 @@ constexpr float TILT_SCALE_CORRECTION_NEG = 1.042f;  // 1 / 0,9593
 constexpr float TILT_SCALE_CORRECTION_POS = 1.066f;  // 1 / 0,9383
 
 // Sentido positivo do tilt reportado. O atan2(ay, az) cresce num sentido que
-// depende da montagem; na bancada (1.6.16), subir lia negativo: -1. Aplicado
+// depende da montagem. A 1.6.17 usou -1 (na bancada com a 1.6.16 subir lia
+// negativo), mas em campo, com a 1.6.17 gravada, o tilt positivo passou a
+// aparecer negativo — de volta a +1 na 1.6.18. Conferir em bancada: subir
+// tem de ler positivo. Aplicado
 // só no ângulo REPORTADO (depois da calibração) — os lados NEG/POS acima
 // continuam escolhidos pelo sinal do ângulo BRUTO, que é o que a assimetria
 // do sensor segue (ver tiltScaleFor() em AngleSensor.cpp). O pan não depende
 // disto: ele usa a vertical do acelerômetro direto (PanSensor).
-constexpr float TILT_DIRECTION_SIGN = -1.0f;
+constexpr float TILT_DIRECTION_SIGN = 1.0f;
 
 // ============================================================================
 // Filtro da leitura contínua (só do ângulo "normal" — o Modo Vibração NÃO
