@@ -66,6 +66,7 @@ jobs:
           Copy-Item python-app\windows\instalar_inclinometro.bat "python-app\dist\Inclinometro2Eixos\INSTALAR - criar icone na Area de Trabalho.bat"
 
       - name: Simula uma versão antiga instalada pelo Setup (ícone na Área de Trabalho pública)
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $setup = Get-ChildItem python-app\windows\installer_output\*.exe | Select-Object -First 1
@@ -75,10 +76,14 @@ jobs:
           Write-Host "OK: ícone do Setup em $($pub.FullName)"
 
       - name: Testa o instalar_inclinometro.bat (cópia, desbloqueio e atalhos)
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $bat = "python-app\dist\Inclinometro2Eixos\INSTALAR - criar icone na Area de Trabalho.bat"
-          $out = cmd /c "`"$bat`" < NUL" 2>&1 | Out-String
+          # Saída para ARQUIVO, não para pipe: o programa que o .bat abre no
+          # fim herda a saída, e com pipe o PowerShell esperava ele fechar.
+          cmd /c "`"$bat`" < NUL > bat_portatil.log 2>&1"
+          $out = Get-Content bat_portatil.log -Raw
           Write-Host $out
           if ($out -notmatch 'Versao instalada: \d+\.\d+\.\d+') { throw "O .bat não mostrou a versão instalada" }
           $velho = Get-ChildItem ([Environment]::GetFolderPath('CommonDesktopDirectory')) -Filter 'Inclinometro*.lnk' -ErrorAction SilentlyContinue
@@ -97,9 +102,11 @@ jobs:
           $p | Stop-Process -Force
 
       - name: Testa o .bat rodado de dentro do código-fonte (ícone abre o código, não um .exe)
+        timeout-minutes: 8
         shell: pwsh
         run: |
-          $out = cmd /c "`"python-app\windows\instalar_inclinometro.bat`" < NUL" 2>&1 | Out-String
+          cmd /c "`"python-app\windows\instalar_inclinometro.bat`" < NUL > bat_codigo.log 2>&1"
+          $out = Get-Content bat_codigo.log -Raw
           Write-Host $out
           $ver = (Select-String -Path python-app\app_version.py -Pattern 'APP_VERSION = "([0-9.]+)"').Matches[0].Groups[1].Value
           if ($out -notmatch [regex]::Escape("Versao do app: $ver")) { throw "O .bat não mostrou a versão $ver do código" }
