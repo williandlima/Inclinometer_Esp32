@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.18";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10618;
+constexpr char FIRMWARE_VERSION[] = "1.6.19";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10619;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -547,6 +547,48 @@ constexpr float PAN_GYRO_SLEW_MAX_DPS = 100.0f;
 constexpr float PAN_TILT_MOVE_DPS = 0.5f;
 constexpr float PAN_TILT_MOVE_MATCH = 0.5f;
 constexpr uint8_t PAN_GYRO_SLEW_MAX_REJECTS = 3;
+
+// Desacoplamento do tilt (1.6.19 — item 5 de PanSensor.h). Com a viatura fora
+// do nível, o eixo de pan sai da vertical e o eixo do tilt deixa de ser
+// horizontal: projetar o giro na gravidade somava ao pan até sen(β) de todo
+// movimento de tilt (3° de desnível e 60° de tilt = 3,1° de erro, e um erro
+// que fica para sempre se o pan girar com o tilt inclinado — cenários V de
+// sim/pan_sim.cpp). O eixo do tilt é aprendido das janelas de tilt (média
+// fora da vertical acima de PAN_TILT_AXIS_LEARN_DPS), passa a valer depois
+// de PAN_TILT_AXIS_MIN_DEG de movimento de tilt com um eixo dominante
+// (autovalor principal >= PAN_TILT_AXIS_DOMINANCE do traço), e a taxa de pan
+// é projetada na vertical sem a componente dele. PAN_TILT_AXIS_MIN_COS é a
+// norma mínima dessa vertical corrigida (cos de ~25°): abaixo, a estimativa é
+// descartada e vale a projeção clássica.
+constexpr float PAN_TILT_AXIS_LEARN_DPS = 4.0f;
+constexpr float PAN_TILT_AXIS_MIN_DEG = 10.0f;
+constexpr float PAN_TILT_AXIS_DOMINANCE = 0.9f;
+constexpr float PAN_TILT_AXIS_MIN_COS = 0.9f;
+// Fração máxima da média da janela ao longo da vertical para ela ensinar o
+// eixo do tilt (num tilt puro é sen do desnível; 0,2 aceita até ~11°).
+constexpr float PAN_TILT_AXIS_MAX_PAN_FRACTION = 0.2f;
+
+// Balanço do mastro (1.6.19, ver closeWindow()): resíduo HORIZONTAL máximo
+// da média da janela (°/s) para ela ainda contar como parada quando a
+// componente ao longo do eixo de pan está abaixo do limiar. Balanço de 1,5°/s
+// a 1,2 Hz deixa ~0,25°/s; um bias horizontal muito errado (>1°/s) continua
+// indo para o reaprendizado/readoção, como antes.
+constexpr float PAN_SWAY_MAX_DPS = 1.0f;
+// Peso da parte horizontal (giro − rotação vista pelo acelerômetro) no
+// aprendizado do bias nessas janelas, relativo ao da parte vertical: o
+// acelerômetro é mais ruidoso que o giro (as duas pontas da janela).
+constexpr float PAN_SWAY_HORIZONTAL_GAIN = 0.5f;
+// Rotação horizontal vista pelo acelerômetro (°/s, média da janela) abaixo da
+// qual uma janela reconhecida como tilt ainda é tratada como balanço.
+constexpr float PAN_SWAY_MAX_ROT_DPS = 3.0f;
+// Rotação horizontal mínima vista pelo acelerômetro (°/s) para a janela ser
+// tratada como balanço. Abaixo dela o resíduo horizontal não é balanço (é
+// bias andando) e a janela segue o caminho de sempre — inclusive a readoção
+// que desfaz o que a deriva integrou.
+constexpr float PAN_SWAY_MIN_SEEN_DPS = 0.1f;
+// Amostras do bloco de cada ponta da janela usado para medir a rotação vista
+// pelo acelerômetro (par: metade de cada lado do centro do bloco).
+constexpr int PAN_ACC_ROT_BLOCK = 8;
 
 // Correção do fator de escala do giroscópio (tolerância de fábrica ~+-3%).
 // Este é o erro dominante depois que o ZUPT resolve o bias, e é proporcional
