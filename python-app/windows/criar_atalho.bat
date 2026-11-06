@@ -58,6 +58,11 @@ if defined PYC goto :achou_python
 py -3 -c "import sys; print(sys.executable)" > "%TMPF%" 2>nul
 if not errorlevel 1 set /p PYC=<"%TMPF%"
 if defined PYC goto :achou_python
+REM Python instalado sem "Add to PATH" (python.org ou o Python Install
+REM Manager do 3.14): procura nas pastas padrao - e o caso em que o VSCode
+REM acha o Python mas o terminal diz "Python nao foi encontrado".
+for /f "delims=" %%P in ('powershell -NoProfile -Command "Get-ChildItem -Path ($env:LOCALAPPDATA+'\Programs\Python'),($env:LOCALAPPDATA+'\Python'),($env:ProgramFiles) -Filter python.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notlike '*WindowsApps*' -and $_.FullName -notlike '*\Lib\*' -and $_.FullName -notlike '*\Scripts\*' } | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName"') do if not defined PYC set "PYC=%%P"
+if defined PYC goto :achou_python
 echo [ERRO] Python nao encontrado.
 echo Instale o Python 3.11 em python.org ^(marque "Add python.exe to PATH"^)
 echo e rode este arquivo de novo.
