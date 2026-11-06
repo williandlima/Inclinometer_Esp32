@@ -167,6 +167,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._update_mode_label()
+        self._conn_error_shown = False
         self._set_connection_status("parado")
         self._update_version_label()
 
@@ -628,6 +629,11 @@ class MainWindow(QMainWindow):
     def _on_reading(self, reading: AngleReading) -> None:
         if self._settings.mode in ("real", "ble"):
             self._set_connection_status("conectado")
+            if self._conn_error_shown and self._source is not None:
+                # A conexão voltou (reconexão automática ou retentativa):
+                # tira da barra o aviso de falha, que não tem timeout.
+                self._conn_error_shown = False
+                self.statusBar().showMessage(f"Conectado: {self._source.label}")
             if self._source is not None and not self.version_label.text().startswith(
                 f"App v{APP_VERSION}  ·  Firmware v"
             ):
@@ -658,6 +664,7 @@ class MainWindow(QMainWindow):
     def _on_error(self, message: str) -> None:
         if self._settings.mode in ("real", "ble"):
             self._set_connection_status("erro")
+            self._conn_error_shown = True
         # Sem timeout de propósito: com um timeout, a mensagem de erro some
         # sozinha depois de alguns segundos e a barra volta a mostrar o
         # "Conectado: ..." permanente deixado por `_start()` — dando a

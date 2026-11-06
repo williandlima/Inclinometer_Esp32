@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.17`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.18`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -640,6 +640,15 @@ Os apps integram (regra do trapézio) e removem a tendência linear — o bias �
 uma constante somada à taxa, e integrar constante dá exatamente uma rampa,
 que a reta ajustada elimina.
 
+### Sentido do tilt de volta ao original (v1.6.18)
+
+Com a 1.6.17 gravada, **o tilt positivo aparecia negativo** no app — a
+inversão feita na 1.6.17 (item 3 acima) deixou o sentido errado para a
+montagem atual. `TILT_DIRECTION_SIGN` voltou a **+1**. Só o ângulo reportado
+muda (tela, extremos, Modo Vibração, Modbus e BLE); os lados NEG/POS da
+correção de escala seguem o sinal do ângulo bruto, como antes. Conferir em
+bancada depois de gravar: subir tem de ler positivo.
+
 ### Um detalhe que quase virou bug
 
 A detecção de frequência dominante compara o pico com a **mediana** do
@@ -923,9 +932,11 @@ tela de configuração, em vez de truncar em silêncio.
   taxa saía × cos φ (bancada: 40 → 28,75 = 40·cos 44°). Agora são os três
   eixos. Conferir com `python-app/tools/diagnostico_pan.py`, coluna
   "X fora": o ângulo do eixo X fora da horizontal.
-- **[1.6.17] Sentido do tilt invertido** (subir lia negativo):
-  `TILT_DIRECTION_SIGN = −1`, só no ângulo reportado — os lados da correção
-  de escala seguem o sinal do ângulo bruto.
+- **[1.6.17 → desfeito na 1.6.18] Sentido do tilt.** A 1.6.17 passou
+  `TILT_DIRECTION_SIGN` para −1 (na bancada com a 1.6.16 subir lia
+  negativo), mas com a 1.6.17 o tilt positivo passou a aparecer negativo:
+  voltou a +1. Só o ângulo reportado — os lados da correção de escala seguem
+  o sinal do ângulo bruto.
 - **[1.6.15 → corrigido na 1.6.16] Sentido do pan invertido.** Com o sinal
   corrigido, a 1.6.15 lia positivo no sentido anti-horário visto de cima, e
   o pan do usuário é positivo no horário: `PAN_DIRECTION_SIGN = −1`. A 1.6.14

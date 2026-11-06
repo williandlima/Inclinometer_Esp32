@@ -5,6 +5,11 @@
 # faz cross-compilacao de Linux/macOS para .exe).
 
 import os
+import re
+
+from PyInstaller.utils.win32.versioninfo import (
+    FixedFileInfo, StringFileInfo, StringStruct, StringTable, VarFileInfo, VarStruct, VSVersionInfo,
+)
 
 block_cipher = None
 
@@ -28,6 +33,29 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+# Recurso de versao do .exe (Propriedades → Detalhes). Um .exe sem
+# fabricante/produto/versao e' um dos sinais que o SmartScreen e os antivirus
+# usam para marcar programas PyInstaller como suspeitos.
+with open(os.path.join(project_root, "app_version.py"), encoding="utf-8") as fh:
+    _ver = re.search(r'APP_VERSION = "([0-9.]+)"', fh.read()).group(1)
+_v = tuple(int(x) for x in (_ver.split(".") + ["0", "0", "0"])[:4])
+version_info = VSVersionInfo(
+    ffi=FixedFileInfo(filevers=_v, prodvers=_v, mask=0x3F, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+    kids=[
+        StringFileInfo([StringTable("041604B0", [
+            StringStruct("CompanyName", "Avibras Aeroco"),
+            StringStruct("FileDescription", "Inclinometro 2 Eixos (pan-tilt meter)"),
+            StringStruct("FileVersion", _ver),
+            StringStruct("InternalName", "Inclinometro2Eixos"),
+            StringStruct("LegalCopyright", "Avibras Aeroco"),
+            StringStruct("OriginalFilename", "Inclinometro2Eixos.exe"),
+            StringStruct("ProductName", "Inclinometro 2 Eixos (Avibras Aeroco)"),
+            StringStruct("ProductVersion", _ver),
+        ])]),
+        VarFileInfo([VarStruct("Translation", [0x0416, 1200])]),
+    ],
+)
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
@@ -39,8 +67,11 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # Sem UPX: .exe comprimido com UPX e' o gatilho mais comum de falso
+    # positivo de antivirus/SmartScreen em programas PyInstaller.
+    upx=False,
     console=False,
+    version=version_info,
     icon=os.path.join(project_root, "assets", "logo.ico"),
 )
 
@@ -50,7 +81,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="Inclinometro2Eixos",
 )
