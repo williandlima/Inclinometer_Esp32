@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at REAL NOT NULL,
     ended_at REAL,
-    mode TEXT NOT NULL
+    mode TEXT NOT NULL,
+    planned_duration_s REAL
 );
 
 CREATE TABLE IF NOT EXISTS readings (
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS limit_events (
     angle_deg REAL NOT NULL,
     timestamp REAL NOT NULL,
     axis TEXT NOT NULL DEFAULT 'tilt',
-    pan_deg REAL
+    pan_deg REAL,
+    source TEXT NOT NULL DEFAULT 'app'
 );
 
 CREATE TABLE IF NOT EXISTS vibration_captures (
@@ -71,10 +73,17 @@ CREATE INDEX IF NOT EXISTS idx_vibration_samples_capture ON vibration_samples(ca
 
 @dataclass
 class SessionInfo:
+    """Uma aquisição: do "Iniciar" (ou "Resetar limites"/"Calibrar", que
+    abrem uma nova) até o "Parar" ou o fim do tempo programado.
+
+    `planned_duration_s` é o tempo programado para a aquisição, ou `None`
+    para aquisição livre (só termina no "Parar")."""
+
     id: int
     started_at: float
     ended_at: float | None
     mode: str
+    planned_duration_s: float | None = None
 
 
 @dataclass
@@ -95,6 +104,8 @@ _MIGRATIONS = [
     ("readings", "pan_deg", "ALTER TABLE readings ADD COLUMN pan_deg REAL"),
     ("limit_events", "pan_deg", "ALTER TABLE limit_events ADD COLUMN pan_deg REAL"),
     ("limit_events", "axis", "ALTER TABLE limit_events ADD COLUMN axis TEXT NOT NULL DEFAULT 'tilt'"),
+    ("limit_events", "source", "ALTER TABLE limit_events ADD COLUMN source TEXT NOT NULL DEFAULT 'app'"),
+    ("sessions", "planned_duration_s", "ALTER TABLE sessions ADD COLUMN planned_duration_s REAL"),
     ("vibration_samples", "pan_deg", "ALTER TABLE vibration_samples ADD COLUMN pan_deg REAL"),
     (
         "vibration_samples",
@@ -124,9 +135,10 @@ class HistoryStore:
             if column not in existing:
                 self._conn.execute(statement)
 
-    def start_session(self, mode: str) -> int:
+    def start_session(self, mode: str, planned_duration_s: float | None = None) -> int:
         cur = self._conn.execute(
-            "INSERT INTO sessions (started_at, mode) VALUES (?, ?)", (time.time(), mode)
+            "INSERT INTO sessions (started_at, mode, planned_duration_s) VALUES (?, ?, ?)",
+            (time.time(), mode, planned_duration_s),
         )
         self._conn.commit()
         self._current_session_id = cur.lastrowid
@@ -160,8 +172,8 @@ class HistoryStore:
         # Guarda os dois eixos da leitura (e não só o valor do eixo do
         # evento), para a releitura reconstruir o `AngleReading` inteiro.
         self._conn.execute(
-            "INSERT INTO limit_events (session_id, kind, axis, angle_deg, pan_deg, timestamp)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO limit_events (session_id, kind, axis, angle_deg, pan_deg, timestamp, source)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 self._current_session_id,
                 event.kind,
@@ -169,15 +181,43 @@ class HistoryStore:
                 event.reading.angle_deg,
                 event.reading.pan_deg,
                 event.reading.timestamp,
+                event.source,
             ),
         )
         self._conn.commit()
 
     def list_sessions(self) -> list[SessionInfo]:
         rows = self._conn.execute(
-            "SELECT id, started_at, ended_at, mode FROM sessions ORDER BY started_at DESC"
+            "SELECT id, started_at, ended_at, mode, planned_duration_s FROM sessions"
+            " ORDER BY started_at DESC, id DESC"
         ).fetchall()
         return [SessionInfo(*row) for row in rows]
+
+    def get_session(self, session_id: int) -> SessionInfo | None:
+        row = self._conn.execute(
+            "SELECT id, started_at, ended_at, mode, planned_duration_s FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        return SessionInfo(*row) if row else None
+
+    def count_readings(self, session_id: int) -> int:
+        return self._conn.execute(
+            "SELECT COUNT(*) FROM readings WHERE session_id = ?", (session_id,)
+        ).fetchone()[0]
+
+    def latest_session_with_readings(self) -> SessionInfo | None:
+        """A aquisição mais recente que tem leituras.
+
+        Era usada a mais recente de todas, mas "Resetar limites" e "Calibrar"
+        abrem uma aquisição nova: clicar num deles e depois em "Parar" deixava
+        uma aquisição vazia por último, e o relatório saía sem dado nenhum.
+        """
+        row = self._conn.execute(
+            "SELECT s.id, s.started_at, s.ended_at, s.mode, s.planned_duration_s FROM sessions s"
+            " WHERE EXISTS (SELECT 1 FROM readings r WHERE r.session_id = s.id)"
+            " ORDER BY s.started_at DESC, s.id DESC LIMIT 1"
+        ).fetchone()
+        return SessionInfo(*row) if row else None
 
     def get_readings(self, session_id: int) -> list[AngleReading]:
         rows = self._conn.execute(
@@ -188,7 +228,7 @@ class HistoryStore:
 
     def get_limit_events(self, session_id: int) -> list[LimitEvent]:
         rows = self._conn.execute(
-            "SELECT kind, angle_deg, timestamp, axis, pan_deg FROM limit_events"
+            "SELECT kind, angle_deg, timestamp, axis, pan_deg, source FROM limit_events"
             " WHERE session_id = ? ORDER BY timestamp",
             (session_id,),
         ).fetchall()
@@ -197,6 +237,7 @@ class HistoryStore:
                 kind=row[0],
                 reading=AngleReading(angle_deg=row[1], timestamp=row[2], pan_deg=row[4]),
                 axis=row[3],
+                source=row[5],
             )
             for row in rows
         ]

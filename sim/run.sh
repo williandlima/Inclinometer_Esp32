@@ -19,6 +19,10 @@
 #                      desktop em Qt sem tela (offscreen); com kotlinc
 #                      disponível, a mesma regra do app Android
 #                      (AngleDisplayTest.kt) e a igualdade entre os dois
+#   relatorio_test  -> relatório PDF e a aquisição que o alimenta: rastreador
+#                      de mín/máx, histórico (com migração de banco antigo),
+#                      resumo da aquisição, conteúdo do PDF (pdftotext) e a
+#                      aquisição com tempo programado na janela REAL (offscreen)
 # O mock BLE reproduz a contabilidade de handles GATT do Bluedroid
 # (default de 15 por serviço). Requer g++, python3, numpy e as dependências
 # do app (pip install -r python-app/requirements.txt: pymodbus, pyserial).
@@ -40,6 +44,8 @@ echo
 python3 e2e_vibration.py "$OUT/fw_sim"
 echo
 python3 exibicao_test.py 2>/dev/null
+echo
+python3 relatorio_test.py 2>/dev/null
 # Mesma regra no app Android (AngleDisplay.kt), com kotlinc puro, se houver
 # (KOTLINC=/caminho/kotlinc ou kotlinc no PATH; o SDK do Android não é preciso).
 KOTLINC=${KOTLINC:-$(command -v kotlinc || true)}

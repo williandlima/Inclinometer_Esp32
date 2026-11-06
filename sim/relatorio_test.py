@@ -1,0 +1,343 @@
+"""Testes do relatório PDF e da aquisição que o alimenta — sem hardware.
+
+Cobre só as classes envolvidas no relatório:
+  1. LimitTracker (limits/limit_tracker.py): mín/máx por eixo e a origem de
+     cada extremo (ESP32 a 100 Hz ou calculado pelo app);
+  2. HistoryStore (limits/history_store.py): aquisições, leituras, eventos,
+     tempo programado e migração de um banco criado por versão anterior;
+  3. resumo da aquisição (report/acquisition.py): duração, taxa,
+     interrupções, cobertura, aquisição em andamento;
+  4. geração do PDF (report/report_generator.py): conteúdo conferido com
+     pdftotext — sessão normal, sem azimute, vazia, com interrupção, longa,
+     em andamento, e o relatório de vibração;
+  5. a janela principal REAL em Qt sem tela: aquisição com tempo programado
+     para sozinha no fim, "Resetar limites" abre aquisição nova e o
+     relatório sai da aquisição certa.
+
+Ver run.sh. Requer PyQt5, reportlab, matplotlib e numpy
+(python-app/requirements.txt); a conferência do texto do PDF usa o
+pdftotext (poppler-utils) se houver.
+"""
+
+import os
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "python-app"))
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from data_source.base import AngleReading  # noqa: E402
+from limits.history_store import HistoryStore, SessionInfo  # noqa: E402
+from limits.limit_tracker import (  # noqa: E402
+    PAN_AXIS,
+    SOURCE_APP,
+    SOURCE_FIRMWARE,
+    TILT_AXIS,
+    LimitEvent,
+    LimitTracker,
+)
+from report.acquisition import (  # noqa: E402
+    format_clock,
+    format_duration,
+    format_planned,
+    summarize_acquisition,
+)
+from report.report_generator import (  # noqa: E402
+    _axis_extremes,
+    _time_scale,
+    generate_report,
+    generate_vibration_report,
+)
+
+failures = 0
+TMP = tempfile.mkdtemp(prefix="relatorio_test_")
+PDFTOTEXT = shutil.which("pdftotext")
+
+
+def check(name: str, ok: bool, detail: str = "") -> None:
+    global failures
+    print(f"  {'OK    ' if ok else 'FALHOU'} {name}{': ' + detail if detail else ''}")
+    if not ok:
+        failures += 1
+
+
+def pdf_text(path: str) -> str | None:
+    if not PDFTOTEXT:
+        return None
+    return subprocess.run([PDFTOTEXT, "-layout", path, "-"], capture_output=True, text=True).stdout
+
+
+def series(t0: float, seconds: float, rate_hz: float = 4.0, gap: tuple[float, float] | None = None,
+           pan: bool = True, amp: float = 2.0) -> list[AngleReading]:
+    """Leituras sintéticas: senoide lenta nos dois eixos, opcionalmente com
+    um buraco (gap) de [início, fim) segundos sem leitura."""
+    import math
+
+    out = []
+    n = int(seconds * rate_hz) + 1
+    for i in range(n):
+        t = i / rate_hz
+        if gap and gap[0] <= t < gap[1]:
+            continue
+        out.append(
+            AngleReading(
+                angle_deg=amp * math.sin(2 * math.pi * t / 60),
+                timestamp=t0 + t,
+                pan_deg=(10 + amp * math.cos(2 * math.pi * t / 60)) if pan else None,
+            )
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
+print("=== LimitTracker: mín/máx e origem do extremo ===")
+tr = LimitTracker(TILT_AXIS)
+ev = tr.process(AngleReading(1.0, 100.0))
+check("primeira leitura gera mín e máx", sorted(e.kind for e in ev) == ["max", "min"])
+check("sem extremos do firmware: origem = app", all(e.source == SOURCE_APP for e in ev))
+check("leitura dentro da faixa não gera evento", tr.process(AngleReading(1.0, 100.2)) == [])
+ev = tr.process(AngleReading(0.5, 100.4, angle_min_deg=-3.0, angle_max_deg=1.2))
+kinds = {e.kind: e for e in ev}
+check("extremo do firmware vira o valor do evento",
+      kinds.get("min") is not None and kinds["min"].value_deg == -3.0 and kinds["max"].value_deg == 1.2)
+check("extremo do firmware: origem = firmware", all(e.source == SOURCE_FIRMWARE for e in ev))
+check("evento do firmware ancorado na leitura que o trouxe", kinds["min"].reading.timestamp == 100.4)
+tr.reset()
+check("reset zera os extremos", tr.min_reading is None and tr.max_reading is None)
+pan_tr = LimitTracker(PAN_AXIS)
+check("eixo de pan ignora leitura sem pan", pan_tr.process(AngleReading(1.0, 1.0, pan_deg=None)) == [])
+ev = pan_tr.process(AngleReading(1.0, 1.0, pan_deg=-5.0))
+check("eixo de pan usa pan_deg", all(e.value_deg == -5.0 and e.axis == PAN_AXIS for e in ev) and len(ev) == 2)
+
+# ---------------------------------------------------------------------------
+print("=== HistoryStore: aquisições, eventos e migração ===")
+db = os.path.join(TMP, "hist.db")
+store = HistoryStore(db)
+sid = store.start_session("ble", planned_duration_s=600)
+for r in series(time.time(), 5):
+    store.add_reading(r)
+store.add_limit_event(LimitEvent("min", AngleReading(-2.5, time.time(), pan_deg=3.0), TILT_AXIS, SOURCE_FIRMWARE))
+store.add_limit_event(LimitEvent("max", AngleReading(1.0, time.time(), pan_deg=12.0), PAN_AXIS, SOURCE_APP))
+store.end_session()
+info = store.get_session(sid)
+check("aquisição guarda o tempo programado", info is not None and info.planned_duration_s == 600)
+check("aquisição encerrada tem fim", info.ended_at is not None and info.ended_at >= info.started_at)
+check("leituras gravadas", store.count_readings(sid) == len(store.get_readings(sid)) == 21)
+evs = store.get_limit_events(sid)
+check("origem do evento volta do banco", [e.source for e in evs] == [SOURCE_FIRMWARE, SOURCE_APP])
+check("eixo e valor do evento voltam do banco", evs[1].axis == PAN_AXIS and evs[1].value_deg == 12.0)
+sid_empty = store.start_session("ble")  # "Resetar limites" e logo "Parar": aquisição vazia por último
+store.end_session()
+check("aquisição livre: tempo programado nulo", store.get_session(sid_empty).planned_duration_s is None)
+latest = store.latest_session_with_readings()
+check("relatório pula a aquisição vazia mais recente", latest is not None and latest.id == sid,
+      f"pegou {latest.id if latest else None}, esperado {sid}")
+check("list_sessions: mais recente primeiro", store.list_sessions()[0].id == sid_empty)
+store.close()
+
+old_db = os.path.join(TMP, "antigo.db")
+con = sqlite3.connect(old_db)
+con.executescript(
+    """
+    CREATE TABLE sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at REAL NOT NULL,
+                           ended_at REAL, mode TEXT NOT NULL);
+    CREATE TABLE readings (session_id INTEGER NOT NULL, timestamp REAL NOT NULL, angle_deg REAL NOT NULL);
+    CREATE TABLE limit_events (session_id INTEGER NOT NULL, kind TEXT NOT NULL,
+                               angle_deg REAL NOT NULL, timestamp REAL NOT NULL);
+    INSERT INTO sessions VALUES (1, 1000.0, 1060.0, 'real');
+    INSERT INTO readings VALUES (1, 1000.5, 1.5);
+    INSERT INTO limit_events VALUES (1, 'max', 1.5, 1000.5);
+    """
+)
+con.commit()
+con.close()
+try:
+    old = HistoryStore(old_db)
+    s_old = old.get_session(1)
+    e_old = old.get_limit_events(1)
+    check("banco antigo abre e migra", s_old is not None and s_old.planned_duration_s is None)
+    check("evento antigo: eixo tilt e origem app",
+          len(e_old) == 1 and e_old[0].axis == TILT_AXIS and e_old[0].source == SOURCE_APP)
+    check("leitura antiga: pan nulo", old.get_readings(1)[0].pan_deg is None)
+    old.close()
+except Exception as exc:  # noqa: BLE001
+    check("banco antigo abre e migra", False, repr(exc))
+
+# ---------------------------------------------------------------------------
+print("=== resumo da aquisição (report/acquisition.py) ===")
+T0 = 1_700_000_000.0
+readings = series(T0 + 2.0, 598.0, rate_hz=4.0, gap=(200.0, 230.0))  # 1ª leitura 2 s após o início
+session = SessionInfo(1, T0, T0 + 600.0, "ble", 600.0)
+events = [LimitEvent("min", readings[10], TILT_AXIS, SOURCE_APP),
+          LimitEvent("max", readings[20], TILT_AXIS, SOURCE_FIRMWARE)]
+acq = summarize_acquisition(session, readings, events)
+check("duração = início ao fim", abs(acq.duration_s - 600.0) < 1e-6, format_duration(acq.duration_s))
+check("taxa média ~4 leituras/s (descontado o buraco)", 3.7 < acq.mean_rate_hz < 4.0, f"{acq.mean_rate_hz:.2f}")
+check("intervalo típico 250 ms", abs(acq.median_interval_s - 0.25) < 1e-6)
+check("uma interrupção de ~30 s", len(acq.gaps) == 1 and 29.9 < acq.gaps[0].duration_s < 30.5,
+      f"{[round(g.duration_s, 2) for g in acq.gaps]}")
+check("cobertura ~94,7 % (2 s até conectar + 30 s de buraco)", 94.0 < acq.coverage_pct < 95.5,
+      f"{acq.coverage_pct:.1f} %")
+check("aquisição programada concluída", acq.completed_planned is True)
+check("origem dos extremos: firmware no tilt, nada no pan",
+      acq.extremes_source[TILT_AXIS] == SOURCE_FIRMWARE and acq.extremes_source[PAN_AXIS] is None)
+running = summarize_acquisition(SessionInfo(2, T0, None, "ble", 600.0), readings[:100])
+check("em andamento: fim = última leitura", running.in_progress and running.end_reference == readings[99].timestamp)
+check("em andamento: programada ainda não concluída", running.completed_planned is False)
+empty = summarize_acquisition(SessionInfo(3, T0, None, "ble"), [])
+check("aquisição vazia não quebra", empty.n_readings == 0 and empty.mean_rate_hz is None and empty.duration_s == 0)
+check("format_duration", (format_duration(45), format_duration(303), format_duration(3725))
+      == ("45 s", "5 min 03 s", "1 h 02 min 05 s"))
+check("format_planned", (format_planned(None).startswith("Livre"), format_planned(600), format_planned(3600))
+      == (True, "10 min", "1 h"))
+check("format_clock", (format_clock(192), format_clock(3725)) == ("03:12", "1:02:05"))
+
+# ---------------------------------------------------------------------------
+print("=== extremos do relatório (_axis_extremes) ===")
+evs = [LimitEvent("min", AngleReading(-4.0, 1.0), TILT_AXIS, SOURCE_FIRMWARE),
+       LimitEvent("max", AngleReading(3.0, 2.0), TILT_AXIS, SOURCE_FIRMWARE)]
+check("prefere os eventos (medidos a 100 Hz) às leituras",
+      _axis_extremes([AngleReading(-1.0, 1.0), AngleReading(1.0, 2.0)], evs, TILT_AXIS) == (-4.0, 3.0))
+check("sem eventos: cai para as leituras",
+      _axis_extremes([AngleReading(-1.0, 1.0), AngleReading(1.0, 2.0)], [], TILT_AXIS) == (-1.0, 1.0))
+check("eixo sem dado: (None, None)", _axis_extremes([AngleReading(1.0, 1.0)], [], PAN_AXIS) == (None, None))
+
+# ---------------------------------------------------------------------------
+print("=== geração do PDF (report/report_generator.py) ===")
+if not PDFTOTEXT:
+    print("  (pdftotext não encontrado: confere só que os PDFs são gerados)")
+
+
+def make_pdf(name, session_, readings_, events_, must_have=()):
+    path = os.path.join(TMP, name)
+    try:
+        generate_report(path, session_, readings_, events_)
+    except Exception as exc:  # noqa: BLE001
+        check(f"{name}: gera", False, repr(exc))
+        return
+    ok = os.path.getsize(path) > 1000
+    text = pdf_text(path)
+    missing = [m for m in must_have if text is not None and m not in text]
+    check(f"{name}: gera" + (" e contém o esperado" if text is not None else ""), ok and not missing,
+          f"faltando: {missing}" if missing else "")
+    return text
+
+
+text = make_pdf(
+    "normal.pdf", session, readings, events,
+    must_have=["Aquisição dos dados", "Como os dados foram adquiridos", "Duração da aquisição",
+               "10 min 00 s", "10 min", "concluída", "Taxa média de leitura", "250 ms",
+               "Interrupções", "1 — 30 s", "Cobertura da aquisição", "medidos no ESP32 a 100 Hz",
+               "ESP32 (100 Hz)", "App (leituras)"],
+)
+make_pdf("sem_azimute.pdf", SessionInfo(4, T0, T0 + 60, "real"), series(T0, 60, pan=False), [],
+         must_have=["não registrado (firmware sem eixo de azimute)", "Livre", "Interrupções", "nenhuma",
+                      "calculados a partir das leituras"])
+make_pdf("vazia.pdf", SessionInfo(5, T0, None, "ble"), [], [],
+         must_have=["nenhuma leitura ainda", "Nenhum evento de limite registrado nesta aquisição"])
+make_pdf("em_andamento.pdf", SessionInfo(6, T0, None, "ble", 1800.0), readings[:400], [],
+         must_have=["em andamento — dados até", "30 min — em andamento"])
+make_pdf("interrompida.pdf", SessionInfo(7, T0, T0 + 120, "ble", 600.0), series(T0, 120), [],
+         must_have=["interrompida antes do fim", "2 min 00 s"])
+make_pdf("longa.pdf", SessionInfo(8, T0, T0 + 4 * 3600, "ble"), series(T0, 4 * 3600, rate_hz=0.2), [],
+         must_have=["4 h 00 min 00 s"])
+check("eixo de tempo do gráfico: s / min / h conforme a duração",
+      [_time_scale(d)[0] for d in (120, 600, 4 * 3600)] == [1.0, 60.0, 3600.0])
+make_pdf("sem_sessao.pdf", None, series(T0, 30), [], must_have=["Aquisição dos dados"])
+
+try:
+    import numpy as np  # noqa: F401
+    from limits.vibration_stats import analyze_axis
+
+    vib = series(T0, 10, rate_hz=100, amp=0.5)
+    vpath = os.path.join(TMP, "vibracao.pdf")
+    generate_vibration_report(vpath, None, vib, analyze_axis(vib, 100.0, TILT_AXIS), None)
+    vt = pdf_text(vpath)
+    check("relatório de vibração continua gerando", os.path.getsize(vpath) > 1000 and
+          (vt is None or "Relatório de Captura de Vibração" in vt))
+except Exception as exc:  # noqa: BLE001
+    check("relatório de vibração continua gerando", False, repr(exc))
+
+# ---------------------------------------------------------------------------
+print("=== janela principal: aquisição com tempo programado (Qt offscreen) ===")
+try:
+    from PyQt5.QtWidgets import QApplication, QMessageBox
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    import ui.main_window as mw
+
+    ui_db = os.path.join(TMP, "ui.db")
+    mw.HistoryStore = lambda: HistoryStore(ui_db)
+    asked: list[str] = []
+
+    def fake_question(_parent, title, text, *args, **kwargs):
+        asked.append(title)
+        return QMessageBox.No
+
+    mw.QMessageBox.question = staticmethod(fake_question)
+    w = mw.MainWindow()
+    w._settings.mode = "simulado"
+
+    def pump(seconds: float) -> None:
+        end = time.time() + seconds
+        while time.time() < end:
+            app.processEvents()
+            time.sleep(0.02)
+
+    check("padrão: aquisição livre", w._planned_duration_s() is None)
+    w.acq_duration_combo.addItem("3 s (teste)", 3.0)
+    w.acq_duration_combo.setCurrentIndex(w.acq_duration_combo.count() - 1)
+    w._start()
+    check("seletor travado durante a aquisição", not w.acq_duration_combo.isEnabled())
+    pump(1.2)
+    check("cronômetro na tela", "gravando" in w.acq_status_label.text() and "/ 00:03" in w.acq_status_label.text(),
+          w.acq_status_label.text())
+    first_sid = w._history.current_session_id
+    w._reset_limits()
+    second_sid = w._history.current_session_id
+    check("Resetar limites abre aquisição nova", second_sid != first_sid and second_sid is not None)
+    pump(4.5)
+    check("aquisição programada para sozinha no fim", not w._running)
+    check("oferece gerar o relatório", "Aquisição concluída" in asked, f"{asked}")
+    s2 = w._history.get_session(second_sid)
+    check("aquisição gravada com o tempo programado e o fim",
+          s2.planned_duration_s == 3.0 and s2.ended_at is not None and 2.5 <= s2.ended_at - s2.started_at <= 5.0,
+          f"{s2.ended_at - s2.started_at:.1f} s" if s2.ended_at else "sem fim")
+    check("leituras contadas na tela", w._history.count_readings(second_sid) > 0)
+    check("rótulo mostra a última aquisição", w.acq_status_label.text().startswith("última:"),
+          w.acq_status_label.text())
+
+    out_pdf = os.path.join(TMP, "ui.pdf")
+    saved: list[tuple[str, str]] = []
+    w._ask_report_path = lambda *a, **k: out_pdf
+    w._report_saved = lambda path, detail="": saved.append((path, detail))
+    w._generate_report()
+    check("relatório sai da última aquisição", bool(saved) and os.path.exists(out_pdf), f"{saved}")
+    t = pdf_text(out_pdf)
+    check("PDF da janela traz o tempo programado", t is None or "3 s" in t)
+
+    # Resetar + Parar logo em seguida: a aquisição vazia não vira relatório vazio.
+    w.acq_duration_combo.setCurrentIndex(0)
+    w._start()
+    pump(1.0)
+    w._reset_limits()
+    w._stop()
+    saved.clear()
+    w._generate_report()
+    used = w._report_session()
+    check("relatório ignora a aquisição vazia do fim", used is not None and w._history.count_readings(used.id) > 0)
+    w.close()
+except Exception as exc:  # noqa: BLE001
+    import traceback
+
+    traceback.print_exc()
+    check("janela principal", False, repr(exc))
+
+shutil.rmtree(TMP, ignore_errors=True)
+print("RELATÓRIO: TUDO OK" if failures == 0 else "RELATÓRIO: HOUVE FALHA")
+sys.exit(1 if failures else 0)

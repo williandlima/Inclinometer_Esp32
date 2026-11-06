@@ -19,5 +19,7 @@ jobs:
           python-version: "3.11"
       - name: Dependências do app
         run: pip install -r python-app/requirements.txt
+      - name: pdftotext (conferência do texto do relatório PDF)
+        run: sudo apt-get install -y poppler-utils
       - name: sim/run.sh
         run: bash sim/run.sh
