@@ -12,7 +12,7 @@ espaçamento 1,5.
 
 | Documento | Rev. | Conteúdo |
 |---|---|---|
-| [relatorio-tecnico-inclinometro.docx](relatorio-tecnico-inclinometro.docx) | 07 | Relatório técnico do projeto: fundamentação teórica, arquitetura do sistema, cálculos e modelagem matemática, protocolos de comunicação, modos de operação e resultados/validação. |
+| [relatorio-tecnico-inclinometro.docx](relatorio-tecnico-inclinometro.docx) | 08 | Relatório técnico do projeto: fundamentação teórica, arquitetura do sistema, cálculos e modelagem matemática, protocolos de comunicação, modos de operação e resultados/validação. |
 | [lista-de-materiais-hardware.docx](lista-de-materiais-hardware.docx) | 00 | Lista de materiais (BOM): componentes, especificações técnicas, datasheets dos fabricantes, ligações elétricas do sensor e opções de alimentação em avaliação. |
 | [relatorio-analise-dados-reais-20261026.docx](relatorio-analise-dados-reais-20261026.docx) | 02 | Análise técnica dos dados reais do ensaio de 26/10/2026, com o sensor na antena fixada no topo de um mastro elevado a 7 m sobre uma viatura e o motor ligado (relatórios de leitura contínua e de Modo Vibração exportados pelo app): caminhos de filtragem, fases da leitura contínua (maiores valores de tilt durante o embarque e desembarque de pessoas), relação entre leitura em graus e deslocamento do topo do mastro, oscilação de 17,63 Hz no tilt (vibração do motor, hipótese de aliasing de 42,37 Hz a 60 Hz e ordens do motor), estabilidade do pan, conclusões e recomendações de ensaio. |
 
@@ -34,7 +34,12 @@ ensaios de bancada do azimute (firmwares **1.6.14** a **1.6.17**): giro feito
 tilt, sentido positivo do azimute, aproximação lenta da marca, projeção nos
 três eixos do giroscópio (independente da montagem) e sentido da inclinação.
 A revisão 07 acompanha os aplicativos **2.2.0**: resolução de exibição de
-0,1° selecionável no cartão de cada eixo e lembrada entre sessões.
+0,1° selecionável no cartão de cada eixo e lembrada entre sessões. A revisão
+08 acompanha o firmware **1.6.18** e o aplicativo desktop **2.3.0**: sentido
+positivo da inclinação restaurado (a inversão da 1.6.17 não correspondia à
+montagem), conexão BLE com busca prévia do anúncio e novas tentativas
+automáticas, e aquisição para o relatório PDF com tempo programado e a tabela
+"Aquisição dos dados" no relatório.
 
 ## Procedimentos de teste e instalação (formulário padrão da empresa)
 
@@ -47,18 +52,27 @@ problemas.
 
 | Documento | Tipo | Rev. | Conteúdo |
 |---|---|---|---|
-| [procedimento-teste-funcional-bancada.docx](procedimento-teste-funcional-bancada.docx) | PTE | 01 | Teste funcional completo em bancada: instalação do software desktop (modo notebook), setup de teste e verificação de todos os modos de conexão e funcionalidades, com tabela de registro de resultados e resolução de problemas. |
-| [procedimento-instalacao-software-python.docx](procedimento-instalacao-software-python.docx) | PTI | 00 | Instalação e verificação do software desktop (Python/PyQt5) em PC. |
+| [procedimento-teste-funcional-bancada.docx](procedimento-teste-funcional-bancada.docx) | PTE | 02 | Teste funcional completo em bancada: instalação do software desktop (modo notebook), setup de teste e verificação de todos os modos de conexão e funcionalidades, com tabela de registro de resultados e resolução de problemas. |
+| [procedimento-instalacao-software-python.docx](procedimento-instalacao-software-python.docx) | PTI | 01 | Instalação e verificação do software desktop (Python/PyQt5) em PC. |
 | [procedimento-instalacao-software-android.docx](procedimento-instalacao-software-android.docx) | PTI | 00 | Compilação e instalação do aplicativo Android (Kotlin/Jetpack Compose). |
 | [procedimento-gravacao-firmware.docx](procedimento-gravacao-firmware.docx) | PTG | 00 | Compilação e gravação (upload) do firmware do ESP32 via PlatformIO. |
-| [procedimento-utilizacao-software-python.docx](procedimento-utilizacao-software-python.docx) | PTO | 00 | Utilização do software desktop (app Python, v2.2.0) do pan-tilt meter em PC Windows: tela principal, configuração da conexão (USB/BLE), leitura, calibração, mínimos/máximos, resolução de exibição, Modo Vibração e relatórios PDF, com capturas reais do app (modo Simulação, em [`capturas-app-python/`](capturas-app-python/)) e resolução de problemas. |
-| [procedimento-utilizacao-ble-minimos-maximos.docx](procedimento-utilizacao-ble-minimos-maximos.docx) | PTO | 00 | Utilização do software desktop (app Python, v2.2.0) focada em uma medição: conexão Bluetooth BLE, resolução de exibição de 0,1° nos dois eixos, leitura dos mínimos e máximos de inclinação (tilt) e azimute (pan) e emissão do relatório PDF da sessão. Capturas com numeração em [`capturas-app-python/`](capturas-app-python/) (prefixo `ble-`), tabela de registro dos mín/máx e resolução de problemas. Sem USB, Simulação ou Modo Vibração. |
+| [procedimento-utilizacao-software-python.docx](procedimento-utilizacao-software-python.docx) | PTO | 01 | Utilização do software desktop (app Python, v2.3.0) do pan-tilt meter em PC Windows: tela principal, configuração da conexão (USB/BLE), leitura, calibração, mínimos/máximos, resolução de exibição, aquisição para o relatório (tempo livre ou programado), Modo Vibração e relatórios PDF, com capturas reais do app (modo Simulação, em [`capturas-app-python/`](capturas-app-python/)) e resolução de problemas. |
+| [procedimento-utilizacao-ble-minimos-maximos.docx](procedimento-utilizacao-ble-minimos-maximos.docx) | PTO | 01 | Utilização do software desktop (app Python, v2.3.0) focada em uma medição: conexão Bluetooth BLE, resolução de exibição de 0,1° nos dois eixos, escolha do tempo da aquisição (livre ou programado), leitura dos mínimos e máximos de inclinação (tilt) e azimute (pan) e emissão do relatório PDF da aquisição, com a conferência numerada da tabela "Aquisição dos dados" (duração, situação, interrupções, origem dos extremos). Capturas com numeração em [`capturas-app-python/`](capturas-app-python/) (prefixo `ble-`), tabelas de registro dos mín/máx e da aquisição e resolução de problemas. Sem USB, Simulação ou Modo Vibração. |
 | [procedimento-configuracao-reset-ptu-d300e.docx](procedimento-configuracao-reset-ptu-d300e.docx) | PTC | 01 | Configuração das velocidades de reset do pan-tilt FLIR PTU-D300E em 500 posições/s, via RS-485 (conversor Black Box SP390A-R2) e Docklight no Windows, com os comandos digitados à mão no Keyboard Console (liberado pelo ícone do teclado): RTS500, RPS500, RTS, RPS, DS, desligar/religar a fonte, RTS e RPS. Capturas reais do Docklight com as respostas do PTU (firmware v3.5.0), tabela de registro e resolução de problemas. |
 | [procedimento-simplificado-velocidade-ptu-d300e.docx](procedimento-simplificado-velocidade-ptu-d300e.docx) | PTC | 00 | Versão simplificada (2 páginas) do procedimento acima: RPS500, RTS500 e DS pelo Docklight, com tabela de passos e resposta esperada. |
 | [procedimento-teste-funcional-ptu-d300e.docx](procedimento-teste-funcional-ptu-d300e.docx) | PTE | 00 | Teste funcional do pan-tilt FLIR PTU-D300E após a configuração de RPS/RTS = 500 pos/s, via RS-485 e Docklight: montagem e cablagem, setup, 9 testes (comunicação, valores programados, permanência após religar, ciclo de reset, posição e movimento dos dois eixos) com critério de aceitação e registro. Tópicos conforme o modelo do procedimento de teste funcional da empresa. |
 
 A revisão 01 do PTE (aplicativos 2.2.0) inclui, no item 4.3, a verificação
-da resolução de exibição de 0,25°/0,1° em cada eixo.
+da resolução de exibição de 0,25°/0,1° em cada eixo. A revisão 02 (firmware
+1.6.18, aplicativo desktop 2.3.0) exige firmware mínimo 1.6.18, verifica o
+sentido da inclinação (subir lê positivo, item 4.3), a reconexão automática
+via BLE (item 4.2) e, no item 4.7, a aquisição programada de 1 min com a
+tabela "Aquisição dos dados" do relatório e uma interrupção provocada. A
+revisão 01 do PTI cita o Setup da versão atual, o `criar_atalho.bat` para o
+ícone na instalação pelo código-fonte, a conferência da versão no topo da
+tela e o caso do ícone que abre uma versão antiga. As revisões 01 dos dois
+PTO acompanham o aplicativo desktop 2.3.0 (aquisição para o relatório e
+relatório novo), com as capturas refeitas.
 
 Os códigos de tipo (PTE/PTI/PTG/PTC/PTO), revisão, folha, código e PN nas caixas de
 identificação são inferência própria a partir do modelo mostrado (campos
