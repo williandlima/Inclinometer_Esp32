@@ -71,6 +71,7 @@ então o app reporta o erro pela UI.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import struct
 import threading
 import time
@@ -138,6 +139,13 @@ VIBRATION_RESEND_TIMEOUT_S = 20.0
 # de operação não consome o orçamento de tentativas da queda seguinte.
 RECONNECT_ATTEMPTS = 5
 RECONNECT_DELAY_S = 3.0
+
+# Tentativas internas de conexão (achar o anúncio + conectar + descobrir os
+# serviços GATT) antes de reportar falha. Ver `_connect_with_retry`.
+CONNECT_ATTEMPTS = 3
+CONNECT_RETRY_DELAY_S = 1.5
+# Tempo para achar o anúncio do ESP32 antes de cada tentativa de conexão.
+SCAN_TIMEOUT_S = 10.0
 
 
 def _decode_angle(raw: bytearray | bytes) -> float:
@@ -208,15 +216,92 @@ def _fix_winrt_threading_model() -> None:
 _WINRT_NO_CACHE_KWARGS: dict = {"winrt": {"use_cached_services": False}}
 
 
+async def _connect_with_retry(
+    device_address: str,
+    disconnected_callback=None,
+    attempts: int = CONNECT_ATTEMPTS,
+    should_stop=None,
+):
+    """Conecta ao ESP32 com algumas tentativas internas e devolve o
+    `BleakClient` já conectado (quem chama é responsável por desconectar).
+
+    Por que as PRIMEIRAS tentativas falhavam (sobretudo no Windows):
+
+    1. `BleakClient("AA:BB:...")` com o endereço em texto faz, por baixo, uma
+       varredura curta para achar o dispositivo, e essa varredura dividia o
+       mesmo `timeout` com a conexão. Logo depois de abrir o app, ou logo
+       depois do "Testar" (o ESP32 só volta a anunciar quando o Windows solta
+       o link anterior), o anúncio ainda não tinha sido visto e a tentativa
+       falhava com "Device with address ... was not found".
+    2. Sem cache de serviços (`use_cached_services=False`, necessário depois
+       de regravar o firmware), a primeira descoberta GATT do WinRT costuma
+       falhar com "Unreachable"/timeout e passar na segunda, já que o link
+       está quente. É um comportamento conhecido do Windows.
+
+    Agora o dispositivo é procurado antes, com uma varredura própria e mais
+    longa, e a conexão é repetida algumas vezes antes de virar erro na tela.
+    """
+    from bleak import BleakClient, BleakScanner
+
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        if should_stop is not None and should_stop():
+            break
+        client = None
+        try:
+            device = await BleakScanner.find_device_by_address(device_address, timeout=SCAN_TIMEOUT_S)
+            if device is None:
+                raise IOError(
+                    f"ESP32 ({device_address}) não encontrado — verifique se está ligado, ao "
+                    f"alcance e se não está conectado a outro app (celular, Docklight)."
+                )
+            client = BleakClient(
+                device,
+                timeout=CONNECT_TIMEOUT_S,
+                disconnected_callback=disconnected_callback,
+                **_WINRT_NO_CACHE_KWARGS,
+            )
+            await client.connect()
+            return client
+        except Exception as exc:  # noqa: BLE001 - qualquer falha aqui vale nova tentativa
+            last_exc = exc
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001 - já não estava conectado
+                    pass
+            if attempt < attempts:
+                await asyncio.sleep(CONNECT_RETRY_DELAY_S)
+    if last_exc is None:
+        raise IOError("Conexão BLE cancelada.")
+    raise last_exc
+
+
+@contextlib.asynccontextmanager
+async def _connected_client(device_address: str, disconnected_callback=None, should_stop=None):
+    """`async with` sobre `_connect_with_retry`: conecta (com retentativas) e
+    garante a desconexão na saída, como o `async with BleakClient(...)` fazia."""
+    client = await _connect_with_retry(
+        device_address, disconnected_callback=disconnected_callback, should_stop=should_stop
+    )
+    try:
+        yield client
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:  # noqa: BLE001 - já caiu sozinho
+            pass
+
+
 def test_connection(device_address: str, timeout_s: float = 8.0) -> ConnectionTestResult:
     """Testa a conexão BLE com o ESP32: conecta, lê os ângulos e a versão do
     firmware uma única vez, e desconecta. Retorna tudo em caso de sucesso;
     levanta exceção em caso de falha."""
     _fix_winrt_threading_model()
-    from bleak import BleakClient
 
     async def _test() -> ConnectionTestResult:
-        async with BleakClient(device_address, timeout=timeout_s, **_WINRT_NO_CACHE_KWARGS) as client:
+        client = await _connect_with_retry(device_address)
+        try:
             raw = await client.read_gatt_char(ANGLE_CHARACTERISTIC_UUID)
             angle_deg = _decode_angle(raw)
             try:
@@ -229,6 +314,15 @@ def test_connection(device_address: str, timeout_s: float = 8.0) -> ConnectionTe
             except Exception:  # noqa: BLE001 - firmware anterior à v1.2.0 não tem o eixo de pan
                 pan_deg = None
             return ConnectionTestResult(angle_deg, firmware_version, pan_deg)
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+            # O ESP32 só volta a anunciar depois que o link cai do lado dele;
+            # sem essa folga, um "OK" + "Iniciar" logo após o teste podia não
+            # encontrar o dispositivo na primeira tentativa.
+            await asyncio.sleep(1.0)
 
     return asyncio.run(_test())
 
@@ -597,8 +691,6 @@ class BleAngleSource(IAngleDataSource):
         chegou a conectar (usado por `_run_with_reconnect` para saber se a
         tentativa valeu). `suppress_error` cala os avisos de falha durante as
         retentativas de reconexão, que já têm mensagem própria."""
-        from bleak import BleakClient
-
         # Último pan recebido, para ser anexado à próxima notificação de tilt
         # (ver o cabeçalho do módulo). Fica em lista para poder ser escrito de
         # dentro dos callbacks aninhados sem `nonlocal`.
@@ -671,11 +763,10 @@ class BleAngleSource(IAngleDataSource):
             )
 
         try:
-            async with BleakClient(
+            async with _connected_client(
                 self._device_address,
-                timeout=CONNECT_TIMEOUT_S,
                 disconnected_callback=_handle_disconnect,
-                **_WINRT_NO_CACHE_KWARGS,
+                should_stop=self._stop_event.is_set,
             ) as client:
                 self._client = client
                 connected_ok = True
