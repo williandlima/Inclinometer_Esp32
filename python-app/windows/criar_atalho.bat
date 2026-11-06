@@ -46,11 +46,14 @@ echo.
 REM ---- 2) Acha o Python -------------------------------------------------
 :python
 set "PYC="
+set "PYW="
 if exist "%APPDIR%\.venv\Scripts\python.exe" set "PYC=%APPDIR%\.venv\Scripts\python.exe"
 if defined PYC goto :achou_python
-REM O "python.exe" da pasta WindowsApps e so um atalho para a Microsoft
-REM Store, nao um Python de verdade: e ignorado.
-for /f "delims=" %%P in ('where python.exe 2^>nul ^| findstr /v /i "WindowsApps"') do if not defined PYC set "PYC=%%P"
+REM Pergunta ao proprio Python onde ele esta. Funciona tambem com o Python
+REM da Microsoft Store (pasta WindowsApps). Se nao houver Python, o
+REM "python" do Windows e so um atalho para a Store e devolve erro aqui.
+python -c "import sys; print(sys.executable)" > "%TMPF%" 2>nul
+if not errorlevel 1 set /p PYC=<"%TMPF%"
 if defined PYC goto :achou_python
 py -3 -c "import sys; print(sys.executable)" > "%TMPF%" 2>nul
 if not errorlevel 1 set /p PYC=<"%TMPF%"
@@ -61,10 +64,11 @@ echo e rode este arquivo de novo.
 goto :fim_erro
 
 :achou_python
-for %%D in ("%PYC%") do set "PYW=%%~dpDpythonw.exe"
-if not exist "%PYW%" (
-    echo [ERRO] pythonw.exe nao encontrado ao lado de "%PYC%".
-    goto :fim_erro
+for %%D in ("%PYC%") do if exist "%%~dpDpythonw.exe" set "PYW=%%~dpDpythonw.exe"
+if not defined PYW for /f "delims=" %%P in ('where pythonw.exe 2^>nul') do if not defined PYW set "PYW=%%P"
+if not defined PYW (
+    echo [AVISO] pythonw.exe nao encontrado: o app vai abrir com uma janela de terminal junto.
+    set "PYW=%PYC%"
 )
 echo Python: %PYC%
 
