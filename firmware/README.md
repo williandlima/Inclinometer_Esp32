@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.18`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.19`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -648,6 +648,58 @@ montagem atual. `TILT_DIRECTION_SIGN` voltou a **+1**. Só o ângulo reportado
 muda (tela, extremos, Modo Vibração, Modbus e BLE); os lados NEG/POS da
 correção de escala seguem o sinal do ângulo bruto, como antes. Conferir em
 bancada depois de gravar: subir tem de ler positivo.
+
+### Pan: desnível da viatura e balanço do mastro (v1.6.19)
+
+Revisão do modelo de cálculo do pan em busca dos erros que sobravam. O
+simulador ganhou um modo de **corpo rígido** (`sim/pan_sim.cpp`, cenários
+V): cinemática completa do pan-tilt, com o eixo de pan podendo estar fora da
+vertical, a placa montada torta, balanço do mastro que gira o corpo de
+verdade e o ruído real do acelerômetro (~2,3 mg RMS). Ele expôs dois erros
+que os cenários anteriores (mastro sempre vertical) não tinham como ver:
+
+1. **Desnível (eixo de pan fora da vertical).** A projeção ω_pan = g·u é
+   exata só com o eixo de pan na vertical. Inclinado de β, o eixo do tilt
+   deixa de ser horizontal e g·u = ω_pan·cos β' + ṫ·(â·u): até sen β de todo
+   movimento de tilt vaza para o pan. Correção: o eixo do tilt â é fixo nos
+   eixos do chip e perpendicular ao giro de pan, então a taxa é projetada em
+   n = (u − (u·â)â)/|…|, o que zera o vazamento (resta 1 − cos β: 0,14% a
+   3°). â é aprendido das janelas de tilt (autovetor principal de
+   Σ dev·devᵀ·T) e o que vazou antes de ele valer é descontado de uma vez.
+   Com o mastro vertical, n = u: nada muda.
+2. **Balanço do mastro.** Rotação em torno de eixos horizontais não tem
+   componente no pan, mas o resíduo dela na média de 1 s fazia o ZUPT
+   achar que nenhuma janela estava parada — o bias derivava, e abaixo de
+   ~1 Hz nem chegava a ser adotado no boot (leitura parada em 0°). O
+   acelerômetro vê o balanço (a vertical gira junto, ω⊥ = u × u̇): a janela
+   passa a ser parada para o pan quando a componente ao longo de n está
+   abaixo do limiar e o resíduo horizontal não explicado pelo acelerômetro é
+   pequeno; o bias aprende a parte vertical direto e a horizontal como
+   (giro − rotação vista), e a adoção no boot também desconta a rotação
+   vista. A rotação vista usa blocos de 8 amostras nas pontas da janela
+   (ruído ~2,5x menor). Sem rotação vista (bias andando), a janela segue o
+   caminho de readoção de sempre.
+
+| Cenário (sim/pan_sim.cpp) | 1.6.18 pior / final | 1.6.19 pior / final |
+|---|---|---|
+| V1 — desnível 3°, tilt 0→60, pan +30, tilt volta | 3,17° / 0,38° | 0,77° / 0,02° |
+| V2 — desnível 5°, pan girando com o tilt inclinado | 3,04° / −2,54° | 0,66° / −0,03° |
+| V3 — V1 com balanço 1,5°/s a 1,2 Hz | 8,17° / 2,63° | 0,79° / 0,24° |
+| V3b — nivelado, só balanço | 4,87° / 2,04° | 0,29° / 0,13° |
+| V5 — 10 min, desnível 3°, balanço 2°/s a 0,6 Hz | 60° (não integrava) | 0,92° |
+| V5 — idem a 1,2 Hz / 2,5 Hz | 18,8° / 3,4° | 0,59° / 0,62° |
+| V6 — desnível 10° (transitório da 1ª janela de tilt) | 10,45° / 0,94° | 2,54° / −0,03° |
+| V4 — parado 10 min (ruído do acelerômetro) | 0,02° | 0,02° |
+
+Os 0,77° do V1 são o transitório da primeira janela de tilt, antes de o eixo
+ser aprendido (descontado no fim dela). Nos ensaios de bancada sem desnível
+nem balanço (A–U, e P e T comparados semente a semente em 60 realizações do
+ruído), o resultado é idêntico ao da 1.6.18. P e T passaram a ser checados
+em 10 sementes (média e máximo), e não numa realização só.
+
+**Pendente em bancada:** confirmar com a base inclinada de propósito (3–5°,
+calço sob um lado) que um tilt de 60° não move mais o pan, e que o pan fica
+estável com a estrutura balançando.
 
 ### Um detalhe que quase virou bug
 

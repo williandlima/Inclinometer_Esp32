@@ -122,6 +122,45 @@
 //    não se acumula com o tempo nem com o número de movimentos — e some
 //    quando o eixo volta ao zero.
 //
+// 5. DESACOPLAMENTO DO TILT (1.6.19). A projeção do item 1 é exata só com o
+//    eixo de pan na VERTICAL. Com a viatura fora do nível, o eixo de pan sai
+//    da vertical de β, o eixo do tilt deixa de ser horizontal e
+//
+//        g · u = ω_pan·cos β' + ṫ·(â·u)
+//
+//    — até sen β de todo movimento de tilt vaza para o pan (3° de desnível e
+//    60° de tilt: 3,1° de erro; e o erro FICA se o pan girar com o tilt
+//    inclinado). Como a placa está presa no cabeçote, o eixo do tilt â é FIXO
+//    nos eixos do chip, e a rotação de pan é perpendicular a ele: projetar em
+//
+//        n = (u − (u·â)·â) / |u − (u·â)·â|
+//
+//    zera o vazamento e deixa um erro de 2ª ordem (1 − cos β: 0,14% a 3°).
+//    â é aprendido sozinho: autovetor principal de Σ dev·devᵀ·T das janelas
+//    de tilt confirmadas pelo acelerômetro (num tilt puro, a média da janela
+//    é ṫ·â). Quando ele passa a valer, o que vazou nas janelas de tilt
+//    anteriores (âᵀ·Σ T·dev·uᵀ·â) é descontado de uma vez. Com o eixo de pan
+//    na vertical, u ⟂ â e n = u: nada muda. Cenários V de sim/pan_sim.cpp.
+//
+// 6. BALANÇO DO MASTRO (1.6.19). Balanço é rotação em torno de eixos
+//    horizontais: não tem componente no eixo de pan, mas deixa na média de
+//    1 s um resíduo horizontal que o gate de 3 eixos do item 2 lia como giro
+//    — e o estimador de vibração (diferença entre amostras sucessivas) não
+//    enxerga balanço lento. Sob balanço nenhuma janela ficava parada, o bias
+//    derivava (5° em 90 s com o eixo parado), e abaixo de ~1 Hz o bias nem
+//    chegava a ser adotado no boot (leitura parada em 0°). O acelerômetro vê
+//    o balanço — a vertical gira junto, ω⊥ = u × u̇ —, então:
+//    - a janela é parada para o pan quando a componente ao longo de n está
+//      abaixo do limiar e o resíduo horizontal que o acelerômetro NÃO explica
+//      é pequeno (com o acelerômetro vendo rotação de fato: sem ela o resíduo
+//      é bias andando e segue o caminho de readoção de sempre);
+//    - o bias aprende a parte ao longo de n direto, e a horizontal como
+//      (giro − rotação vista), o estimador clássico giro × acelerômetro;
+//    - a adoção do bias no boot compara as médias sem a rotação vista.
+//    A rotação vista usa a vertical média de blocos de 8 amostras nas pontas
+//    da janela e o giro no mesmo subintervalo (ruído ~2,5x menor que com
+//    amostras isoladas).
+//
 // LEITURAS ESPÚRIAS. gy e gz passam por uma mediana móvel de 5 amostras
 // antes de tudo (integração e médias do ZUPT). Uma única leitura errada do
 // barramento I2C — ex.: -250°/s por 10 ms — deslocava a média da janela em
@@ -323,7 +362,40 @@ private:
     void pushBiasUndo(uint32_t now, float winS, float signedDps, float spreadDps, Vec3 mean);
     void undoRecentBiasLearning(uint32_t now, float winS, float motionDps);
     // Componente vertical (taxa de pan) de uma diferença de taxa nos eixos.
-    static float projectedDps(Vec3 d, Vec3 up);
+    float projectedDps(Vec3 d, Vec3 up) const;
+
+    // EIXO DO TILT e desacoplamento (item 5 do cabeçalho). O eixo do tilt é
+    // fixo nos eixos do chip (a placa está presa no cabeçote que inclina);
+    // ele é aprendido das janelas de movimento de tilt confirmadas pelo
+    // acelerômetro: autovetor principal de Σ p·pᵀ·T, com p a média da janela
+    // fora da vertical (já sem bias). `panAxis(up)` devolve a vertical sem a
+    // componente desse eixo — o vetor sobre o qual a taxa de pan é projetada.
+    float _tiltAxisAcc[6] = {};  // xx, yy, zz, xy, xz, yz
+    float _tiltAxisSeenDeg = 0.0f;
+    Vec3 _tiltAxis{1.0f, 0.0f, 0.0f};
+    bool _tiltAxisKnown = false;
+    // Σ T·dev·uᵀ das janelas de tilt integradas ANTES de o eixo ser
+    // conhecido: quando ele passa a valer, o que vazou para o pan nelas
+    // (âᵀ·Σ·â) é descontado de uma vez.
+    float _tiltLeakAcc[9] = {};
+
+    // Rotação da placa vista pelo ACELERÔMETRO na janela, com ruído baixo
+    // (1.6.19): a vertical média das PAN_ACC_ROT_BLOCK primeiras e das
+    // PAN_ACC_ROT_BLOCK últimas amostras, e a média do giro no MESMO
+    // subintervalo (entre os centros dos dois blocos), para as duas
+    // descreverem a mesma rotação. Uma amostra isolada do acelerômetro tem
+    // ~0,13° de ruído — 0,19°/s numa janela de 1 s, acima do próprio limiar.
+    static constexpr int ACC_BLOCK = PAN_ACC_ROT_BLOCK;
+    Vec3 _upHeadSum{0.0f, 0.0f, 0.0f};
+    Vec3 _upTail[ACC_BLOCK] = {};
+    Vec3 _gyroHeadHalf{0.0f, 0.0f, 0.0f};
+    Vec3 _gyroTail[ACC_BLOCK / 2] = {};
+    void accumulateAccRotation(Vec3 gyro, Vec3 up);
+    // false se a janela é curta demais. `seenDps`: rotação vista (°/s);
+    // `gyroMeanDps`: média do giro no mesmo subintervalo.
+    bool accRotation(Vec3 &seenDps, Vec3 &gyroMeanDps) const;
+    Vec3 panAxis(Vec3 up) const;
+    void learnTiltAxis(Vec3 perpDps, Vec3 devDps, Vec3 upMid, float winS);
     // Janela de borda (começo/fim suave) do giro de velocidade motionDps.
     static bool isEdgeOf(float edgeDps, float spreadDps, float motionDps);
 
@@ -360,6 +432,7 @@ private:
     // Média da janela anterior, para o teste de coerência (BOOT E RECUPERAÇÃO).
     bool _hasPrevMean = false;
     Vec3 _prevMean{0.0f, 0.0f, 0.0f};
+    Vec3 _prevMeanCorr{0.0f, 0.0f, 0.0f};  // média sem a rotação vista pelo acelerômetro (adoção)
 
     // Últimas janelas SEGUIDAS fora do limiar de "parado" (rede de segurança
     // contra bias errado): média de cada eixo e o quanto cada uma integrou.

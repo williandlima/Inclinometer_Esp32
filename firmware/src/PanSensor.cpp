@@ -194,6 +194,7 @@ void PanSensor::update() {
     if (_windowSamples == 0) {
         _windowUpStart = up;
     }
+    accumulateAccRotation(gyro, up);
     _windowSum = _windowSum + gyro;
     _windowSamples++;
     if (_biasReady) {
@@ -245,11 +246,24 @@ void PanSensor::closeWindow(uint32_t now) {
 
     if (!_biasReady) {
         // Adoção: duas janelas seguidas com a mesma média. Ver "BOOT E
-        // RECUPERAÇÃO" em PanSensor.h.
+        // RECUPERAÇÃO" em PanSensor.h. A média é tomada SEM a rotação que o
+        // acelerômetro viu na janela (1.6.19): sob balanço lento do mastro, a
+        // média de 1 s oscila mais que PAN_BIAS_ADOPT_COHERENCE_DPS de uma
+        // janela para a outra, o bias nunca era adotado e o pan nunca
+        // integrava (cenário V5 a 0,6 Hz: leitura parada em 0°). O balanço
+        // gira a vertical junto, então o acelerômetro o vê e ele sai da conta;
+        // giro de pan não gira a vertical e continua barrando a adoção.
+        Vec3 bootSeen, bootMean;
+        Vec3 meanC = mean;
+        if (accRotation(bootSeen, bootMean)) {
+            meanC = bootMean - bootSeen;
+        }
+        const Vec3 prevMeanC = _prevMeanCorr;
+        _prevMeanCorr = meanC;
         if (hadPrev) {
-            float spread = norm(mean - prevMean);
+            float spread = norm(meanC - prevMeanC);
             if (spread < PAN_BIAS_ADOPT_COHERENCE_DPS) {
-                adoptBias(0.5f * (mean + prevMean), {0.0f, 0.0f, 0.0f}, spread < PAN_ZUPT_RATE_THRESHOLD_DPS);
+                adoptBias(0.5f * (meanC + prevMeanC), {0.0f, 0.0f, 0.0f}, spread < PAN_ZUPT_RATE_THRESHOLD_DPS);
             }
         }
         resetWindow(now);
@@ -296,6 +310,70 @@ void PanSensor::closeWindow(uint32_t now) {
         Vec3 seen = (57.29578f / winS) * cross(_lastUp, _windowUpStart);
         float perp2 = dot(perp, perp);
         tiltMoving = perp2 > PAN_TILT_MOVE_DPS * PAN_TILT_MOVE_DPS && dot(perp, seen) > PAN_TILT_MOVE_MATCH * perp2;
+        // Para aprender o eixo do tilt vale a média INTEIRA da janela (num
+        // tilt puro ela é ṫ·â), e não `perp`: tirar a componente vertical
+        // forçaria â ⟂ u e apagaria justamente a inclinação do eixo de pan que
+        // se quer corrigir. Janelas com giro de pan junto ficam de fora: no
+        // tilt puro, |dev·u| = |ṫ|·|â·u| ≤ |ṫ|·sen(desnível).
+        float along = dot(dev, _lastUp);
+        if (tiltMoving && perp2 > PAN_TILT_AXIS_LEARN_DPS * PAN_TILT_AXIS_LEARN_DPS &&
+            along * along < PAN_TILT_AXIS_MAX_PAN_FRACTION * PAN_TILT_AXIS_MAX_PAN_FRACTION * dot(dev, dev)) {
+            Vec3 um = _windowUpStart + _lastUp;
+            float un = norm(um);
+            learnTiltAxis(dev, dev, un > 0.0f ? (1.0f / un) * um : _lastUp, winS);
+        }
+    }
+
+    // BALANÇO DO MASTRO (1.6.19). Balanço é rotação em torno de eixos
+    // horizontais: não tem componente no eixo de pan, mas deixa na média de
+    // 1 s um resíduo HORIZONTAL (fração de período que sobra) que o gate de 3
+    // eixos acima confunde com giro — e o estimador de vibração, que usa a
+    // diferença entre amostras sucessivas, não enxerga balanço lento (1-2
+    // Hz). Sob balanço, nenhuma janela ficava "parada", o bias deixava de ser
+    // corrigido e derivava pela extrapolação (cenário V3b: 5° em 90 s com o
+    // eixo parado). Para o PAN só importa a componente ao longo do eixo de pan:
+    // se ela está abaixo do limiar, o resto é horizontal e modesto, e não há
+    // tilt em curso, a janela é parada — mas o bias só aprende a componente
+    // vertical, a única que o balanço não contamina.
+    //
+    //
+    // E o bias horizontal continua sendo aprendido nessas janelas, mas da
+    // forma certa: sem giro de pan, a média do giro fora do eixo de pan é o
+    // erro do bias MAIS a rotação real da placa (balanço), e essa rotação o
+    // acelerômetro vê — a vertical gira junto: (u_fim × u_início)/T. A
+    // diferença é o erro do bias (o estimador clássico giro × acelerômetro).
+    // Bias horizontal andando sem balanço: o acelerômetro vê ~0 e ele é
+    // aprendido inteiro, como numa janela parada comum.
+    const Vec3 nAxis = panAxis(_lastUp);
+    const float vertDps = dot(dev, nAxis);
+    bool swayStill = false;
+    Vec3 swayLearnDev{0.0f, 0.0f, 0.0f};
+    if (!stillCandidate && fabsf(vertDps) < threshold && _windowPeakDps < PAN_ZUPT_PEAK_DPS && winS > 0.0f) {
+        Vec3 seen{0.0f, 0.0f, 0.0f}, subMean = mean;
+        if (!accRotation(seen, subMean)) {
+            seen = (57.29578f / winS) * cross(_lastUp, _windowUpStart);
+        }
+        seen = seen - dot(seen, nAxis) * nAxis;
+        const Vec3 subDev = subMean - midBias;
+        const Vec3 horiz = subDev - dot(subDev, nAxis) * nAxis;
+        // Balanço lento (abaixo de ~1 Hz) também gira a vertical o bastante
+        // para a janela ser reconhecida como movimento de TILT — numa janela
+        // de 1 s, os dois são a mesma coisa: rotação horizontal vista pelo
+        // acelerômetro. Para o pan, ambos são "pan parado"; o que separa um
+        // tilt de verdade (motor, mão) é a velocidade da rotação vista. Tilt
+        // rápido fica de fora: a dinâmica (aceleração centrípeta) deixa o
+        // acelerômetro menos fiel, e ele não deve ensinar o bias.
+        const bool realTilt = tiltMoving && norm(seen) >= PAN_SWAY_MAX_ROT_DPS;
+        // O limite vale para o resíduo horizontal que o acelerômetro NÃO
+        // explica (erro do bias + ruído), e não para o bruto: balanço lento e
+        // forte deixa mais de 1°/s na média e cairia no caminho de movimento,
+        // cuja readoção usa a média crua — contaminada pelo balanço.
+        const Vec3 unexplained = horiz - seen;
+        if (!realTilt && norm(seen) >= PAN_SWAY_MIN_SEEN_DPS && norm(unexplained) < PAN_SWAY_MAX_DPS) {
+            stillCandidate = true;
+            swayStill = true;
+            swayLearnDev = vertDps * nAxis + PAN_SWAY_HORIZONTAL_GAIN * unexplained;
+        }
     }
 
     if (stillCandidate && _prevMoving && _tailWindows < PAN_ZUPT_TAIL_MAX_WINDOWS &&
@@ -316,16 +394,18 @@ void PanSensor::closeWindow(uint32_t now) {
         // de deriva) e desfaz o que foi integrado nela, para o ruído do giro
         // não virar random walk enquanto parado.
         pushBiasUndo(now, winS, signedDps, spreadDps, mean);
+        const Vec3 learnDev = swayStill ? swayLearnDev : dev;
         if (prevStill && hadPrev) {
-            learnWander(mean - prevMean);
+            Vec3 step = mean - prevMean;
+            learnWander(swayStill ? dot(step, nAxis) * nAxis : step);
         }
         _prevStill = true;
         _excCount = 0;
         _prevMoving = false;
         _tailWindows = 0;
-        _bias = _bias + PAN_ZUPT_BIAS_ALPHA * dev;
+        _bias = _bias + PAN_ZUPT_BIAS_ALPHA * learnDev;
         if (winS > 0.0f) {
-            _biasSlope = clampSlope(_biasSlope + (PAN_ZUPT_SLOPE_BETA / winS) * dev);
+            _biasSlope = clampSlope(_biasSlope + (PAN_ZUPT_SLOPE_BETA / winS) * learnDev);
         }
         _sinceStillS = 0.0f;
         _panDeg -= _windowDeltaDeg;
@@ -390,11 +470,102 @@ void PanSensor::pushBiasUndo(uint32_t now, float winS, float signedDps, float sp
         BiasSnapshot{_bias, _biasSlope, now, _sinceStillS, _windowDeltaDeg, signedDps, spreadDps, winS, _lastUp, mean};
 }
 
-float PanSensor::projectedDps(Vec3 d, Vec3 up) {
-    // Projeção na vertical (positivo = anti-horário visto de cima), no sentido
-    // do pan do usuário (PAN_DIRECTION_SIGN). Toda conta que soma ao ângulo
-    // passa por aqui, para o sentido ser um só.
-    return PAN_DIRECTION_SIGN * dot(d, up);
+float PanSensor::projectedDps(Vec3 d, Vec3 up) const {
+    // Projeção no eixo de pan (positivo = anti-horário visto de cima), no
+    // sentido do pan do usuário (PAN_DIRECTION_SIGN). Toda conta que soma ao
+    // ângulo passa por aqui, para o sentido e o eixo serem um só.
+    return PAN_DIRECTION_SIGN * dot(d, panAxis(up));
+}
+
+Vec3 PanSensor::panAxis(Vec3 up) const {
+    // Vertical sem a componente do eixo do tilt (item 5 de PanSensor.h). Com o
+    // eixo de pan na vertical, u já é perpendicular ao eixo do tilt e isto
+    // devolve u. Com o eixo de pan inclinado de β (viatura fora do nível), u
+    // tem componente sen β ao longo do eixo do tilt, e projetar em u somava
+    // ao pan até sen β de todo movimento de tilt.
+    if (!_tiltAxisKnown) {
+        return up;
+    }
+    Vec3 v = up - dot(up, _tiltAxis) * _tiltAxis;
+    float n = norm(v);
+    // Mais de ~25° entre a vertical e o plano do pan não é viatura fora do
+    // nível: é estimativa ruim. Fica com a projeção clássica.
+    if (n < PAN_TILT_AXIS_MIN_COS) {
+        return up;
+    }
+    return (1.0f / n) * v;
+}
+
+void PanSensor::learnTiltAxis(Vec3 p, Vec3 dev, Vec3 um, float winS) {
+    // Soma de p·pᵀ·T: o movimento de tilt é uma rotação em torno de UM eixo
+    // fixo na placa, então essa matriz tem um autovetor dominante — ele.
+    // Médias de janela (e não amostras): a vibração do mastro, de média zero,
+    // não entra; e só janelas em que o acelerômetro confirmou a vertical
+    // girando chegam aqui.
+    _tiltAxisAcc[0] += p.x * p.x * winS;
+    _tiltAxisAcc[1] += p.y * p.y * winS;
+    _tiltAxisAcc[2] += p.z * p.z * winS;
+    _tiltAxisAcc[3] += p.x * p.y * winS;
+    _tiltAxisAcc[4] += p.x * p.z * winS;
+    _tiltAxisAcc[5] += p.y * p.z * winS;
+    _tiltAxisSeenDeg += norm(p) * winS;
+    if (!_tiltAxisKnown) {
+        const float d[3] = {dev.x, dev.y, dev.z}, u[3] = {um.x, um.y, um.z};
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                _tiltLeakAcc[3 * i + j] += winS * d[i] * u[j];
+            }
+        }
+    }
+    const float *m = _tiltAxisAcc;
+    float trace = m[0] + m[1] + m[2];
+    if (trace <= 0.0f) {
+        return;
+    }
+    // Autovetor principal por iteração de potência (3x3, converge rápido a
+    // partir da estimativa anterior).
+    Vec3 v = _tiltAxisKnown ? _tiltAxis : Vec3{m[0] >= m[1] && m[0] >= m[2] ? 1.0f : 0.0f,
+                                               m[1] > m[0] && m[1] >= m[2] ? 1.0f : 0.0f,
+                                               m[2] > m[0] && m[2] > m[1] ? 1.0f : 0.0f};
+    float lambda = 0.0f;
+    for (int i = 0; i < 30; i++) {
+        Vec3 w{m[0] * v.x + m[3] * v.y + m[4] * v.z, m[3] * v.x + m[1] * v.y + m[5] * v.z,
+               m[4] * v.x + m[5] * v.y + m[2] * v.z};
+        float n = norm(w);
+        if (n <= 0.0f) {
+            return;
+        }
+        lambda = n;
+        v = (1.0f / n) * w;
+    }
+    // Só passa a valer com movimento de tilt suficiente e um eixo claramente
+    // dominante (um único eixo de rotação). Senão, continua a projeção
+    // clássica na vertical, exatamente como antes.
+    if (_tiltAxisSeenDeg >= PAN_TILT_AXIS_MIN_DEG && lambda >= PAN_TILT_AXIS_DOMINANCE * trace) {
+        bool first = !_tiltAxisKnown;
+        _tiltAxis = v;
+        _tiltAxisKnown = true;
+        if (first) {
+            // As janelas de tilt anteriores foram integradas projetando em u;
+            // o certo era em n ≈ u − (u·â)â. A diferença, somada, é
+            // −Σ T·(dev·â)(u·â) = −âᵀ·(Σ T·dev·uᵀ)·â.
+            const float a[3] = {v.x, v.y, v.z};
+            float leak = 0.0f;
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    leak += a[i] * _tiltLeakAcc[3 * i + j] * a[j];
+                }
+            }
+            _panDeg -= PAN_DIRECTION_SIGN * leak * PAN_SCALE_CORRECTION;
+            clampIntegrator();
+        }
+    }
+    // Mantém a soma numa faixa segura para float, sem mudar a direção.
+    if (trace > 1.0e6f) {
+        for (int i = 0; i < 6; i++) {
+            _tiltAxisAcc[i] *= 0.5f;
+        }
+    }
 }
 
 void PanSensor::undoRecentBiasLearning(uint32_t now, float winS, float motionDps) {
@@ -716,6 +887,48 @@ void PanSensor::resetWindow(uint32_t now) {
     _windowPeakDps = 0.0f;
     _windowDiffSqSum = 0.0f;
     _windowDiffCount = 0;
+    _upHeadSum = {0.0f, 0.0f, 0.0f};
+    _gyroHeadHalf = {0.0f, 0.0f, 0.0f};
+}
+
+void PanSensor::accumulateAccRotation(Vec3 gyro, Vec3 up) {
+    // Chamada ANTES de _windowSamples++: k é o índice desta amostra.
+    const int k = _windowSamples;
+    if (k < ACC_BLOCK) {
+        _upHeadSum = _upHeadSum + up;
+    }
+    if (k < ACC_BLOCK / 2) {
+        _gyroHeadHalf = _gyroHeadHalf + gyro;
+    }
+    _upTail[k % ACC_BLOCK] = up;
+    _gyroTail[k % (ACC_BLOCK / 2)] = gyro;
+}
+
+bool PanSensor::accRotation(Vec3 &seen, Vec3 &gyroMean) const {
+    const int n = _windowSamples;
+    if (n < 3 * ACC_BLOCK) {
+        return false;
+    }
+    Vec3 tail{0.0f, 0.0f, 0.0f}, gyroTail{0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < ACC_BLOCK; i++) {
+        tail = tail + _upTail[i];
+    }
+    for (int i = 0; i < ACC_BLOCK / 2; i++) {
+        gyroTail = gyroTail + _gyroTail[i];
+    }
+    float nh = norm(_upHeadSum), nt = norm(tail);
+    if (nh <= 0.0f || nt <= 0.0f) {
+        return false;
+    }
+    // Os centros dos blocos estão a ACC_BLOCK/2 amostras de cada ponta; entre
+    // eles ficam n − ACC_BLOCK intervalos de amostra.
+    const float subS = (_lastSampleMs - _windowStartMs) / 1000.0f * static_cast<float>(n - ACC_BLOCK) / n;
+    if (subS <= 0.0f) {
+        return false;
+    }
+    seen = (57.29578f / subS) * cross((1.0f / nt) * tail, (1.0f / nh) * _upHeadSum);
+    gyroMean = (1.0f / (n - ACC_BLOCK)) * (_windowSum - _gyroHeadHalf - gyroTail);
+    return true;
 }
 
 float PanSensor::readPanDeg() {
