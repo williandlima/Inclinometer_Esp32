@@ -36,8 +36,16 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.21";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10621;
+constexpr char FIRMWARE_VERSION[] = "1.6.22";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10622;
+
+// Memória permanente (NVS) e watchdog — ver main.cpp.
+constexpr char NVS_NAMESPACE[] = "inclinometro";
+constexpr char NVS_KEY_TILT_OFFSET[] = "tilt_zero";
+// Tempo sem o loop principal rodar até o ESP32 reiniciar sozinho. Folgado:
+// uma iteração normal leva poucos ms, e a pior espera conhecida (I2C sem
+// resposta, gravação na flash) fica bem abaixo de 1 s.
+constexpr uint32_t WATCHDOG_TIMEOUT_S = 10;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py

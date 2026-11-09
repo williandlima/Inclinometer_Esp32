@@ -3,6 +3,8 @@
 # (firmware/src) no computador, contra um MPU6050 e uma lib BLE simulados
 # (mock/), e dirige a captura de vibração com o código REAL do app Python.
 #   pan_sim         -> pan com mudanças de posição da placa e bias de fábrica
+#   nvs_sim         -> zero do tilt salvo na memória permanente (calibra,
+#                      "desliga e religa" e confere) e watchdog do loop
 #   soak_sim        -> firmware inteiro (com o driver I2C real) por 30 min
 #                      simulados x SOAK_SEEDS sementes, contra um MPU6050
 #                      emulado com falhas de hardware injetadas (ver o
@@ -41,6 +43,11 @@ g++ $FLAGS fw_sim.cpp $SRC/main.cpp $SRC/BleServer.cpp $SRC/VibrationCapture.cpp
 g++ $FLAGS soak_sim.cpp $SRC/main.cpp $SRC/Mpu6050.cpp $SRC/BleServer.cpp $SRC/VibrationCapture.cpp \
     $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp $SRC/ModbusSlave.cpp -o "$OUT/soak_sim"
 "$OUT/pan_sim"
+echo
+g++ $FLAGS nvs_sim.cpp $SRC/main.cpp $SRC/BleServer.cpp $SRC/VibrationCapture.cpp \
+    $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp $SRC/ModbusSlave.cpp -o "$OUT/nvs_sim"
+NVS_MOCK_FILE="$OUT/nvs.txt" "$OUT/nvs_sim" calibra
+NVS_MOCK_FILE="$OUT/nvs.txt" "$OUT/nvs_sim" religa
 echo
 "$OUT/soak_sim" "${SOAK_SEEDS:-20}"
 echo

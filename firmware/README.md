@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.21`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.22`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -409,6 +409,28 @@ escala acima; (2) compensação térmica do bias com a temperatura do chip
 se houver aceleração linear forte no topo do mastro; (4) se o que importa
 é a posição do pan da PTU (e não a torção do mastro), ler o próprio encoder
 da PTU pelo RS-485.
+
+### Zero do tilt salvo, watchdog e compilação automática (v1.6.22)
+
+- **Zero do tilt na memória permanente (NVS).** Até a 1.6.21 o zero da
+  calibração ficava só na RAM: ao desligar o ESP32 ele se perdia, sem aviso,
+  e o tilt voltava a ser lido em relação ao zero do sensor. Agora o zero é
+  gravado quando muda (só ao calibrar — desgaste da flash desprezível) e
+  restaurado ao ligar. O **pan** continua recomeçando em 0° na posição em
+  que o ESP32 ligar: ele é integrado do giroscópio e não tem referência
+  absoluta.
+- **Watchdog do loop principal** (`WATCHDOG_TIMEOUT_S` = 10 s): se o
+  firmware travar, o ESP32 reinicia sozinho; os apps reconectam e o zero do
+  tilt volta da memória.
+- **Compilação no GitHub** (`.github/workflows/firmware.yml`): o firmware é
+  compilado com o PlatformIO a cada alteração, e o `firmware.bin` fica como
+  artifact.
+
+Testado em `sim/nvs_sim.cpp` (calibra, "desliga e religa" com a NVS em
+arquivo, confere o zero e que a flash é gravada uma única vez). **Pendente
+em bancada:** calibrar, desligar a alimentação, religar e conferir que o
+tilt continua em 0° na mesma posição; o watchdog só é exercitado de verdade
+no hardware.
 
 ## Azimute (pan) pelo giroscópio (v1.2.0)
 

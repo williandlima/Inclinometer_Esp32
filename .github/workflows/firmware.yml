@@ -1,0 +1,49 @@
+# Compila o firmware para o ESP32 de verdade (PlatformIO, o mesmo comando
+# usado para gravar) a cada alteração em firmware/. Os testes de simulação
+# (simulacao.yml) compilam o mesmo código com o compilador do PC e
+# bibliotecas falsas — um erro que só aparece no compilador/SDK do ESP32
+# passava despercebido até alguém tentar gravar a placa.
+# O firmware.bin fica como artifact, pronto para gravar sem recompilar.
+name: Firmware ESP32
+
+on:
+  push:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+  pull_request:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-${{ hashFiles('firmware/platformio.ini') }}
+      - name: PlatformIO
+        run: pip install platformio
+      - name: Compila o firmware (esp32dev)
+        working-directory: firmware
+        run: pio run
+      - name: Versão do firmware
+        id: versao
+        run: echo "v=$(grep -oP 'FIRMWARE_VERSION\[\] = "\K[0-9.]+' firmware/src/Config.h)" >> "$GITHUB_OUTPUT"
+      - name: Publica o firmware compilado
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32-${{ steps.versao.outputs.v }}
+          path: |
+            firmware/.pio/build/esp32dev/firmware.bin
+            firmware/.pio/build/esp32dev/bootloader.bin
+            firmware/.pio/build/esp32dev/partitions.bin
+          retention-days: 90

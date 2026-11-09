@@ -148,6 +148,29 @@ por evento, na coluna **"Medido por"**). O eixo de tempo dos gráficos conta a
 partir do início da aquisição, em s, min ou h conforme a duração. Cálculo em
 `report/acquisition.py`; testes em `sim/relatorio_test.py`.
 
+## Histórico: prazo de retenção (app 2.4.0)
+
+O app grava cada leitura (~4 por segundo) num banco SQLite na pasta de dados
+do usuário — 8 h de leitura são ~115 mil linhas (~4 MB) — e até a 2.3.0 nada
+era apagado. Agora:
+
+- **Configurações → "Manter histórico por"**: 30, 90 (padrão), 180 dias,
+  1 ano ou Sempre. Abaixo da opção aparece o tamanho atual do histórico.
+- A limpeza roda **ao abrir o app** e ao mudar o prazo: apaga as aquisições
+  (leituras e eventos de limite) e as capturas de vibração mais antigas que
+  o prazo, remove aquisições encerradas sem nenhuma leitura e compacta o
+  arquivo. A aquisição em andamento nunca é apagada. O que foi removido
+  aparece na barra de status; encurtar o prazo pede confirmação.
+- **Os PDFs já gerados não são afetados** — só não dá mais para gerar o
+  relatório de uma aquisição apagada. Para guardar tudo, escolha "Sempre".
+- As leituras são gravadas em lote (no máximo uma gravação em disco por
+  segundo, em vez de uma por leitura).
+- Cada aquisição guarda a **versão do app e do firmware**, que aparece no
+  relatório PDF ("Versões (app / firmware)").
+
+Código em `limits/history_store.py` (`prune()`); testes em
+`sim/relatorio_test.py`.
+
 ## Modo Vibração
 
 A leitura contínua normal (poll a cada ~250ms) é boa para acompanhar o

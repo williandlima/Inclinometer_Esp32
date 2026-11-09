@@ -75,6 +75,12 @@ public:
     // o zero em outro lugar, os extremos antigos não significariam mais nada.
     void calibrate();
 
+    // Zero da calibração (ângulo já corrigido): lido para ser salvo na
+    // memória permanente e restaurado ao ligar (ver main.cpp). Restaurar só
+    // muda o zero: os extremos começam vazios de qualquer forma.
+    float calibrationOffsetDeg() const { return _offsetDeg; }
+    void restoreCalibrationOffsetDeg(float offsetDeg) { _offsetDeg = offsetDeg; }
+
 private:
     Mpu6050 &_mpu;
     // Ângulo JÁ CORRIGIDO (não bruto) no instante da calibração — ver
