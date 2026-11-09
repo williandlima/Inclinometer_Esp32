@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.20`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.21`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -348,6 +348,67 @@ serem medidas. Elas saem de `python-app/tools/calibra_tilt.py` (com
 O mesmo offset afeta a vertical usada pelo pan (`u = a/|a|`), mas lá entra
 como cos do desvio (~0,9% com 136 mg), confundido hoje dentro de
 `PAN_SCALE_CORRECTION`; aplicá-lo ao pan fica para depois de medido.
+
+### Pan: reavaliação do método e comparação com a prática de especialistas (v1.6.21)
+
+**Orçamento de erro** de um giro de 90°, com as tolerâncias do MPU6050
+(datasheet) e a placa montada torta (eixo X a 44°, ver cenário U):
+
+| Fonte | Erro num giro de 90° | Tratado? |
+|---|---|---|
+| Escala única (1,030) de **2 pontos de 8°/9°** | ±1,1° por 0,1° de incerteza da referência | **não** (dados insuficientes) |
+| Escala que **muda com o tilt** (nᵀ·M·n: ±3% por eixo, ±2% cruzada) | 0,4° (30°), 0,8° (60°), até ~2° (95%) | **não** |
+| Assimetria de escala horário × anti-horário (MEMS 0,5–1%) | ±0,7° | **não** |
+| Bias (zero do giro) e seu passeio | ~0,3° (cenários P/T) | sim (ZUPT) |
+| Desnível da viatura / balanço do mastro | até 3–8° | sim (1.6.19) |
+| Ruído branco (ARW) | ~0,01° por giro | desprezível |
+
+Resolvido o bias, **o erro relevante de um giro é a escala** — e é
+proporcional ao giro, por isso aparece justamente nos movimentos grandes.
+
+**Prática de quem trabalha com giroscópio × firmware:**
+
+| Aspecto | Prática de especialistas (IMU/AHRS) | Firmware | Situação |
+|---|---|---|---|
+| Integração | quaternion / vetor de rotação (efeito *coning*) | projeção da taxa no eixo de pan, trapézio a 100 Hz | equivalente para um pan-tilt (rotações em torno de dois eixos fixos) |
+| Bias online | Kalman com estado de bias + ZUPT/ZARU | filtro alfa-beta (Kalman de ganho fixo) + ZUPT por janela | equivalente na essência |
+| Yaw sem magnetômetro | não observável: depende de calibração e de bias | idem | limitação física, igual |
+| **Escala e desalinhamento** | **matriz 3x3 calibrada** em mesa giratória, vários eixos/posições (IEEE 1293) | **um número, 2 pontos** | **lacuna principal** → 1.6.21 |
+| Bias × temperatura | compensação pela temperatura do chip | temperatura lida no burst e descartada; inclinação temporal ≤30 s | recomendação |
+| Vertical | filtro complementar (Mahony/Madgwick) rejeita aceleração linear | acelerômetro direto (mediana) | efeito de 2ª ordem no pan; recomendação |
+| Caracterização de ruído | variância de Allan define limiares | limiares empíricos (0,1 °/s) | 1.6.21: ferramenta |
+| Referência absoluta | magnetômetro / GNSS / encoder | — | o encoder da PTU-D300E é a referência natural |
+
+Um filtro de Kalman completo no lugar do ZUPT **não** resolveria o erro
+relevante: a escala não é observável sem uma referência externa de giro.
+O caminho dos especialistas para ela é calibração, e é o que esta versão
+habilita:
+
+- **Firmware 1.6.21:** escala em função do tilt e do sentido,
+  `k(t) = A + B·cos 2t + C·sin 2t` (exato para nᵀ·M·n no plano do tilt; t =
+  tilt bruto) vezes `(1 ± PAN_SCALE_ASYM)`. Padrão `B = C = ASYM = 0` →
+  **leitura idêntica à 1.6.20**.
+- **`python-app/tools/calibra_pan.py`:** ajusta A, B, C e a assimetria a
+  giros de referência e imprime as constantes. Validado no firmware real
+  (simulador, giroscópio com tolerâncias sorteadas): pior erro de giro
+  **1,88° → 0,18°**.
+- **`python-app/tools/allan_pan.py`:** variância de Allan de uma captura do
+  Modo Vibração com o pan parado (ARW, instabilidade de bias e folga do
+  limiar do ZUPT para esta unidade).
+
+**Procedimento de bancada (escala):** com a PTU-D300E comandada pelo
+Docklight (posições absolutas `PP`, encoder de milésimos de grau) ou uma
+mesa giratória, fazer giros de ±90° e ±45° nos **dois sentidos** em tilts
+de −30°, 0°, 30° e 60°, anotando o tilt bruto (coluna `tilt` do
+`diagnostico_pan.py`), o giro real e o giro lido (pan antes/depois), e rodar
+`python tools/calibra_pan.py giros.csv` (modelo: `modelo_giros_pan.csv`).
+
+**Próximos passos recomendados**, em ordem de ganho: (1) a calibração de
+escala acima; (2) compensação térmica do bias com a temperatura do chip
+(movimentos longos e aquecimento); (3) vertical por filtro complementar,
+se houver aceleração linear forte no topo do mastro; (4) se o que importa
+é a posição do pan da PTU (e não a torção do mastro), ler o próprio encoder
+da PTU pelo RS-485.
 
 ## Azimute (pan) pelo giroscópio (v1.2.0)
 

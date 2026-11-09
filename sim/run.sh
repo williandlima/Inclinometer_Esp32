@@ -53,6 +53,8 @@ echo
 python3 conexao_test.py 2>/dev/null
 echo
 python3 ../python-app/tools/calibra_tilt.py --autoteste | tail -1
+python3 ../python-app/tools/calibra_pan.py --autoteste | tail -1
+python3 ../python-app/tools/allan_pan.py --autoteste | tail -1
 # Mesma regra no app Android (AngleDisplay.kt), com kotlinc puro, se houver
 # (KOTLINC=/caminho/kotlinc ou kotlinc no PATH; o SDK do Android não é preciso).
 KOTLINC=${KOTLINC:-$(command -v kotlinc || true)}

@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.20";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10620;
+constexpr char FIRMWARE_VERSION[] = "1.6.21";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10621;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -626,6 +626,22 @@ constexpr int PAN_ACC_ROT_BLOCK = 8;
 // mais afastados de zero, ex.: 45°/90°) quando possível, e sempre que o
 // MPU6050 físico desta unidade for substituído.
 constexpr float PAN_SCALE_CORRECTION = 1.030f;
+
+// Escala em função do tilt e do sentido (1.6.21 — ver "Pan: reavaliação" em
+// firmware/README.md). A escala efetiva ao longo do eixo de pan é nᵀ·M·n, com
+// M a matriz de sensibilidade do giro (±3% por eixo e ±2% de sensibilidade
+// cruzada no MPU6050): com a placa montada torta ela MUDA com o tilt — uma
+// escala ajustada em tilt 0 erra tipicamente 0,4° (30°) a 0,8° (60°), e até
+// ~2° (95%), num giro de 90°. No plano do tilt, nᵀ·M·n = A + B·cos 2t +
+// C·sin 2t exatamente (t = tilt bruto): A é PAN_SCALE_CORRECTION, B e C os
+// termos abaixo. PAN_SCALE_ASYM: diferença relativa de escala entre os
+// sentidos horário (+) e anti-horário (−). Valores de
+// python-app/tools/calibra_pan.py com giros de referência (PTU-D300E pelo
+// encoder, ou mesa giratória) em vários tilts e nos dois sentidos. Padrão
+// (0, 0, 0) = comportamento anterior.
+constexpr float PAN_SCALE_COS2 = 0.0f;
+constexpr float PAN_SCALE_SIN2 = 0.0f;
+constexpr float PAN_SCALE_ASYM = 0.0f;
 
 // Sentido positivo do pan. A projeção (item 1 de PanSensor.h) dá a rotação em
 // torno da vertical PARA CIMA pela regra da mão direita: positivo = sentido

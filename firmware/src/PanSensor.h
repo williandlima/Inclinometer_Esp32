@@ -363,6 +363,10 @@ private:
     void undoRecentBiasLearning(uint32_t now, float winS, float motionDps);
     // Componente vertical (taxa de pan) de uma diferença de taxa nos eixos.
     float projectedDps(Vec3 d, Vec3 up) const;
+    // Escala do giro ao longo do eixo de pan: função do tilt (e, com o sentido
+    // do giro, da assimetria horário/anti-horário). Ver PAN_SCALE_* em Config.h.
+    float panScale(Vec3 up) const;
+    float panScale(Vec3 up, float rateDps) const;
 
     // EIXO DO TILT e desacoplamento (item 5 do cabeçalho). O eixo do tilt é
     // fixo nos eixos do chip (a placa está presa no cabeçote que inclina);
