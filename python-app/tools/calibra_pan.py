@@ -23,7 +23,7 @@ Entrada: CSV (";" ou ",") com uma linha por giro:
     leitura     — quanto o PAN-TILT METER mostrou que girou (°, com sinal):
                   diferença do pan antes e depois do giro
 
-Faça giros grandes (±45° a ±90°) nos DOIS sentidos e em vários tilts (ex.:
+Faça giros grandes (±45° a ±80°; não chegue a ±90°, onde a leitura satura) nos DOIS sentidos e em vários tilts (ex.:
 −30°, 0°, 30°, 60°): giro pequeno mede mal a escala — foi o problema dos 2
 pontos de 8°/9°. Informe com --fw-* as constantes que o firmware tinha
 durante as medidas (padrão: as da 1.6.21 sem calibração, 1,030/0/0/0).
