@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.19";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10619;
+constexpr char FIRMWARE_VERSION[] = "1.6.20";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10620;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -201,6 +201,22 @@ constexpr float ANGLE_MAX_DEG = 60.0f;
 // pontos se possível) se o MPU6050 físico for substituído.
 constexpr float TILT_SCALE_CORRECTION_NEG = 1.042f;  // 1 / 0,9593
 constexpr float TILT_SCALE_CORRECTION_POS = 1.066f;  // 1 / 0,9383
+
+// Modelo FÍSICO do acelerômetro para o tilt (1.6.20 — ver "Tilt: erro maior
+// no lado negativo" em firmware/README.md). O erro do atan2(ay, az) vem de
+// ganho relativo Y/Z e offsets (zero-g) dos eixos, e um offset no Y gera um
+// erro PAR (≈ −b_y·θ²/2): os fatores NEG/POS acima, lineares e ajustados em
+// faixas diferentes (−8,6° a 0 contra 0 a +21,5°), o aproximam só dentro de
+// cada faixa, e fora dela o erro cresce — sobretudo no lado negativo,
+// calibrado com só 9 pontos até −8,6°. Com as constantes abaixo o tilt é
+// atan2((ay − OFFSET_Y)/GAIN_Y, az − OFFSET_Z), exato para esse modelo; elas
+// saem de python-app/tools/calibra_tilt.py com pontos de bancada dos DOIS
+// lados e na faixa toda de uso (referência + ângulo bruto do
+// tools/diagnostico_pan.py). Ao preenchê-las, os fatores NEG/POS voltam a
+// 1,0. Valores padrão (1, 0, 0) = comportamento anterior, sem mudança.
+constexpr float TILT_ACCEL_GAIN_Y = 1.0f;
+constexpr float TILT_ACCEL_OFFSET_Y_G = 0.0f;
+constexpr float TILT_ACCEL_OFFSET_Z_G = 0.0f;
 
 // Sentido positivo do tilt reportado. O atan2(ay, az) cresce num sentido que
 // depende da montagem. A 1.6.17 usou -1 (na bancada com a 1.6.16 subir lia
