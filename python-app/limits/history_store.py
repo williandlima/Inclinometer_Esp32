@@ -249,6 +249,40 @@ class HistoryStore:
         ).fetchone()
         return SessionInfo(*row) if row else None
 
+    def list_session_summaries(self) -> list[dict]:
+        """Uma linha por aquisição COM leituras, mais recente primeiro, com
+        os números que a tela de Histórico mostra (uma única consulta)."""
+        rows = self._conn.execute(
+            "SELECT s.id, s.started_at, s.ended_at, s.mode, s.planned_duration_s, s.firmware_version,"
+            " s.app_version, COUNT(r.timestamp), MIN(r.timestamp), MAX(r.timestamp),"
+            " MIN(r.angle_deg), MAX(r.angle_deg), MIN(r.pan_deg), MAX(r.pan_deg)"
+            " FROM sessions s JOIN readings r ON r.session_id = s.id"
+            " GROUP BY s.id ORDER BY s.started_at DESC, s.id DESC"
+        ).fetchall()
+        out = []
+        for row in rows:
+            info = SessionInfo(*row[:7])
+            end = info.ended_at if info.ended_at is not None else row[9]
+            out.append({
+                "session": info,
+                "n_readings": row[7],
+                "duration_s": max(0.0, end - info.started_at),
+                "tilt_min": row[10], "tilt_max": row[11], "pan_min": row[12], "pan_max": row[13],
+                "in_progress": info.id == self._current_session_id,
+            })
+        return out
+
+    def delete_session(self, session_id: int) -> bool:
+        """Apaga uma aquisição (leituras e eventos). A que está em andamento
+        não pode ser apagada."""
+        if session_id == self._current_session_id:
+            return False
+        self._conn.execute("DELETE FROM readings WHERE session_id = ?", (session_id,))
+        self._conn.execute("DELETE FROM limit_events WHERE session_id = ?", (session_id,))
+        self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        self.flush()
+        return True
+
     def count_readings(self, session_id: int) -> int:
         return self._conn.execute(
             "SELECT COUNT(*) FROM readings WHERE session_id = ?", (session_id,)

@@ -393,6 +393,50 @@ try:
     t = pdf_text(out_pdf)
     check("PDF da janela traz o tempo programado", t is None or "3 s" in t)
 
+    # Tela de Histórico: lista, PDF de uma aquisição antiga, CSV e apagar.
+    from ui.history_dialog import HistoryDialog
+    resumos = w._history.list_session_summaries()
+    check("histórico lista só aquisições com leituras, mais recente primeiro",
+          len(resumos) == 2 and resumos[0]["session"].id == second_sid and resumos[0]["n_readings"] > 0,
+          f"{[(r['session'].id, r['n_readings']) for r in resumos]}")
+    hd = HistoryDialog(w._history, on_report=lambda sid: w._generate_report(w._history.get_session(sid)),
+                       on_export=w._export_session_csv, on_delete=w._delete_session, retention_text="90 dias", parent=w)
+    check("janela de Histórico mostra as aquisições", hd.table.rowCount() == 2 and "aquisições" in hd.info_label.text(),
+          hd.info_label.text())
+    hd.table.selectRow(1)  # a mais antiga (antes do Resetar limites)
+    saved.clear()
+    hd.report_btn.click()
+    check("PDF de uma aquisição ANTIGA pelo Histórico", bool(saved) and "Aquisição de" in saved[0][1], f"{saved}")
+    csv_path = os.path.join(TMP, "leituras.csv")
+    mw.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (csv_path, "CSV (*.csv)"))
+    hd.export_btn.click()
+    linhas = open(csv_path, encoding="utf-8-sig").read().splitlines()
+    dados = [ln for ln in linhas if not ln.startswith("#")]
+    n_primeira = w._history.count_readings(first_sid)
+    check("CSV: cabeçalho, uma linha por leitura, ';' e vírgula decimal",
+          dados[0] == "data_hora;t_s;inclinacao_graus;azimute_graus" and len(dados) == n_primeira + 1
+          and dados[1].count(";") == 3 and "," in dados[1].split(";")[2] and "." not in dados[1].split(";")[2],
+          f"{len(dados) - 1} linhas (esperado {n_primeira}); 1ª: {dados[1]}")
+    check("CSV traz os dados da aquisição no topo", any(ln.startswith("# inicio:") for ln in linhas)
+          and any("app: 2." in ln for ln in linhas))
+    asked.clear()
+    mw.QMessageBox.question = staticmethod(lambda _p, title, *a, **k: (asked.append(title), QMessageBox.Yes)[1])
+    hd.delete_btn.click()
+    check("apagar pede confirmação e remove a aquisição",
+          "Apagar aquisição" in asked and w._history.get_session(first_sid) is None and hd.table.rowCount() == 1,
+          f"{asked}, linhas {hd.table.rowCount()}")
+    mw.QMessageBox.question = staticmethod(fake_question)
+    hd.close()
+    w._start()
+    pump(1.0)
+    check("aquisição em andamento não pode ser apagada",
+          w._history.delete_session(w._history.current_session_id) is False)
+    hd2 = HistoryDialog(w._history, lambda s: None, lambda s: None, lambda s: False, parent=w)
+    check("Histórico marca a aquisição em andamento e desabilita Apagar",
+          "em andamento" in hd2.table.item(0, 0).text() and not hd2.delete_btn.isEnabled())
+    hd2.close()
+    w._stop()
+
     # Retenção: padrão de 90 dias, opção em Configurações e limpeza ao trocar.
     from ui.settings_dialog import SettingsDialog
     check("retenção padrão: 90 dias", w._settings.history_retention_days == 90)

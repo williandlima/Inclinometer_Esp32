@@ -29,6 +29,7 @@ from data_source.base import MIN_RECOMMENDED_FIRMWARE, AngleReading, IAngleDataS
 from data_source.ble_source import BleAngleSource
 from data_source.modbus_source import ModbusAngleSource
 from data_source.simulated_source import SimulatedAngleSource
+from limits.history_export import export_session_csv
 from limits.history_store import HistoryStore
 from limits.limit_tracker import PAN_AXIS, TILT_AXIS, LimitTracker
 from limits.vibration_stats import analyze_axis, has_pan_samples
@@ -41,7 +42,14 @@ from report.acquisition import (
 )
 from report.report_generator import generate_report, generate_vibration_report
 from ui.angle_display import DISPLAY_STEPS_DEG, angle_for_display, format_angle, normalize_step, short_step_label
-from ui.settings_dialog import AppSettings, SettingsDialog, load_display_steps, save_display_steps
+from ui.history_dialog import HistoryDialog
+from ui.settings_dialog import (
+    AppSettings,
+    SettingsDialog,
+    load_display_steps,
+    retention_label,
+    save_display_steps,
+)
 from ui.vibration_dialog import VibrationConfigDialog, VibrationResultDialog
 
 # Paleta Avibras Aeroco (fundo azul marinho + detalhes laranja). O logo é
@@ -309,6 +317,10 @@ class MainWindow(QMainWindow):
         row.addWidget(title)
         row.addWidget(self.acq_duration_combo)
         row.addWidget(self.acq_status_label)
+        self.history_btn = QPushButton("Histórico...")
+        self.history_btn.setToolTip("Aquisições anteriores: gerar o relatório PDF, exportar CSV ou apagar.")
+        self.history_btn.clicked.connect(self._open_history)
+        row.addWidget(self.history_btn)
         row.addStretch(1)
         self._update_acquisition_label()
         return row
@@ -762,8 +774,60 @@ class MainWindow(QMainWindow):
             return self._history.get_session(session_id)
         return self._history.latest_session_with_readings()
 
-    def _generate_report(self) -> None:
-        session_info = self._report_session()
+    def _open_history(self) -> None:
+        dialog = HistoryDialog(
+            self._history,
+            on_report=lambda sid: self._generate_report(self._history.get_session(sid)),
+            on_export=self._export_session_csv,
+            on_delete=self._delete_session,
+            retention_text=retention_label(self._settings.history_retention_days),
+            parent=self,
+        )
+        dialog.exec_()
+        self._update_acquisition_label()
+
+    def _export_session_csv(self, session_id: int) -> None:
+        session_info = self._history.get_session(session_id)
+        if session_info is None:
+            return
+        folder = self._report_dir or QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+        name = f"leituras_inclinometro_{_dt.datetime.fromtimestamp(session_info.started_at):%Y%m%d_%H%M%S}.csv"
+        path, _ = QFileDialog.getSaveFileName(self, "Exportar leituras", os.path.join(folder, name), "CSV (*.csv)")
+        if not path:
+            return
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        try:
+            n = export_session_csv(
+                path, session_info, self._history.get_readings(session_id), self._history.get_limit_events(session_id)
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Erro ao exportar", str(exc))
+            return
+        self._report_dir = os.path.dirname(path)
+        self.statusBar().showMessage(f"{n} leituras exportadas para {path}")
+
+    def _delete_session(self, session_id: int) -> bool:
+        session_info = self._history.get_session(session_id)
+        if session_info is None:
+            return False
+        started = _dt.datetime.fromtimestamp(session_info.started_at).strftime("%d/%m/%Y %H:%M:%S")
+        answer = QMessageBox.question(
+            self,
+            "Apagar aquisição",
+            f"Apagar a aquisição de {started} ({self._history.count_readings(session_id)} leituras)?\n\n"
+            "Não será mais possível gerar o relatório dela. Os PDFs já salvos não são afetados.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return False
+        return self._history.delete_session(session_id)
+
+    def _generate_report(self, session_info=None) -> None:
+        # `clicked` do botão manda um bool: só vale um SessionInfo de verdade.
+        if session_info is None or isinstance(session_info, bool):
+            session_info = self._report_session()
         if session_info is None:
             QMessageBox.information(self, "Sem dados", "Ainda não há nenhuma aquisição registrada.")
             return

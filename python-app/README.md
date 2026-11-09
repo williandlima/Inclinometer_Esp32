@@ -168,7 +168,17 @@ era apagado. Agora:
 - Cada aquisição guarda a **versão do app e do firmware**, que aparece no
   relatório PDF ("Versões (app / firmware)").
 
-Código em `limits/history_store.py` (`prune()`); testes em
+**Tela de Histórico** (botão "Histórico..." ao lado da aquisição): lista
+todas as aquisições com leituras (início, duração, modo, leituras, mín/máx
+das leituras de cada eixo, tempo programado e firmware) e permite, para a
+selecionada, **gerar o relatório PDF** (duplo clique também), **exportar as
+leituras em CSV** (`;` e vírgula decimal, abre direto no Excel; dados da
+aquisição e eventos de limite em linhas `#` no topo) ou **apagar** (com
+confirmação; a aquisição em andamento não pode ser apagada). Antes, o
+relatório só podia ser gerado da aquisição atual ou da última.
+
+Código em `limits/history_store.py` (`prune()`, `list_session_summaries()`),
+`limits/history_export.py` e `ui/history_dialog.py`; testes em
 `sim/relatorio_test.py`.
 
 ## Modo Vibração
