@@ -14,7 +14,11 @@ bool AngleSensor::readRawAngleDeg(float &angleDeg) {
     if (!_mpu.readAccelG(ax, ay, az)) {
         return false;
     }
-    angleDeg = atan2(ay, az) * 180.0f / static_cast<float>(M_PI);
+    // Correção por eixo do acelerômetro (TILT_ACCEL_* em Config.h): ganho
+    // relativo Y/Z e offsets, aplicados ANTES do atan2 — é aí que eles atuam
+    // fisicamente. Com os valores padrão (1, 0, 0) é o atan2 puro de sempre.
+    angleDeg = atan2((ay - TILT_ACCEL_OFFSET_Y_G) / TILT_ACCEL_GAIN_Y, az - TILT_ACCEL_OFFSET_Z_G) * 180.0f /
+               static_cast<float>(M_PI);
     _lastRawDeg = angleDeg;
     return true;
 }

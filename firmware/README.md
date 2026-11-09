@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.19`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.20`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -279,6 +279,75 @@ pontos originais (até −8,6°), colhidos sem nenhuma correção de firmware �
 sujeito ao mesmo risco de ficar curto fora dessa faixa; mais pontos desse
 lado, numa faixa maior, teriam o mesmo benefício. Refazer toda esta
 calibração se o MPU6050 físico desta unidade for substituído.
+
+### Tilt: erro maior no lado negativo — análise dos métodos (v1.6.20)
+
+Relato de campo: o erro do tilt é maior nas posições negativas do que nas
+positivas. A cadeia de cálculo é `atan2(ay, az)` → fator de escala por lado
+(`TILT_SCALE_CORRECTION_NEG` 1,042 / `_POS` 1,066, escolhido pelo sinal do
+ângulo bruto) → subtração do zero da calibração. Três problemas de método:
+
+1. **O modelo está errado na forma.** Um fator por lado é uma reta por lado,
+   com uma quebra no zero do bruto. O erro real de `atan2(ay, az)` vem de
+   imperfeições do acelerômetro aplicadas a `ay` e `az` — ganho relativo Y/Z
+   (ou desalinhamento da placa, que tem o mesmo efeito) e offsets de zero-g.
+   O ganho dá um erro ímpar (igual dos dois lados); o **offset do eixo Y dá
+   um erro PAR, ≈ −b_y·θ²/2**, de mesmo sinal nos dois lados. Somado ao
+   ímpar, ele aumenta o erro de um lado e diminui do outro — e cresce com o
+   quadrado do ângulo, então nenhum fator linear acompanha.
+2. **Os dois lados foram calibrados em faixas diferentes.** O positivo tem
+   39 pontos até +21,5°; o negativo, 9 pontos até −8,6°. O próprio histórico
+   do lado positivo mostra o efeito do item 1: ajustado até 7°, o fator
+   (1,063) errava −0,30° em 21,5°, e precisou ir para 1,066 com a faixa
+   maior. No lado negativo esse ajuste nunca foi feito: abaixo de −8,6° o
+   fator é extrapolação.
+3. **A quebra fica no zero do bruto, não no zero do pan-tilt.** Se o bruto
+   no zero da calibração não for 0° (offset ou montagem), as posições
+   negativas pequenas usam o fator do lado positivo.
+
+**Modelo numérico** (`ay = k·sen θ + b_y`, `az = cos θ + b_z`, ruído real):
+os fatores medidos em bancada (0,9593 / 0,9383) são reproduzidos com
+`k ≈ 0,97` e `b_y ≈ +136 mg`. Com eles, o firmware atual erra:
+
+| Tilt | −60° | −45° | −30° | −21,5° | −15° | −8,6° | +8,6° | +21,5° | +30° | +45° | +60° |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Atual (1,042/1,066) | −5,2° | −2,7° | −1,1° | −0,6° | −0,3° | −0,2° | +0,05° | −0,08° | −0,3° | −0,7° | −1,3° |
+
+— o padrão relatado: pequeno dentro das faixas calibradas, crescendo muito
+mais rápido no lado negativo. Comparação de métodos, de −60° a +60°:
+
+| Método | Lado negativo (máx) | Lado positivo (máx) |
+|---|---|---|
+| Atual (fatores de bancada) | 5,2° | 1,3° |
+| Mesmo método, fatores refeitos com pontos de −60 a +60 | 2,1° | 0,3° |
+| Polinômio de 3º grau no bruto, pontos de −60 a +60 | 0,09° | 0,05° |
+| **Modelo físico `atan2((ay−b_y)/k, az−b_z)` ajustado a pontos** | **0,03°** | **0,04°** |
+
+Uma varredura de tilt sem instrumento de referência (círculo com |a| = 1 g)
+acha offsets e desalinhamento sozinha, mas é sensível à tolerância de ganho
+do eixo Z (±3% → ~1°): por isso o ajuste usa pontos de referência, e nele só
+a razão dos ganhos Y/Z entra (exata).
+
+**O que mudou na 1.6.20:** o tilt passa a ser
+`atan2((ay − TILT_ACCEL_OFFSET_Y_G)/TILT_ACCEL_GAIN_Y, az − TILT_ACCEL_OFFSET_Z_G)`,
+com padrões (1, 0, 0) — **leitura idêntica à da 1.6.19** até as constantes
+serem medidas. Elas saem de `python-app/tools/calibra_tilt.py` (com
+`--autoteste` no `sim/run.sh`), e então os fatores NEG/POS voltam a 1,0.
+
+**Procedimento de bancada para fechar a calibração:**
+1. Rodar `python tools/diagnostico_pan.py` (grava o ângulo **bruto**, coluna
+   `tilt`, que não depende dos fatores nem da versão do firmware — evita o
+   erro da 1.6.12).
+2. Com o PRO3600, posicionar o tilt em pontos dos **dois lados** e na faixa
+   toda (ex.: −60 a +60 a cada 5° ou 10°, incluindo o 0), parando ~5 s em
+   cada um.
+3. Montar um CSV `referencia;bruto;leitura` (bruto = média dos ~5 s) e rodar
+   `python tools/calibra_tilt.py pontos.csv`: ele mostra o erro do método
+   atual e do ajustado por lado e imprime as constantes para `Config.h`.
+
+O mesmo offset afeta a vertical usada pelo pan (`u = a/|a|`), mas lá entra
+como cos do desvio (~0,9% com 136 mg), confundido hoje dentro de
+`PAN_SCALE_CORRECTION`; aplicá-lo ao pan fica para depois de medido.
 
 ## Azimute (pan) pelo giroscópio (v1.2.0)
 
