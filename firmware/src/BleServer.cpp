@@ -46,10 +46,13 @@ class ServerCallbacks : public BLEServerCallbacks {
     }
 };
 
+// getValue() devolve std::string no Arduino-ESP32 2.x e String no 3.x: `auto`
+// com length() e operator[] compila nos dois (a compilação no GitHub usa o
+// mais novo; instalações antigas do PlatformIO, o 2.x).
 class CalibrateCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *characteristic) override {
-        std::string value = characteristic->getValue();
-        if (!value.empty() && static_cast<uint8_t>(value[0]) == 0x01 && self != nullptr) {
+        auto value = characteristic->getValue();
+        if (value.length() > 0 && static_cast<uint8_t>(value[0]) == 0x01 && self != nullptr) {
             self->handleCalibrateWrite();
         }
     }
@@ -57,8 +60,8 @@ class CalibrateCallbacks : public BLECharacteristicCallbacks {
 
 class ResetPeaksCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *characteristic) override {
-        std::string value = characteristic->getValue();
-        if (!value.empty() && static_cast<uint8_t>(value[0]) == 0x01 && self != nullptr) {
+        auto value = characteristic->getValue();
+        if (value.length() > 0 && static_cast<uint8_t>(value[0]) == 0x01 && self != nullptr) {
             self->handleResetPeaksWrite();
         }
     }
@@ -66,8 +69,8 @@ class ResetPeaksCallbacks : public BLECharacteristicCallbacks {
 
 class VibrationConfigCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *characteristic) override {
-        std::string value = characteristic->getValue();
-        if (value.size() < 4 || self == nullptr) {
+        auto value = characteristic->getValue();
+        if (value.length() < 4 || self == nullptr) {
             return;
         }
         uint16_t durationS = static_cast<uint8_t>(value[0]) | (static_cast<uint16_t>(static_cast<uint8_t>(value[1])) << 8);
@@ -78,8 +81,8 @@ class VibrationConfigCallbacks : public BLECharacteristicCallbacks {
 
 class VibrationResendCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *characteristic) override {
-        std::string value = characteristic->getValue();
-        if (value.size() < 3 || self == nullptr) {
+        auto value = characteristic->getValue();
+        if (value.length() < 3 || self == nullptr) {
             return;
         }
         uint16_t startIndex = static_cast<uint8_t>(value[0]) | (static_cast<uint16_t>(static_cast<uint8_t>(value[1])) << 8);
