@@ -196,7 +196,7 @@ _SOURCE_TEXT = {
 }
 
 
-def _acquisition_rows(acq: AcquisitionSummary, mode_label: str) -> list[list[str]]:
+def _acquisition_rows(acq: AcquisitionSummary, mode_label: str, versions: str = "-") -> list[list[str]]:
     if acq.in_progress:
         end_text = (
             f"em andamento — dados até {_fmt_dt(acq.last_reading_at)}"
@@ -236,6 +236,7 @@ def _acquisition_rows(acq: AcquisitionSummary, mode_label: str) -> list[list[str
     )
     return [
         ["Modo", mode_label],
+        ["Versões (app / firmware)", versions],
         ["Início da aquisição", _fmt_dt(acq.started_at) if acq.started_at is not None else "-"],
         ["Fim da aquisição", end_text],
         ["Duração da aquisição", format_duration(acq.duration_s)],
@@ -340,7 +341,14 @@ def generate_report(
     story.append(Spacer(1, 0.5 * cm))
 
     story.append(Paragraph("Aquisição dos dados", styles["Heading2"]))
-    story.append(_summary_table(_acquisition_rows(acq, mode_label)))
+    # Rastreabilidade da medição: com que versões a aquisição foi feita.
+    versions = "-"
+    if session_info is not None and (session_info.app_version or session_info.firmware_version):
+        fw = session_info.firmware_version
+        if not fw:
+            fw = "simulação" if session_info.mode == "simulado" else "não registrado"
+        versions = f"app {session_info.app_version or 'não registrado'} / firmware {fw}"
+    story.append(_summary_table(_acquisition_rows(acq, mode_label, versions)))
     story.append(Spacer(1, 0.3 * cm))
     story.append(Paragraph(_acquisition_explanation(acq), styles["Normal"]))
     story.append(Spacer(1, 0.6 * cm))

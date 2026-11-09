@@ -169,10 +169,81 @@ except Exception as exc:  # noqa: BLE001
     check("banco antigo abre e migra", False, repr(exc))
 
 # ---------------------------------------------------------------------------
+print("=== HistoryStore: limpeza do histórico (retenção) e versões ===")
+DAY = 86400.0
+pdb = os.path.join(TMP, "prune.db")
+ps = HistoryStore(pdb)
+agora = time.time()
+
+
+def aquisicao(dias_atras: float, n: int, com_evento: bool = True) -> int:
+    sid_ = ps.start_session("ble", app_version="2.3.0")
+    t0_ = agora - dias_atras * DAY
+    ps._conn.execute("UPDATE sessions SET started_at = ? WHERE id = ?", (t0_, sid_))
+    for i_ in range(n):
+        ps.add_reading(AngleReading(1.0, t0_ + i_ * 0.25, pan_deg=2.0))
+    if com_evento and n:
+        ps.add_limit_event(LimitEvent("max", AngleReading(1.0, t0_, pan_deg=2.0), TILT_AXIS, SOURCE_APP))
+    ps.end_session()
+    ps._conn.execute("UPDATE sessions SET ended_at = ? WHERE id = ?", (t0_ + n * 0.25, sid_))
+    return sid_
+
+
+velha = aquisicao(200, 4000)
+media = aquisicao(100, 4000)
+nova = aquisicao(5, 400)
+vazia = aquisicao(1, 0)
+cap_velha = ps.save_vibration_capture("ble", 10, 100, series(agora - 200 * DAY, 10, rate_hz=100))
+ps._conn.execute("UPDATE vibration_captures SET started_at = ? WHERE id = ?", (agora - 200 * DAY, cap_velha))
+cap_nova = ps.save_vibration_capture("ble", 2, 100, series(agora, 2, rate_hz=100))
+atual = ps.start_session("ble", app_version="2.3.0")  # em andamento, sem leituras ainda
+ps._conn.execute("UPDATE sessions SET started_at = ? WHERE id = ?", (agora - 400 * DAY, atual))
+ps.flush()
+tam_antes = ps.size_bytes()
+
+r_none = ps.prune(None)
+check("'manter sempre' só remove aquisições vazias encerradas",
+      r_none["sessions"] == 0 and r_none["empty_sessions"] == 1 and ps.get_session(vazia) is None
+      and ps.count_readings(velha) == 4000, f"{r_none}")
+r90 = ps.prune(90)
+check("90 dias: remove as de 200 e 100 dias", r90["sessions"] == 2 and r90["readings"] == 8000, f"{r90}")
+check("90 dias: aquisição recente intacta", ps.count_readings(nova) == 400 and len(ps.get_limit_events(nova)) == 1)
+check("90 dias: leituras e eventos das antigas apagados",
+      ps.count_readings(velha) == 0 and ps.get_limit_events(media) == [] and ps.get_session(velha) is None)
+check("90 dias: captura de vibração antiga apagada, recente mantida",
+      r90["vibration_captures"] == 1 and ps.get_vibration_samples(cap_velha) == []
+      and len(ps.get_vibration_samples(cap_nova)) > 0)
+check("aquisição em andamento nunca é apagada (mesmo 'antiga' e vazia)",
+      ps.get_session(atual) is not None and ps.current_session_id == atual)
+check("arquivo diminui depois da limpeza (VACUUM)", ps.size_bytes() < tam_antes and r90["freed_bytes"] > 0,
+      f"{tam_antes} -> {ps.size_bytes()} bytes")
+check("limpar de novo não remove nada", ps.prune(90)["sessions"] == 0)
+ps.add_reading(AngleReading(1.0, time.time()))
+check("gravação continua funcionando depois da limpeza", ps.count_readings(atual) == 1)
+ps.set_firmware_version("1.6.21")
+ps.end_session()
+info_v = ps.get_session(atual)
+check("aquisição guarda as versões do app e do firmware",
+      info_v.app_version == "2.3.0" and info_v.firmware_version == "1.6.21", f"{info_v}")
+st = ps.stats()
+check("stats() resume o histórico", st["sessions"] == 2 and st["readings"] == 401 and st["size_bytes"] > 0, f"{st}")
+
+# Gravação em lote: leituras ficam visíveis na hora e chegam ao disco no flush/close.
+ps.start_session("ble")
+for i in range(10):
+    ps.add_reading(AngleReading(float(i), time.time()))
+check("leituras em lote visíveis antes do commit", ps.count_readings(ps.current_session_id) == 10)
+ps.close()
+con2 = sqlite3.connect(pdb)
+check("close() grava o lote pendente em disco",
+      con2.execute("SELECT COUNT(*) FROM readings").fetchone()[0] == 411)
+con2.close()
+
+# ---------------------------------------------------------------------------
 print("=== resumo da aquisição (report/acquisition.py) ===")
 T0 = 1_700_000_000.0
 readings = series(T0 + 2.0, 598.0, rate_hz=4.0, gap=(200.0, 230.0))  # 1ª leitura 2 s após o início
-session = SessionInfo(1, T0, T0 + 600.0, "ble", 600.0)
+session = SessionInfo(1, T0, T0 + 600.0, "ble", 600.0, "1.6.21", "2.3.0")
 events = [LimitEvent("min", readings[10], TILT_AXIS, SOURCE_APP),
           LimitEvent("max", readings[20], TILT_AXIS, SOURCE_FIRMWARE)]
 acq = summarize_acquisition(session, readings, events)
@@ -231,6 +302,7 @@ def make_pdf(name, session_, readings_, events_, must_have=()):
 text = make_pdf(
     "normal.pdf", session, readings, events,
     must_have=["Aquisição dos dados", "Como os dados foram adquiridos", "Duração da aquisição",
+               "Versões (app / firmware)", "app 2.3.0 / firmware 1.6.21",
                "10 min 00 s", "10 min", "concluída", "Taxa média de leitura", "250 ms",
                "Interrupções", "1 — 30 s", "Cobertura da aquisição", "medidos no ESP32 a 100 Hz",
                "ESP32 (100 Hz)", "App (leituras)"],
@@ -320,6 +392,25 @@ try:
     check("relatório sai da última aquisição", bool(saved) and os.path.exists(out_pdf), f"{saved}")
     t = pdf_text(out_pdf)
     check("PDF da janela traz o tempo programado", t is None or "3 s" in t)
+
+    # Retenção: padrão de 90 dias, opção em Configurações e limpeza ao trocar.
+    from ui.settings_dialog import SettingsDialog
+    check("retenção padrão: 90 dias", w._settings.history_retention_days == 90)
+    dlg = SettingsDialog(w._settings, w, history_info=w._history_info())
+    check("Configurações mostra a opção e o tamanho do histórico",
+          dlg.retention_combo.currentData() == 90 and "leituras" in dlg.history_info_label.text(),
+          dlg.history_info_label.text())
+    w._history._conn.execute("UPDATE sessions SET started_at = started_at - ? WHERE id = ?", (40 * 86400.0, second_sid))
+    w._history.flush()
+    check("encurtar o prazo pede confirmação", w._confirm_retention_change(90, 30) is False and "Apagar histórico antigo" in asked,
+          f"{asked}")
+    check("aumentar o prazo não pede", w._confirm_retention_change(30, 365) is True)
+    w._settings.history_retention_days = 30
+    rem = w._prune_history()
+    check("limpeza com 30 dias apaga a aquisição de 40 dias atrás",
+          rem.get("sessions") == 1 and w._history.get_session(second_sid) is None, f"{rem}")
+    check("mensagem da limpeza na barra", "removido" in w._prune_message(rem), w._prune_message(rem))
+    w._settings.history_retention_days = 90
 
     # Resetar + Parar logo em seguida: a aquisição vazia não vira relatório vazio.
     w.acq_duration_combo.setCurrentIndex(0)

@@ -165,6 +165,9 @@ class MainWindow(QMainWindow):
         # A resolução de exibição de cada eixo é lembrada entre sessões.
         self._settings = load_display_steps(AppSettings())
         self._history = HistoryStore()
+        # Limpeza do histórico pelo prazo de Configurações (padrão 90 dias):
+        # até a 2.3.0 nada era apagado e o banco só crescia.
+        self._startup_prune = self._prune_history()
         # Um rastreador de mín/máx por eixo: os extremos de inclinação e de
         # azimute são independentes.
         self._trackers = {TILT_AXIS: LimitTracker(TILT_AXIS), PAN_AXIS: LimitTracker(PAN_AXIS)}
@@ -280,7 +283,7 @@ class MainWindow(QMainWindow):
             buttons_row.addWidget(btn, 1)
         root.addLayout(buttons_row)
 
-        self.statusBar().showMessage("Pronto.")
+        self.statusBar().showMessage(self._prune_message(self._startup_prune) or "Pronto.")
 
     def _build_acquisition_row(self) -> QHBoxLayout:
         """Linha "Aquisição para relatório": o tempo programado e, durante a
@@ -315,7 +318,11 @@ class MainWindow(QMainWindow):
 
     def _begin_acquisition(self) -> None:
         """Abre uma aquisição nova no histórico (é ela que vai para o PDF)."""
-        self._history.start_session(mode=self._settings.mode, planned_duration_s=self._planned_duration_s())
+        self._history.start_session(
+            mode=self._settings.mode, planned_duration_s=self._planned_duration_s(), app_version=APP_VERSION
+        )
+        if self._source is not None and self._settings.mode != "simulado":
+            self._history.set_firmware_version(self._source.firmware_version)
         session = self._history.get_session(self._history.current_session_id)
         self._acq_started_at = session.started_at if session else None
         self._acq_readings = 0
@@ -518,6 +525,8 @@ class MainWindow(QMainWindow):
             firmware = "Firmware: simulação"
         else:
             version = self._source.firmware_version
+            # Rastreabilidade: a aquisição guarda o firmware com que foi feita.
+            self._history.set_firmware_version(version)
             firmware = f"Firmware v{version}" if version else "Firmware: lendo..."
             if firmware_outdated(version):
                 recommended = ".".join(str(p) for p in MIN_RECOMMENDED_FIRMWARE)
@@ -573,15 +582,72 @@ class MainWindow(QMainWindow):
         was_running = self._running
         if was_running:
             self._stop()
-        dialog = SettingsDialog(self._settings, self)
+        dialog = SettingsDialog(self._settings, self, history_info=self._history_info())
         if dialog.exec_() == SettingsDialog.Accepted:
-            self._settings = dialog.result_settings()
+            previous_retention = self._settings.history_retention_days
+            new_settings = dialog.result_settings()
+            if not self._confirm_retention_change(previous_retention, new_settings.history_retention_days):
+                new_settings.history_retention_days = previous_retention
+            self._settings = new_settings
             self._update_mode_label()
             save_display_steps(self._settings)
+            if self._settings.history_retention_days != previous_retention:
+                removed = self._prune_history()
+                self.statusBar().showMessage(self._prune_message(removed) or "Histórico: nada a apagar.")
+                self._update_acquisition_label()
             for axis in (TILT_AXIS, PAN_AXIS):
                 self._sync_display_step(axis)
         if was_running:
             self._start()
+
+    # ------------------------------------------------------------ histórico
+    def _prune_history(self) -> dict:
+        try:
+            return self._history.prune(self._settings.history_retention_days)
+        except Exception as exc:  # noqa: BLE001 - limpeza nunca pode impedir o app de funcionar
+            return {"error": str(exc)}
+
+    @staticmethod
+    def _prune_message(removed: dict) -> str:
+        if removed.get("error"):
+            return f"Não foi possível limpar o histórico antigo: {removed['error']}"
+        n = removed.get("sessions", 0)
+        v = removed.get("vibration_captures", 0)
+        if not n and not v:
+            return ""
+        parts = []
+        if n:
+            parts.append(f"{n} aquisição(ões) ({removed.get('readings', 0)} leituras)")
+        if v:
+            parts.append(f"{v} captura(s) de vibração")
+        freed = removed.get("freed_bytes", 0) / 1e6
+        return f"Histórico: removido o que passou do prazo — {' e '.join(parts)}, {freed:.1f} MB liberados."
+
+    def _history_info(self) -> str:
+        st = self._history.stats()
+        oldest = (
+            _dt.datetime.fromtimestamp(st["oldest"]).strftime("%d/%m/%Y") if st["oldest"] else "—"
+        )
+        return (
+            f"Hoje: {st['sessions']} aquisições, {st['readings']} leituras, "
+            f"{st['size_bytes'] / 1e6:.1f} MB; mais antiga de {oldest}."
+        )
+
+    def _confirm_retention_change(self, previous: int | None, new: int | None) -> bool:
+        """Encurtar o prazo apaga dados na hora: pede confirmação antes."""
+        shorter = new is not None and (previous is None or new < previous)
+        if not shorter:
+            return True
+        cutoff = _dt.datetime.now() - _dt.timedelta(days=new)
+        answer = QMessageBox.question(
+            self,
+            "Apagar histórico antigo",
+            f"As aquisições e capturas de vibração anteriores a {cutoff:%d/%m/%Y} serão apagadas "
+            f"agora e não poderão mais gerar relatório.\n\nContinuar?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
 
     def _toggle_start_stop(self) -> None:
         if self._running:
