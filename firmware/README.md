@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.23`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.24`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -446,8 +446,8 @@ variação rápida do ângulo (ele não sente aceleração linear) e o acelerôm
 corrige devagar a deriva do giro (ele tem a referência absoluta da
 gravidade), com constante de tempo `TILT_FUSION_TAU_S` = 1 s. Rotação real
 passa inteira; aceleração linear na frequência f sobra multiplicada por
-~1/(2π·f·τ). O bias do giro vem do ZUPT do pan (janelas paradas), com um
-termo integral pequeno para o resíduo. A tela e os mín/máx usam o ângulo
+~1/(2π·f·τ). O bias do giro parte do ZUPT do pan e é acompanhado pelo termo
+integral da fusão (revisto na 1.6.24 — ver a seção seguinte). A tela e os mín/máx usam o ângulo
 fundido; o **Modo Vibração não muda** (acelerômetro cru). A mesma correção
 por eixo do acelerômetro (`TILT_ACCEL_*`) passa a valer também para a
 vertical usada no pan — sem efeito enquanto as constantes forem (1, 0, 0).
@@ -484,6 +484,56 @@ calibração de bancada (`calibra_tilt.py`) não mudam.
 leitura da 1.6.22; (b) movimento do tilt pela PTU: sem ultrapassagem
 visível; (c) no mastro, com a viatura ligada: mín/máx mais estreitos que
 antes. Se algo piorar, `TILT_FUSION_ENABLED = false`.
+
+### Os dois regimes de uso: parado por muito tempo e em movimento constante (v1.6.24)
+
+O pan e o tilt podem ficar parados por horas ou se mover sem parar. Os dois
+regimes passaram a ser simulados juntos, nos dois eixos
+(`sim/regime_sim.cpp`: giro aquecendo 0,3 °/s em ~10 min — partida a frio,
+pior caso —, zero passeando, ruído e 3% de erro de escala):
+
+| Regime (30 min, pan ±60° a 10 °/s, tilt ±20° a 5 °/s) | Pan: pior erro | Tilt: pior erro |
+|---|---|---|
+| Parado 2 h | 0,03° | 0,02° |
+| Varrendo, 5 s parado em cada ponta | 2,0° | 1,8° (*) |
+| Varrendo, 3 s parado em cada ponta | 7,2° | 1,9° (*) |
+| Varrendo **sem parar nunca** | **37°** | 2,2° (*) |
+| Só o tilt varre sem parar (pan fixo) | **satura (±90°)** | 2,2° (*) |
+| Só o pan varre sem parar (tilt fixo) | **37°** | 0,03° |
+
+(*) em movimento; é o atraso do filtro da tela (~0,3 s a 5 °/s), igual com
+ou sem a fusão. Parado, o tilt volta ao valor exato.
+
+**Tilt — não depende de parar.** Ele tem a gravidade como referência o tempo
+todo. A simulação achou dois defeitos da fusão da 1.6.23, corrigidos aqui:
+
+1. A fusão usava o bias do giro do `PanSensor` continuamente. Só que o
+   `PanSensor` cuida do bias no eixo do **pan**; a componente no eixo do tilt
+   ele deixa andar, e com o tilt em movimento constante ela chegou a 1,3 °/s
+   de erro — 1,3° a mais de erro no tilt (4,5° contra 1,8° do acelerômetro
+   sozinho). Agora o bias é copiado **uma vez**, ao armar a fusão, e quem
+   acompanha a deriva é o termo integral da própria fusão
+   (`TILT_FUSION_KI` = 0,25: um erro de bias some em ~5 s), parado ou em
+   movimento.
+2. O bias aprendido era zerado a cada leitura perdida no I2C; com falhas
+   frequentes ele nunca convergia. Agora só é descartado quando giro e
+   acelerômetro divergem.
+
+**Pan — precisa de paradas; é o limite físico do método.** O pan é a
+integral do giroscópio e não tem referência absoluta (não há bússola). Parado,
+o ZUPT cancela a deriva: 2 h parado, 0,03°. Em movimento, o zero do giro só é
+corrigido quando o eixo para por alguns segundos (janela de 1 s inteira
+parada); entre uma parada e outra, o que o zero do giro andar vira erro de
+ângulo. Sem parada nenhuma, mesmo com o chip já quente, sobra o resíduo de
+~0,005 °/s (≈ 0,3 °/min). Regras práticas:
+
+- ligar e esperar ~10 min antes de medir (o grosso do aquecimento);
+- em movimento contínuo, parar **5 s ou mais** de tempos em tempos — pan E
+  tilt parados juntos (se só o tilt se move, o pan também não é corrigido);
+- para pan absoluto em movimento contínuo, o caminho é outra referência: o
+  encoder da própria PTU (RS-485) ou um magnetômetro. Compensar o bias pela
+  temperatura do chip reduziria a deriva, mas precisa de dados desta unidade
+  (captura parada de 30 min a partir do frio).
 
 ## Azimute (pan) pelo giroscópio (v1.2.0)
 

@@ -124,6 +124,8 @@ private:
     const PanSensor *_pan = nullptr;
     float _fusedAbsDeg = 0.0f;
     float _fusionBiasDps = 0.0f;  // resíduo de bias aprendido pela própria fusão
+    Vec3 _gyroBias{0.0f, 0.0f, 0.0f};  // cópia do bias do PanSensor ao armar a fusão
+    bool _gyroBiasValid = false;
     bool _fusionActive = false;
     static constexpr int FUSION_RATE_LEN = 5;  // mediana da taxa (leituras espúrias)
     float _rateHist[FUSION_RATE_LEN] = {};
