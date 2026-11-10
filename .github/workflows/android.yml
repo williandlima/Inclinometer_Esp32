@@ -1,0 +1,40 @@
+# Compila o app Android de verdade (Gradle + Android SDK) a cada alteração em
+# android-app/. O projeto foi escrito fora do Android Studio; sem isto, um
+# erro de compilação só aparecia quando alguém abria o projeto lá.
+# O APK de depuração fica como artifact, pronto para instalar no aparelho.
+name: App Android
+
+on:
+  push:
+    paths:
+      - "android-app/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android-app/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compila o APK (debug)
+        working-directory: android-app
+        run: ./gradlew --no-daemon assembleDebug
+      - name: Versão do app
+        id: versao
+        run: echo "v=$(grep -oP 'versionName = "\K[0-9.]+' android-app/app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
+      - name: Publica o APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pan-tilt-meter-android-${{ steps.versao.outputs.v }}
+          path: android-app/app/build/outputs/apk/debug/*.apk
+          retention-days: 90
