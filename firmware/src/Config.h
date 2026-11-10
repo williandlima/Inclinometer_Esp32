@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.23";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10623;
+constexpr char FIRMWARE_VERSION[] = "1.6.24";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10624;
 
 // Memória permanente (NVS) e watchdog — ver main.cpp.
 constexpr char NVS_NAMESPACE[] = "inclinometro";
@@ -237,14 +237,16 @@ constexpr float TILT_ACCEL_OFFSET_Z_G = 0.0f;
 // Maior rejeita mais, mas amplia o efeito de um erro do giro: num movimento
 // a velocidade Ω, um erro de escala do giro de 3% dá 0,03·Ω·τ de avanço
 // transitório (0,1° a 3°/s). O resíduo de bias do giro b dá b·τ, e o termo
-// integral (TILT_FUSION_KI) o remove em dezenas de segundos.
+// integral (TILT_FUSION_KI) o remove em segundos.
 // TILT_FUSION_ENABLED = false desliga a fusão: o tilt volta a ser só do
 // acelerômetro, exatamente como até a 1.6.22.
 constexpr bool TILT_FUSION_ENABLED = true;
 constexpr float TILT_FUSION_TAU_S = 1.0f;
-constexpr float TILT_FUSION_KI = 0.05f;
-constexpr float TILT_FUSION_KI_MAX_ERR_DEG = 0.2f;  // acima disso o integral não aprende (anti-windup)
-constexpr float TILT_FUSION_MAX_BIAS_DPS = 0.5f;
+// TILT_FUSION_KI (1/s²): com τ = 1 s, 0,25 dá amortecimento crítico — um erro
+// de bias do giro some em ~5 s. (Até a 1.6.23 era 0,05 e só aprendia com erro
+// < 0,2°: não dava conta do bias quando o tilt se movia sem parar.)
+constexpr float TILT_FUSION_KI = 0.25f;
+constexpr float TILT_FUSION_MAX_BIAS_DPS = 5.0f;
 // Salvaguardas: fora delas vale só o acelerômetro (comportamento anterior).
 constexpr float TILT_FUSION_ACCEL_TOL_G = 0.15f;         // |a| fora de 1 g ± isto
 constexpr float TILT_FUSION_MAX_DIVERGENCE_DEG = 3.0f;   // giro e acelerômetro discordam

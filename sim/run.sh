@@ -5,6 +5,8 @@
 #   pan_sim         -> pan com mudanças de posição da placa e bias de fábrica
 #   tilt_sim        -> fusão giroscópio + acelerômetro no tilt (1.6.23),
 #                      lado a lado com o método só do acelerômetro
+#   regime_sim      -> os dois regimes de uso nos dois eixos: parado por
+#                      horas e em movimento constante por 30 min
 #   nvs_sim         -> zero do tilt salvo na memória permanente (calibra,
 #                      "desliga e religa" e confere) e watchdog do loop
 #   soak_sim        -> firmware inteiro (com o driver I2C real) por 30 min
@@ -48,6 +50,9 @@ g++ $FLAGS soak_sim.cpp $SRC/main.cpp $SRC/Mpu6050.cpp $SRC/BleServer.cpp $SRC/V
 echo
 g++ $FLAGS tilt_sim.cpp $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp -o "$OUT/tilt_sim"
 "$OUT/tilt_sim"
+echo
+g++ $FLAGS regime_sim.cpp $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp -o "$OUT/regime_sim"
+"$OUT/regime_sim"
 echo
 g++ $FLAGS nvs_sim.cpp $SRC/main.cpp $SRC/BleServer.cpp $SRC/VibrationCapture.cpp \
     $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp $SRC/ModbusSlave.cpp -o "$OUT/nvs_sim"

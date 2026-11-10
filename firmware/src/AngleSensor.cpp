@@ -35,10 +35,19 @@ bool AngleSensor::readFusionSample(float &angleDeg, float &rateDps, bool &gyroOk
 
     rateDps = 0.0f;
     gyroOk = false;
-    Vec3 bias;
-    if (_pan == nullptr || !_pan->gyroBias(bias)) {
-        return true;  // sem bias confirmado: só acelerômetro
+    // O bias do giro é copiado do PanSensor UMA vez, quando a fusão arma, e
+    // não acompanhado depois: o PanSensor só cuida do bias no eixo do PAN — a
+    // componente no eixo do tilt ele deixa andar (não usa), e com o tilt em
+    // movimento constante ela chegou a 1,3 °/s de erro no simulador
+    // (sim/regime_sim.cpp), o que virava 1,3° a mais de erro no tilt. Daqui
+    // em diante quem acompanha a deriva é o termo integral da própria fusão.
+    if (!_gyroBiasValid) {
+        if (_pan == nullptr || !_pan->gyroBias(_gyroBias)) {
+            return true;  // sem bias confirmado: só acelerômetro
+        }
+        _gyroBiasValid = true;
     }
+    const Vec3 bias = _gyroBias;
     // Acelerômetro longe de 1 g = aceleração linear forte: a direção dele não
     // é a vertical agora, e ela entra na conversão da taxa abaixo.
     const float norm = sqrtf(ax * ax + cy * cy + cz * cz);
@@ -195,10 +204,19 @@ float AngleSensor::fuse(float accelRawDeg, float rateDps, bool gyroOk, float dtS
     const float accAbs = correctedAbsDeg(accelRawDeg);
     // Sem giro utilizável, ou divergência grande demais entre os dois (bias
     // do giro errado, lixo no barramento): vale o acelerômetro, como antes.
-    if (!gyroOk || dtS <= 0.0f || dtS > TILT_FUSION_MAX_DT_S ||
-        fabsf(accAbs - _fusedAbsDeg) > TILT_FUSION_MAX_DIVERGENCE_DEG) {
+    const bool diverged = fabsf(accAbs - _fusedAbsDeg) > TILT_FUSION_MAX_DIVERGENCE_DEG;
+    if (diverged && _fusionActive) {
+        _gyroBiasValid = false;  // o bias copiado não serve mais: pega outro
+    }
+    if (!gyroOk || dtS <= 0.0f || dtS > TILT_FUSION_MAX_DT_S || diverged) {
         _fusedAbsDeg = accAbs;
-        _fusionBiasDps = 0.0f;
+        // O bias aprendido só é descartado na divergência (aí ele é o
+        // suspeito). Numa falha passageira — leitura perdida no I2C, buraco
+        // de amostragem — ele continua valendo: zerá-lo a cada falha deixava
+        // a deriva térmica do giro inteira no ângulo (até 1,4° no soak_sim).
+        if (diverged) {
+            _fusionBiasDps = 0.0f;
+        }
         _fusionActive = false;
         return accelRawDeg;
     }
@@ -206,14 +224,10 @@ float AngleSensor::fuse(float accelRawDeg, float rateDps, bool gyroOk, float dtS
     const float predicted = _fusedAbsDeg + (rateDps - _fusionBiasDps) * dtS;
     const float err = accAbs - predicted;
     _fusedAbsDeg = predicted + (dtS / (TILT_FUSION_TAU_S + dtS)) * err;
-    // O termo integral só aprende com erro PEQUENO (resíduo de bias do giro,
-    // centésimos de grau). Erro grande é movimento com o giro fora de escala
-    // ou aceleração linear — integrá-lo deixaria um bias falso que leva
-    // dezenas de segundos para sair (visto no simulador: 0,12° de sobra 6 s
-    // depois de um giro com o giroscópio 60% fora de escala).
-    if (fabsf(err) < TILT_FUSION_KI_MAX_ERR_DEG) {
-        _fusionBiasDps -= TILT_FUSION_KI * dtS * err;
-    }
+    // Termo integral: aprende sozinho o bias do giro no eixo do tilt (deriva
+    // térmica, resíduo do valor copiado), parado ou em movimento — o tilt tem
+    // a gravidade como referência o tempo todo, não precisa de janela parada.
+    _fusionBiasDps -= TILT_FUSION_KI * dtS * err;
     if (_fusionBiasDps > TILT_FUSION_MAX_BIAS_DPS) _fusionBiasDps = TILT_FUSION_MAX_BIAS_DPS;
     if (_fusionBiasDps < -TILT_FUSION_MAX_BIAS_DPS) _fusionBiasDps = -TILT_FUSION_MAX_BIAS_DPS;
     // De volta ao domínio "bruto" em que os filtros e toReported() trabalham

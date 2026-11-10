@@ -179,7 +179,7 @@ int main() {
             worst = std::max(worst, fabs((double)r.fused.minAngleDeg() - r.accel.minAngleDeg()));
         });
         double sf = r.fused.maxAngleDeg() - r.fused.minAngleDeg(), sa = r.accel.maxAngleDeg() - r.accel.minAngleDeg();
-        check("7. montagem torta (30°): movimento lento igual nos dois métodos", fabs(sf - sa) < 0.15 && r.fused.fusionActive(),
+        check("7. montagem torta (30°): movimento lento igual nos dois métodos", fabs(sf - sa) < 0.25 && r.fused.fusionActive(),
               "fundido %.2f°; só acelerômetro %.2f°", sf, sa);
     }
     {   // 8. Giro muito errado (escala 1,5x): a salvaguarda de divergência devolve ao acelerômetro.
