@@ -78,6 +78,12 @@ static const double SOAK_MINUTES = 30;
 // o pior medido; um defeito real dispara muito acima disso.
 static const double PAN_STEP_TOL_DEG = 3.0, PAN_STEP_TOL_FRAC = 0.01, PAN_ABS_TOL_DEG = 8.0;
 static const double PAN_FAULT_MEAN_DEG = 0.3, PAN_FAULT_P90_DEG = 0.5;
+// O custo das falhas compara o firmware com ele mesmo; uma piora que atinja
+// as duas rodadas (ex.: o bias passando a acumular 3,5° em 30 min) passaria.
+// Por isso a rodada SEM falhas também tem teto estatístico: medido em 160
+// sementes (1.6.29), média do pior erro por semente 0,46-0,60° e p90
+// 0,75-0,97° por lote de 40; limites com ~1,5x de folga.
+static const double PAN_CLEAN_MEAN_MAX_DEG = 0.9, PAN_CLEAN_P90_MAX_DEG = 1.4;
 static const double PAN_RESET_LOSS_MAX_DEG = 5.0, TILT_TOL_DEG = 0.3;
 
 // Três fluxos aleatórios independentes: o ROTEIRO (sensor sorteado, alvos,
@@ -439,8 +445,12 @@ int main(int argc, char **argv) {
     stats(worstFault, mf, pf, xf);
     const bool costOk = mf - mc <= PAN_FAULT_MEAN_DEG && pf - pc <= PAN_FAULT_P90_DEG;
     if (!costOk) fails++;
+    const bool cleanOk = mc <= PAN_CLEAN_MEAN_MAX_DEG && pc <= PAN_CLEAN_P90_MAX_DEG;
+    if (!cleanOk) fails++;
     printf("pan, pior erro por semente — sem falhas: média %.3f°, p90 %.3f°, máx %.3f° | com falhas: média %.3f°, p90 %.3f°, máx %.3f° (teto %.1f°)\n",
            mc, pc, xc, mf, pf, xf, PAN_ABS_TOL_DEG);
+    printf("sem falhas: média %.3f° (teto %.1f°), p90 %.3f° (teto %.1f°)  %s\n", mc, PAN_CLEAN_MEAN_MAX_DEG, pc,
+           PAN_CLEAN_P90_MAX_DEG, cleanOk ? "OK" : "FALHOU");
     printf("custo das falhas: média %+.3f° (limite %.1f°), p90 %+.3f° (limite %.1f°)  %s\n", mf - mc, PAN_FAULT_MEAN_DEG,
            pf - pc, PAN_FAULT_P90_DEG, costOk ? "OK" : "FALHOU");
     printf("pior salto num trecho: %.3f° (limite %.1f° + %.1f%% do giro do trecho)\n", worstStep, PAN_STEP_TOL_DEG,
