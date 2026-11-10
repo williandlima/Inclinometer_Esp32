@@ -36,7 +36,8 @@ bool Mpu6050::readMotion(float &ax, float &ay, float &az, float &gx, float &gy, 
     readAccelG(ax, ay, az);
     const double t = seenTilt() * M_PI / 180, ts = g_now_us / 1e6;
     const double warm = g_warmDps * (1 - exp(-ts / g_warmTauS));
-    const double ccw = -g_panRate / PAN_SCALE_CORRECTION;  // giro ~3% "curto", como o firmware supõe
+    // Giro com a escala que o firmware supõe (PAN_SCALE_CORRECTION, PAN_SCALE_ASYM).
+    const double ccw = -g_panRate / (PAN_SCALE_CORRECTION * (1.0 + (g_panRate >= 0 ? PAN_SCALE_ASYM : -PAN_SCALE_ASYM)));
     gx = 0.97 * g_tiltRate + BG[0] + g_walk[0] + 0.5 * warm + 0.05 * g_n[3];
     gy = ccw * sin(t) + BG[1] + g_walk[1] + 0.05 * g_n[4];
     gz = ccw * cos(t) + BG[2] + g_walk[2] + warm + 0.05 * g_n[5];

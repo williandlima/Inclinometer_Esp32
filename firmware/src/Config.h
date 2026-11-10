@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.25";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10625;
+constexpr char FIRMWARE_VERSION[] = "1.6.26";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10626;
 
 // Memória permanente (NVS) e watchdog — ver main.cpp.
 constexpr char NVS_NAMESPACE[] = "inclinometro";
@@ -674,7 +674,10 @@ constexpr int PAN_ACC_ROT_BLOCK = 8;
 // leitura saía 1,8% curta nos três giros; 1,030 x 90 / 88,4 = 1,0487. Ainda
 // com poucos giros e um só tilt — refinar com tools/calibra_pan.py (giros de
 // ±45° a ±80°, vários tilts) para preencher também PAN_SCALE_COS2/_SIN2/_ASYM.
-constexpr float PAN_SCALE_CORRECTION = 1.0487f;  // 1,030 até a 1.6.24
+//
+// 1.6.26 — com a assimetria por sentido separada (PAN_SCALE_ASYM abaixo), a
+// escala média dos mesmos giros é (1,0404 + 1,0529) / 2 = 1,0466.
+constexpr float PAN_SCALE_CORRECTION = 1.0466f;  // 1,030 até a 1.6.24; 1,0487 na 1.6.25
 
 // Escala em função do tilt e do sentido (1.6.21 — ver "Pan: reavaliação" em
 // firmware/README.md). A escala efetiva ao longo do eixo de pan é nᵀ·M·n, com
@@ -690,7 +693,13 @@ constexpr float PAN_SCALE_CORRECTION = 1.0487f;  // 1,030 até a 1.6.24
 // (0, 0, 0) = comportamento anterior.
 constexpr float PAN_SCALE_COS2 = 0.0f;
 constexpr float PAN_SCALE_SIN2 = 0.0f;
-constexpr float PAN_SCALE_ASYM = 0.0f;
+// 1.6.26 — ASSIMETRIA MEDIDA na PTU-D300E (tilt em 0, firmware 1.6.24 com
+// 1,030): o giro horário de 30° leu 29,7 (0,990) e os anti-horários 29,4 e
+// 29,3 (0,978): escala 1,0404 no horário e 1,0529 no anti-horário, ou seja
+// 1,0466 x (1 ∓ 0,59%). Sem isso, cada ida e volta de ±30° deixava ~0,7° na
+// volta ao zero — 4 vaivéns, ~2,9°, o "erro de 2,7° ao voltar ao zero" da
+// bancada (a assimetria não se cancela na volta, ela se acumula).
+constexpr float PAN_SCALE_ASYM = -0.0059f;
 
 // Sentido positivo do pan. A projeção (item 1 de PanSensor.h) dá a rotação em
 // torno da vertical PARA CIMA pela regra da mão direita: positivo = sentido

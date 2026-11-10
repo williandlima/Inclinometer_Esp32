@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.25`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.26`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -484,6 +484,25 @@ calibração de bancada (`calibra_tilt.py`) não mudam.
 leitura da 1.6.22; (b) movimento do tilt pela PTU: sem ultrapassagem
 visível; (c) no mastro, com a viatura ligada: mín/máx mais estreitos que
 antes. Se algo piorar, `TILT_FUSION_ENABLED = false`.
+
+### Pan: erro ao voltar ao zero depois de vaivéns (v1.6.26)
+
+Bancada com a 1.6.25: giros rápidos de ±30°, paradas curtas, vários
+vaivéns — ao voltar ao zero, ~2,7° de erro (o tilt ficou bom e não mudou).
+
+Causa: **assimetria de escala entre os sentidos** de giro. Nos giros de 30°
+da sessão anterior, o horário leu 0,990 e os anti-horários 0,978 do giro
+real: 1,2% de diferença. Um erro de escala simétrico se cancela na volta;
+um assimétrico não — cada ida e volta de ±30° deixa ~0,7°, e 4 vaivéns dão
+~2,9°. `sim/vaivem_sim.cpp` reproduz o número.
+
+Correção: `PAN_SCALE_CORRECTION` = 1,0466 e `PAN_SCALE_ASYM` = −0,0059
+(escala 1,0404 no horário e 1,0529 no anti-horário). Com o sensor assim, o
+simulador volta ao zero a menos de 0,4° depois de 4 a 8 vaivéns. Os
+simuladores passaram a gerar o giro com a mesma escala por sentido que o
+firmware supõe. A assimetria vem de poucos giros (1 horário, 2
+anti-horários): confirmar na bancada; se a volta ao zero errar para o outro
+lado, a assimetria foi superestimada.
 
 ### Calibração de bancada na PTU (v1.6.25)
 

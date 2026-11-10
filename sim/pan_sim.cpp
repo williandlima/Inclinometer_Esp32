@@ -62,8 +62,16 @@ static M3 rotX(double d) { double c = cos(d * M_PI / 180), s = sin(d * M_PI / 18
 static M3 rotY(double d) { double c = cos(d * M_PI / 180), s = sin(d * M_PI / 180); return {{{c, 0, s}, {0, 1, 0}, {-s, 0, c}}}; }
 static M3 rotZ(double d) { double c = cos(d * M_PI / 180), s = sin(d * M_PI / 180); return {{{c, -s, 0}, {s, c, 0}, {0, 0, 1}}}; }
 static M3 leanRot() { return mul(mul(rotZ(g_leanAzDeg), rotY(g_leanDeg)), rotZ(-g_leanAzDeg)); }
+// Sensibilidade do giro ao longo do eixo de pan exatamente como o firmware a
+// supõe (PAN_SCALE_CORRECTION e PAN_SCALE_ASYM, Config.h): o giro "vê"
+// verdade / (A·(1 ± ASYM)), o sinal sendo o do giro do usuário (+ = horário).
+static double panSensorScale(double userRateDps) {
+    return 1.0 / (PAN_SCALE_CORRECTION * (1.0 + (userRateDps >= 0 ? PAN_SCALE_ASYM : -PAN_SCALE_ASYM)));
+}
 static bool rigidMotion(float &ax, float &ay, float &az, float &gx, float &gy, float &gz) {
-    static const double SCALE = 1.0 / PAN_SCALE_CORRECTION;
+    // A escala do eixo de pan vale para a parte do pan; tilt e balanço ficam com
+    // a escala média (o firmware não usa o giro deles para o pan).
+    const double SCALE = 1.0 / PAN_SCALE_CORRECTION, PSCALE = panSensorScale(g_panRateDps);
     const double ts = g_now_us / 1e6;
     M3 L = leanRot(), Pz = rotZ(-g_panTruthDeg), Tx = rotX(g_tiltDeg), Mt = mul(rotY(g_rigidMountYDeg), rotX(g_rigidMountXDeg));
     // Balanço: rotação pequena em torno dos eixos horizontais do MUNDO,
@@ -83,9 +91,10 @@ static bool rigidMotion(float &ax, float &ay, float &az, float &gx, float &gy, f
     M3 LPz = mul(SL, Pz); mulv(LPz, x, LPz_x);
     for (int i = 0; i < 3; i++) at[i] = LPz_x[i];
     double sx = g_swayDps * sin(2 * M_PI * g_swayHz * ts), sy = g_swayDps * sin(2 * M_PI * g_swayHz * ts + 1.7);
-    double w[3] = {-g_panRateDps * kz[0] + g_tiltRateDps * at[0] + sx,
-                   -g_panRateDps * kz[1] + g_tiltRateDps * at[1] + sy,
-                   -g_panRateDps * kz[2] + g_tiltRateDps * at[2]};
+    const double pr = g_panRateDps * PSCALE / SCALE;  // pan com a escala do seu sentido
+    double w[3] = {-pr * kz[0] + g_tiltRateDps * at[0] + sx,
+                   -pr * kz[1] + g_tiltRateDps * at[1] + sy,
+                   -pr * kz[2] + g_tiltRateDps * at[2]};
     double wb[3]; mulTv(R, w, wb);
     gx = SCALE * wb[0] + BGX + noise(rng);
     gy = SCALE * wb[1] + BGY + noise(rng);
@@ -105,7 +114,7 @@ bool Mpu6050::readMotion(float &ax, float &ay, float &az, float &gx, float &gy, 
     double t = g_tiltDeg * M_PI / 180;
     // Sensibilidade do giroscópio ~3% abaixo do nominal (ver PAN_SCALE_CORRECTION
     // em firmware/src/Config.h, calibrado em bancada na 1.6.9).
-    static const double PAN_SENSOR_SCALE = 1.0 / PAN_SCALE_CORRECTION;
+    const double PAN_SENSOR_SCALE = panSensorScale(g_panRateDps);
     double ts = g_now_us / 1e6;
     const double mx = sin(g_mountDeg * M_PI / 180), myz = cos(g_mountDeg * M_PI / 180);
     double warm = g_warmDps * (1 - exp(-ts / g_warmTauS));

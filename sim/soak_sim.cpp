@@ -112,7 +112,8 @@ static void dataFrame(uint8_t out[14]) {
     // Sensibilidade do giroscópio ~3% abaixo do nominal, independente da do
     // acelerômetro acima (ver PAN_SCALE_CORRECTION em Config.h, calibrado em
     // bancada na 1.6.9).
-    static const double PAN_SENSOR_SCALE = 1.0 / PAN_SCALE_CORRECTION;
+    const double PAN_SENSOR_SCALE =
+        1.0 / (PAN_SCALE_CORRECTION * (1.0 + (T.panRateF >= 0 ? PAN_SCALE_ASYM : -PAN_SCALE_ASYM)));
     g[1] += PAN_DIRECTION_SIGN * T.panRateF * PAN_SENSOR_SCALE * sin(th);
     g[2] += PAN_DIRECTION_SIGN * T.panRateF * PAN_SENSOR_SCALE * cos(th);
     // Sensibilidade conforme o fundo de escala programado (GYRO_CONFIG): depois
