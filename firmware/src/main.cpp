@@ -83,6 +83,9 @@ void setup() {
     // debug escrito nela corromperia o framing visto pelo app no PC.
     mpu.begin();
     restoreTiltOffset();
+    if (TILT_FUSION_ENABLED) {
+        angleSensor.attachGyro(&panSensor);  // tilt = giro + acelerômetro (AngleSensor.h)
+    }
 
     modbusSlave.begin();
     bleServer.begin();

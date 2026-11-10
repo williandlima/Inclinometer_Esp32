@@ -227,6 +227,14 @@ public:
     // integrador mantido por update().
     float readPanDeg();
 
+    // Bias do giroscópio por eixo (°/s), para o AngleSensor fundir o giro com
+    // o acelerômetro no tilt. Só vale (true) com o bias já CONFIRMADO por uma
+    // janela parada: um bias provisório errado de 1°/s viraria erro de tilt.
+    bool gyroBias(Vec3 &bias) const {
+        bias = _bias;
+        return _biasReady && _biasConfirmed;
+    }
+
     // Extremos do pan acumulados desde o último reset/calibração, medidos a
     // 100 Hz (ver PeakHold.h). Aqui o peak-hold é SIMPLES, sem filtro extra e
     // sem teste de persistência, ao contrário do tilt — e por dois motivos:

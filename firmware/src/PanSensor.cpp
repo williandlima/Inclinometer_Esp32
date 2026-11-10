@@ -13,6 +13,11 @@ bool PanSensor::sampleMotion(Vec3 &gyro, Vec3 &up) {
     // Vertical do MESMO burst: sem defasagem entre a direção usada na
     // projeção e as taxas projetadas. O teste de plausibilidade do driver
     // garante |a| >= ACCEL_MIN_PLAUSIBLE_G.
+    // Mesma correção por eixo do tilt (TILT_ACCEL_* em Config.h): a vertical
+    // usada na projeção do pan tem de ser a mesma que o tilt enxerga. Com os
+    // valores padrão (1, 0, 0) não muda nada.
+    ay = (ay - TILT_ACCEL_OFFSET_Y_G) / TILT_ACCEL_GAIN_Y;
+    az = az - TILT_ACCEL_OFFSET_Z_G;
     float n = sqrtf(ax * ax + ay * ay + az * az);
     up = {ax / n, ay / n, az / n};
     return true;

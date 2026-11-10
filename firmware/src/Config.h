@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.22";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10622;
+constexpr char FIRMWARE_VERSION[] = "1.6.23";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10623;
 
 // Memória permanente (NVS) e watchdog — ver main.cpp.
 constexpr char NVS_NAMESPACE[] = "inclinometro";
@@ -225,6 +225,30 @@ constexpr float TILT_SCALE_CORRECTION_POS = 1.066f;  // 1 / 0,9383
 constexpr float TILT_ACCEL_GAIN_Y = 1.0f;
 constexpr float TILT_ACCEL_OFFSET_Y_G = 0.0f;
 constexpr float TILT_ACCEL_OFFSET_Z_G = 0.0f;
+
+// Fusão giroscópio + acelerômetro no tilt (1.6.23 — ver AngleSensor.h).
+// TILT_FUSION_TAU_S: constante de tempo com que o acelerômetro corrige o
+// giro. Aceleração linear na frequência f sobra multiplicada por
+// ~1/(2π·f·τ): com 1 s, 16% a 1 Hz e 1% a 17 Hz. O que importa é a faixa de
+// 0,5 a 2 Hz (balanço da viatura e do mastro): ali o topo do mastro TRANSLADA,
+// e 1 cm de vai-e-vem a 1 Hz já é lido pelo acelerômetro como 2,3° — abaixo
+// do corte de 3 Hz do caminho de medida, passava inteiro para os mín/máx. (A
+// vibração do motor, a 17 Hz, o caminho de medida já rejeitava quase toda.)
+// Maior rejeita mais, mas amplia o efeito de um erro do giro: num movimento
+// a velocidade Ω, um erro de escala do giro de 3% dá 0,03·Ω·τ de avanço
+// transitório (0,1° a 3°/s). O resíduo de bias do giro b dá b·τ, e o termo
+// integral (TILT_FUSION_KI) o remove em dezenas de segundos.
+// TILT_FUSION_ENABLED = false desliga a fusão: o tilt volta a ser só do
+// acelerômetro, exatamente como até a 1.6.22.
+constexpr bool TILT_FUSION_ENABLED = true;
+constexpr float TILT_FUSION_TAU_S = 1.0f;
+constexpr float TILT_FUSION_KI = 0.05f;
+constexpr float TILT_FUSION_KI_MAX_ERR_DEG = 0.2f;  // acima disso o integral não aprende (anti-windup)
+constexpr float TILT_FUSION_MAX_BIAS_DPS = 0.5f;
+// Salvaguardas: fora delas vale só o acelerômetro (comportamento anterior).
+constexpr float TILT_FUSION_ACCEL_TOL_G = 0.15f;         // |a| fora de 1 g ± isto
+constexpr float TILT_FUSION_MAX_DIVERGENCE_DEG = 3.0f;   // giro e acelerômetro discordam
+constexpr float TILT_FUSION_MAX_DT_S = 0.1f;             // buraco de amostragem
 
 // Sentido positivo do tilt reportado. O atan2(ay, az) cresce num sentido que
 // depende da montagem. A 1.6.17 usou -1 (na bancada com a 1.6.16 subir lia

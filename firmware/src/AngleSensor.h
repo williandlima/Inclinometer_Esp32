@@ -4,6 +4,7 @@
 
 #include "Config.h"
 #include "Mpu6050.h"
+#include "PanSensor.h"
 #include "PeakHold.h"
 
 // Calcula o ângulo de inclinação (tilt) a partir do acelerômetro do
@@ -36,6 +37,26 @@
 // deslocamento em relação ao zero, mesmo raciocínio do pan, com um fator
 // diferente para cada lado (a assimetria medida entre inclinação positiva e
 // negativa não é ruído — ver Config.h).
+//
+// FUSÃO GIROSCÓPIO + ACELERÔMETRO (1.6.23). O acelerômetro sozinho não
+// distingue inclinação de aceleração linear: a vibração do motor da viatura
+// no topo do mastro (dezenas de micrômetros a ~17 Hz, no ensaio de
+// 26/10/2026) aparecia como até 2° de "inclinação", e parte dela chegava aos
+// mín/máx. O método usado em IMU/AHRS é o filtro complementar: o GIROSCÓPIO
+// dá a variação rápida do ângulo (ele não sente aceleração linear) e o
+// ACELERÔMETRO corrige devagar a deriva do giro (ele tem a referência
+// absoluta da gravidade):
+//
+//     θ ← θ + (θ̇_giro − b)·dt + (dt/τ)·(θ_acel − θ)        b ← b − Ki·dt·(θ_acel − θ)
+//
+// com τ = TILT_FUSION_TAU_S. Rotação real passa inteira (vem do giro);
+// aceleração linear na frequência f é atenuada por ~1/(2π·f·τ). A taxa do
+// giro é a do MESMO ângulo que o acelerômetro mede, θ = atan2(u_y, u_z), para
+// qualquer montagem: θ̇ = ω_x − u_x·(u_z·ω_z + u_y·ω_y)/(u_y² + u_z²).
+// A tela e os mín/máx usam o ângulo fundido; o Modo Vibração continua com o
+// acelerômetro cru (lá a sensibilidade total é o objetivo). Sem bias do giro
+// confirmado (PanSensor), com o acelerômetro fora de 1 g, ou se os dois
+// divergirem demais, vale só o acelerômetro — o comportamento de antes.
 class AngleSensor {
 public:
     // O Mpu6050 é compartilhado (por referência) com o PanSensor: é o mesmo
@@ -81,6 +102,12 @@ public:
     float calibrationOffsetDeg() const { return _offsetDeg; }
     void restoreCalibrationOffsetDeg(float offsetDeg) { _offsetDeg = offsetDeg; }
 
+    // Liga a fusão com o giroscópio: o PanSensor fornece o bias do giro
+    // (estimado nas janelas paradas). Sem isso, o tilt é só do acelerômetro.
+    void attachGyro(const PanSensor *pan) { _pan = pan; }
+    // true enquanto a última amostra usou o giro (diagnóstico/testes).
+    bool fusionActive() const { return _fusionActive; }
+
 private:
     Mpu6050 &_mpu;
     // Ângulo JÁ CORRIGIDO (não bruto) no instante da calibração — ver
@@ -90,6 +117,21 @@ private:
     // à calibração — calibrar fora do zero mecânico não muda qual lado é
     // usado numa leitura.
     float _offsetDeg = 0.0f;
+
+    // Fusão com o giro (ver o cabeçalho). Estado em ângulo absoluto JÁ
+    // corrigido (o melhor estimador do ângulo verdadeiro, a mesma grandeza
+    // que a taxa do giro integra).
+    const PanSensor *_pan = nullptr;
+    float _fusedAbsDeg = 0.0f;
+    float _fusionBiasDps = 0.0f;  // resíduo de bias aprendido pela própria fusão
+    bool _fusionActive = false;
+    static constexpr int FUSION_RATE_LEN = 5;  // mediana da taxa (leituras espúrias)
+    float _rateHist[FUSION_RATE_LEN] = {};
+    int _rateHistCount = 0;
+    // Lê acelerômetro + giro no mesmo burst. `rateDps`: taxa do ângulo bruto
+    // vista pelo giro (sem bias); `gyroOk`: se ela pode ser usada.
+    bool readFusionSample(float &angleDeg, float &rateDps, bool &gyroOk);
+    float fuse(float accelRawDeg, float rateDps, bool gyroOk, float dtS);
 
     // Estado do filtro 1-euro (todos em ângulo absoluto, antes do offset):
     float _filteredRawDeg = 0.0f;   // saída do filtro

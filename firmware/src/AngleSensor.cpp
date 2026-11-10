@@ -23,6 +23,39 @@ bool AngleSensor::readRawAngleDeg(float &angleDeg) {
     return true;
 }
 
+bool AngleSensor::readFusionSample(float &angleDeg, float &rateDps, bool &gyroOk) {
+    float ax, ay, az, gx, gy, gz;
+    if (!_mpu.readMotion(ax, ay, az, gx, gy, gz)) {
+        return false;
+    }
+    const float cy = (ay - TILT_ACCEL_OFFSET_Y_G) / TILT_ACCEL_GAIN_Y;
+    const float cz = az - TILT_ACCEL_OFFSET_Z_G;
+    angleDeg = atan2(cy, cz) * 180.0f / static_cast<float>(M_PI);
+    _lastRawDeg = angleDeg;
+
+    rateDps = 0.0f;
+    gyroOk = false;
+    Vec3 bias;
+    if (_pan == nullptr || !_pan->gyroBias(bias)) {
+        return true;  // sem bias confirmado: só acelerômetro
+    }
+    // Acelerômetro longe de 1 g = aceleração linear forte: a direção dele não
+    // é a vertical agora, e ela entra na conversão da taxa abaixo.
+    const float norm = sqrtf(ax * ax + cy * cy + cz * cz);
+    if (fabsf(norm - 1.0f) > TILT_FUSION_ACCEL_TOL_G) {
+        return true;
+    }
+    const float ux = ax / norm, uy = cy / norm, uz = cz / norm;
+    const float den = uy * uy + uz * uz;
+    if (den < 0.05f) {
+        return true;  // vertical quase no eixo X: o ângulo do tilt não é definido
+    }
+    const float wx = gx - bias.x, wy = gy - bias.y, wz = gz - bias.z;
+    rateDps = wx - ux * (uz * wz + uy * wy) / den;
+    gyroOk = true;
+    return true;
+}
+
 float AngleSensor::emaAlpha(float cutoffHz, float dtS) {
     // tau = 1/(2*pi*fc); alpha = dt/(tau+dt)
     float tau = 1.0f / (2.0f * static_cast<float>(M_PI) * cutoffHz);
@@ -37,9 +70,36 @@ void AngleSensor::update() {
     uint32_t elapsedMs = now - _lastSampleMs;
     _lastSampleMs = now;
 
-    float rawDeg;
-    if (!readRawAngleDeg(rawDeg)) {
+    float rawDeg, gyroRateDps;
+    bool gyroOk;
+    if (!readFusionSample(rawDeg, gyroRateDps, gyroOk)) {
         return;  // falha de I2C: preserva o estado do filtro em vez de corrompê-lo
+    }
+    // Mediana da taxa do giro, como a do ângulo logo abaixo: uma leitura
+    // espúria de centenas de °/s por 10 ms somaria graus ao ângulo fundido.
+    for (int i = 0; i < FUSION_RATE_LEN - 1; i++) {
+        _rateHist[i] = _rateHist[i + 1];
+    }
+    _rateHist[FUSION_RATE_LEN - 1] = gyroOk ? gyroRateDps : 0.0f;
+    if (!gyroOk) {
+        _rateHistCount = 0;  // sem giro agora: a mediana recomeça
+    } else if (_rateHistCount < FUSION_RATE_LEN) {
+        _rateHistCount++;
+    }
+    if (gyroOk && _rateHistCount == FUSION_RATE_LEN) {
+        float sortedRate[FUSION_RATE_LEN];
+        for (int i = 0; i < FUSION_RATE_LEN; i++) {
+            float x = _rateHist[i];
+            int j = i - 1;
+            while (j >= 0 && sortedRate[j] > x) {
+                sortedRate[j + 1] = sortedRate[j];
+                j--;
+            }
+            sortedRate[j + 1] = x;
+        }
+        gyroRateDps = sortedRate[FUSION_RATE_LEN / 2];
+    } else {
+        gyroOk = false;
     }
 
     // Mediana das últimas 5 amostras ANTES do filtro: o 1-euro abre o corte
@@ -71,6 +131,7 @@ void AngleSensor::update() {
     if (!_filterReady) {
         // Primeira amostra entra direto: sem isso a leitura começaria em 0°
         // e levaria segundos subindo até o valor real.
+        fuse(rawDeg, 0.0f, false, 0.0f);
         _filteredRawDeg = rawDeg;
         _measuredRawDeg = rawDeg;
         _prevRawDeg = rawDeg;
@@ -86,6 +147,11 @@ void AngleSensor::update() {
     if (dtS <= 0.0f) {
         return;  // relógio não avançou: nada a integrar, e evita divisão por zero
     }
+
+    // Fusão com o giroscópio (ver o cabeçalho de AngleSensor.h): daqui em
+    // diante `rawDeg` é o ângulo fundido — os dois caminhos abaixo (tela e
+    // medida) deixam de carregar a aceleração linear lida pelo acelerômetro.
+    rawDeg = fuse(rawDeg, gyroRateDps, gyroOk, dtS);
 
     // Filtro 1-euro (ver o bloco ANGLE_FILTER_* em Config.h). Primeiro estima
     // a velocidade angular e a suaviza; é ela que decide o quanto o filtro
@@ -124,6 +190,36 @@ float correctedAbsDeg(float rawDeg) {
     return rawDeg * tiltScaleFor(rawDeg);
 }
 }  // namespace
+
+float AngleSensor::fuse(float accelRawDeg, float rateDps, bool gyroOk, float dtS) {
+    const float accAbs = correctedAbsDeg(accelRawDeg);
+    // Sem giro utilizável, ou divergência grande demais entre os dois (bias
+    // do giro errado, lixo no barramento): vale o acelerômetro, como antes.
+    if (!gyroOk || dtS <= 0.0f || dtS > TILT_FUSION_MAX_DT_S ||
+        fabsf(accAbs - _fusedAbsDeg) > TILT_FUSION_MAX_DIVERGENCE_DEG) {
+        _fusedAbsDeg = accAbs;
+        _fusionBiasDps = 0.0f;
+        _fusionActive = false;
+        return accelRawDeg;
+    }
+    _fusionActive = true;
+    const float predicted = _fusedAbsDeg + (rateDps - _fusionBiasDps) * dtS;
+    const float err = accAbs - predicted;
+    _fusedAbsDeg = predicted + (dtS / (TILT_FUSION_TAU_S + dtS)) * err;
+    // O termo integral só aprende com erro PEQUENO (resíduo de bias do giro,
+    // centésimos de grau). Erro grande é movimento com o giro fora de escala
+    // ou aceleração linear — integrá-lo deixaria um bias falso que leva
+    // dezenas de segundos para sair (visto no simulador: 0,12° de sobra 6 s
+    // depois de um giro com o giroscópio 60% fora de escala).
+    if (fabsf(err) < TILT_FUSION_KI_MAX_ERR_DEG) {
+        _fusionBiasDps -= TILT_FUSION_KI * dtS * err;
+    }
+    if (_fusionBiasDps > TILT_FUSION_MAX_BIAS_DPS) _fusionBiasDps = TILT_FUSION_MAX_BIAS_DPS;
+    if (_fusionBiasDps < -TILT_FUSION_MAX_BIAS_DPS) _fusionBiasDps = -TILT_FUSION_MAX_BIAS_DPS;
+    // De volta ao domínio "bruto" em que os filtros e toReported() trabalham
+    // (inverso de correctedAbsDeg: os fatores são positivos, o sinal não muda).
+    return _fusedAbsDeg / tiltScaleFor(_fusedAbsDeg);
+}
 
 float AngleSensor::readRelativeAngleDeg() {
     float rawDeg;
