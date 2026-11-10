@@ -43,8 +43,8 @@ import sys
 
 import numpy as np
 
-# Fatores atuais do firmware (1.6.13+), para comparação.
-FATOR_NEG = 1.042
+# Fatores atuais do firmware (1.6.25+; o lado negativo era 1,042 até a 1.6.24), para comparação.
+FATOR_NEG = 1.066
 FATOR_POS = 1.066
 
 
@@ -115,7 +115,7 @@ def analisa(ref: np.ndarray, bruto: np.ndarray, leitura: np.ndarray | None) -> d
     print(f"Modelo ajustado: ganho Y/Z k = {k:.4f}, offset Y = {by * 1000:+.1f} mg, "
           f"offset Z = {bz * 1000:+.1f} mg, rotação da placa β = {beta:+.2f}°")
     print("\nErro (leitura − referência):")
-    resumo("firmware atual (1,042 / 1,066)", ref, atual - ref)
+    resumo("firmware atual (1,066 / 1,066)", ref, atual - ref)
     if leitura is not None:
         resumo("leitura do app (como medida)", ref, leitura - ref)
     resumo("modelo físico ajustado", ref, novo - ref)

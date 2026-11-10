@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.24`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.25`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -484,6 +484,36 @@ calibração de bancada (`calibra_tilt.py`) não mudam.
 leitura da 1.6.22; (b) movimento do tilt pela PTU: sem ultrapassagem
 visível; (c) no mastro, com a viatura ligada: mín/máx mais estreitos que
 antes. Se algo piorar, `TILT_FUSION_ENABLED = false`.
+
+### Calibração de bancada na PTU (v1.6.25)
+
+Placa montada na PTU-D300E, PRO-3600 em cima do cabeçote (sessões com a
+1.6.23 e a 1.6.24).
+
+**Tilt.** A PTU não serve de referência de 0,1°: em +20 ela marca 20,0 e o
+PRO-3600 20,3. Contra o PRO-3600, o lado positivo ficou dentro de 0,3-0,4°
+com 1,066; o negativo lia até 0,8° a menos com 1,042 (−29,3° para −30,1°).
+`TILT_SCALE_CORRECTION_NEG` vai para **1,066** (mínimos quadrados: 1,0666),
+igual ao lado positivo; o resíduo nos pontos medidos cai para ≤ 0,24°. A
+assimetria antiga vinha de pontos só até −8,6°.
+
+| PTU | PRO-3600 | 1.6.24 (NEG 1,042) | 1.6.25 (NEG 1,066, previsto) |
+|---|---|---|---|
+| −10 | −10,0 | −9,6 | −9,8 |
+| −20 | −20,1 | −19,4 | −19,8 |
+| −30 | −30,1 | −29,3 | −30,0 |
+
+**Pan.** Giros de 30° com o tilt em 0: +30 → +29,7; 30 → 0 = −29,4;
+0 → −30 = −29,3 — a leitura saía 1,8% curta nos três.
+`PAN_SCALE_CORRECTION` vai de 1,030 para **1,0487**. Ainda são poucos giros
+e um só tilt; o próximo passo é `tools/calibra_pan.py` com giros de ±45° a
+±80° em vários tilts (preenche também `PAN_SCALE_COS2/_SIN2/_ASYM`).
+
+**Zero do pan.** Na mesma sessão o pan começou em −1,0° com a PTU em 0
+(e −0,7° na volta): o pan não tinha sido recalibrado depois dos movimentos
+do tilt. Parte do movimento do tilt "vaza" para o pan pela sensibilidade
+cruzada do giro (±2% no MPU6050). Antes de um ensaio de pan, calibrar com
+a PTU em 0.
 
 ### Os dois regimes de uso: parado por muito tempo e em movimento constante (v1.6.24)
 

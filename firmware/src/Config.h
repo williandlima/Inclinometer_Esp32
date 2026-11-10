@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.24";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10624;
+constexpr char FIRMWARE_VERSION[] = "1.6.25";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10625;
 
 // Memória permanente (NVS) e watchdog — ver main.cpp.
 constexpr char NVS_NAMESPACE[] = "inclinometro";
@@ -207,7 +207,16 @@ constexpr float ANGLE_MAX_DEG = 60.0f;
 // — mais pontos desse lado, numa faixa maior, teriam o mesmo benefício que
 // o positivo já teve. Refazer esta calibração (os dois lados, com mais
 // pontos se possível) se o MPU6050 físico for substituído.
-constexpr float TILT_SCALE_CORRECTION_NEG = 1.042f;  // 1 / 0,9593
+//
+// 1.6.25 — LADO NEGATIVO RECALIBRADO com a placa montada na PTU e o PRO-3600
+// em cima do cabeçote (duas sessões de bancada, 1.6.23 e 1.6.24; pontos
+// -10/-12/-20/-30 contra o PRO-3600). Com 1,042 o lado negativo lia até 0,8°
+// a menos (-29,3° para -30,1°); o ajuste por mínimos quadrados deu 1,0666, e
+// o resíduo cai para no máximo 0,24°. O lado positivo, nas mesmas sessões,
+// ficou dentro de 0,3-0,4° com 1,066 (o ajuste daria 1,0716, ganho menor que
+// a repetibilidade da bancada) e NÃO foi mexido. Os dois lados ficam iguais:
+// a assimetria antiga vinha de pontos só até -8,6° (ver acima).
+constexpr float TILT_SCALE_CORRECTION_NEG = 1.066f;  // 1,042 até a 1.6.24
 constexpr float TILT_SCALE_CORRECTION_POS = 1.066f;  // 1 / 0,9383
 
 // Modelo FÍSICO do acelerômetro para o tilt (1.6.20 — ver "Tilt: erro maior
@@ -659,7 +668,13 @@ constexpr int PAN_ACC_ROT_BLOCK = 8;
 // precisão não quantificada aqui — refinar com mais pontos (e idealmente
 // mais afastados de zero, ex.: 45°/90°) quando possível, e sempre que o
 // MPU6050 físico desta unidade for substituído.
-constexpr float PAN_SCALE_CORRECTION = 1.030f;
+//
+// 1.6.25 — RECALIBRADO com giros de 30° da PTU-D300E (tilt em 0, firmware
+// 1.6.24 com 1,030): +30 -> +29,7; 30 -> 0 = -29,4; 0 -> -30 = -29,3. A
+// leitura saía 1,8% curta nos três giros; 1,030 x 90 / 88,4 = 1,0487. Ainda
+// com poucos giros e um só tilt — refinar com tools/calibra_pan.py (giros de
+// ±45° a ±80°, vários tilts) para preencher também PAN_SCALE_COS2/_SIN2/_ASYM.
+constexpr float PAN_SCALE_CORRECTION = 1.0487f;  // 1,030 até a 1.6.24
 
 // Escala em função do tilt e do sentido (1.6.21 — ver "Pan: reavaliação" em
 // firmware/README.md). A escala efetiva ao longo do eixo de pan é nᵀ·M·n, com

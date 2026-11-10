@@ -26,7 +26,7 @@ Entrada: CSV (";" ou ",") com uma linha por giro:
 Faça giros grandes (±45° a ±80°; não chegue a ±90°, onde a leitura satura) nos DOIS sentidos e em vários tilts (ex.:
 −30°, 0°, 30°, 60°): giro pequeno mede mal a escala — foi o problema dos 2
 pontos de 8°/9°. Informe com --fw-* as constantes que o firmware tinha
-durante as medidas (padrão: as da 1.6.21 sem calibração, 1,030/0/0/0).
+durante as medidas (padrão: as da 1.6.25, 1,0487/0/0/0; até a 1.6.24 era 1,030).
 
 Uso:
     python tools/calibra_pan.py giros.csv
@@ -136,7 +136,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("csv", nargs="?")
     p.add_argument("--autoteste", action="store_true")
-    p.add_argument("--fw-a", type=float, default=1.030, help="PAN_SCALE_CORRECTION durante a medida")
+    p.add_argument("--fw-a", type=float, default=1.0487, help="PAN_SCALE_CORRECTION durante a medida (1,030 até a 1.6.24)")
     p.add_argument("--fw-cos2", type=float, default=0.0)
     p.add_argument("--fw-sin2", type=float, default=0.0)
     p.add_argument("--fw-asym", type=float, default=0.0)
