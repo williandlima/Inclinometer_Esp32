@@ -23,6 +23,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -48,6 +51,10 @@ import androidx.core.content.FileProvider
 import com.williandlima.inclinometro.datasource.BleScanner
 import com.williandlima.inclinometro.datasource.BleContract
 import com.williandlima.inclinometro.datasource.ConnectionMode
+import com.williandlima.inclinometro.limits.RETENTION_OPTIONS_DAYS
+import com.williandlima.inclinometro.limits.SessionSummary
+import com.williandlima.inclinometro.limits.retentionLabel
+import com.williandlima.inclinometro.report.Acquisition
 import com.williandlima.inclinometro.limits.VibrationStats
 import com.williandlima.inclinometro.ui.theme.AmberFlash
 import com.williandlima.inclinometro.ui.theme.Green
@@ -60,6 +67,7 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 
 private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale("pt", "BR"))
+private val dateTimeFormatter = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale("pt", "BR"))
 
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
@@ -189,6 +197,16 @@ fun MainScreen(viewModel: MainViewModel) {
             Spacer(Modifier.height(16.dp))
         }
 
+        AcquisitionRow(
+            running = state.running,
+            plannedDurationS = state.plannedDurationS,
+            onPlannedChange = viewModel::setPlannedDuration,
+            elapsedS = state.acqElapsedS,
+            readings = state.acqReadings,
+            lastAcquisitionText = state.lastAcquisitionText,
+        )
+        Spacer(Modifier.height(8.dp))
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = viewModel::toggleStartStop) {
                 Text(if (state.running) "Parar" else "Iniciar")
@@ -214,17 +232,63 @@ fun MainScreen(viewModel: MainViewModel) {
 
         Spacer(Modifier.height(8.dp))
 
-        Button(onClick = {
-            scope.launch {
-                val file = viewModel.generateReportFile()
-                if (file != null) sharePdf(context, file)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                scope.launch {
+                    val file = viewModel.generateReportFile()
+                    if (file != null) shareFile(context, file, "application/pdf")
+                }
+            }) {
+                Text("Gerar relatório PDF")
             }
-        }) {
-            Text("Gerar relatório PDF")
+            OutlinedButton(onClick = viewModel::openHistory) {
+                Text("Histórico...")
+            }
         }
 
         Spacer(Modifier.height(16.dp))
         Text(state.statusMessage, style = MaterialTheme.typography.bodySmall)
+    }
+
+    state.acqFinishedMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissAcquisitionFinished,
+            title = { Text("Aquisição concluída") },
+            text = { Text("$message\n\nGerar o relatório PDF desta aquisição agora?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.dismissAcquisitionFinished()
+                    scope.launch {
+                        val file = viewModel.generateReportFile()
+                        if (file != null) shareFile(context, file, "application/pdf")
+                    }
+                }) { Text("Gerar relatório") }
+            },
+            dismissButton = { TextButton(onClick = viewModel::dismissAcquisitionFinished) { Text("Agora não") } },
+        )
+    }
+
+    state.history?.let { rows ->
+        HistoryDialog(
+            rows = rows,
+            info = state.historyInfo,
+            retentionDays = state.retentionDays,
+            onRetentionChange = viewModel::setRetentionDays,
+            onReport = { id ->
+                scope.launch {
+                    val file = viewModel.generateReportFile(id)
+                    if (file != null) shareFile(context, file, "application/pdf")
+                }
+            },
+            onCsv = { id ->
+                scope.launch {
+                    val file = viewModel.exportCsvFile(id)
+                    if (file != null) shareFile(context, file, "text/csv")
+                }
+            },
+            onDelete = viewModel::deleteSession,
+            onDismiss = viewModel::closeHistory,
+        )
     }
 
     if (showVibrationConfig) {
@@ -253,7 +317,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 scope.launch {
                     val file = viewModel.generateVibrationReportFile()
                     viewModel.dismissVibrationResult()
-                    if (file != null) sharePdf(context, file)
+                    if (file != null) shareFile(context, file, "application/pdf")
                 }
             },
         )
@@ -291,6 +355,7 @@ private fun ConnectionBadge(status: ConnectionStatus) {
         ConnectionStatus.PARADO -> ConnBadgeStyle("○ Parado", null, Color.Gray)
         ConnectionStatus.CONECTANDO -> ConnBadgeStyle("◐ Conectando...", null, Orange)
         ConnectionStatus.CONECTADO -> ConnBadgeStyle("● Conectado", Green, Color.White)
+        ConnectionStatus.SEM_DADOS -> ConnBadgeStyle("◐ Sem dados do ESP32", null, Orange)
         ConnectionStatus.ERRO -> ConnBadgeStyle("● Falha de conexão", Red, Color.White)
         ConnectionStatus.SIMULACAO -> ConnBadgeStyle("● Simulação (interna)", null, Orange)
     }
@@ -637,17 +702,185 @@ private fun BleScanDialog(
     )
 }
 
-private fun sharePdf(context: Context, file: File) {
+/**
+ * Linha "Aquisição para relatório": parado, o tempo programado da próxima
+ * aquisição e um resumo da última; em execução, o cronômetro e quantas
+ * leituras já entraram no relatório. Antes a tela não dizia de quando a
+ * quando nem quantas leituras o relatório usava.
+ */
+@Composable
+private fun AcquisitionRow(
+    running: Boolean,
+    plannedDurationS: Int?,
+    onPlannedChange: (Int?) -> Unit,
+    elapsedS: Long,
+    readings: Int,
+    lastAcquisitionText: String,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Aquisição para relatório:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { menuOpen = true }, enabled = !running) {
+                Text(Acquisition.formatPlanned(plannedDurationS))
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                for (option in Acquisition.DURATIONS_S) {
+                    DropdownMenuItem(
+                        text = { Text(Acquisition.formatPlanned(option)) },
+                        onClick = {
+                            menuOpen = false
+                            onPlannedChange(option)
+                        },
+                    )
+                }
+            }
+        }
+        val status = if (running) {
+            val clock = Acquisition.formatClock(elapsedS) +
+                (plannedDurationS?.let { " / " + Acquisition.formatClock(it.toLong()) } ?: "")
+            "● gravando $clock  ·  $readings leituras"
+        } else {
+            lastAcquisitionText
+        }
+        Text(status, style = MaterialTheme.typography.bodySmall, color = if (running) Green else Color.Gray)
+    }
+}
+
+/**
+ * Histórico de aquisições: gerar o relatório PDF, exportar CSV ou apagar
+ * qualquer aquisição gravada — antes o relatório só saía da atual/última.
+ * Também é aqui que se escolhe por quanto tempo o histórico é mantido.
+ */
+@Composable
+private fun HistoryDialog(
+    rows: List<SessionSummary>,
+    info: String,
+    retentionDays: Int?,
+    onRetentionChange: (Int?) -> Unit,
+    onReport: (Long) -> Unit,
+    onCsv: (Long) -> Unit,
+    onDelete: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var retentionMenuOpen by remember { mutableStateOf(false) }
+    var pendingRetention by remember { mutableStateOf<Int?>(null) }
+    var confirmRetention by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<SessionSummary?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Histórico de aquisições") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(info, style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Manter histórico por:", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = { retentionMenuOpen = true }) { Text(retentionLabel(retentionDays)) }
+                    DropdownMenu(expanded = retentionMenuOpen, onDismissRequest = { retentionMenuOpen = false }) {
+                        for (option in RETENTION_OPTIONS_DAYS) {
+                            DropdownMenuItem(
+                                text = { Text(retentionLabel(option)) },
+                                onClick = {
+                                    retentionMenuOpen = false
+                                    if (option == null) {
+                                        onRetentionChange(null)
+                                    } else if (option != retentionDays) {
+                                        // Encurtar o prazo apaga dados: confirma antes.
+                                        pendingRetention = option
+                                        confirmRetention = true
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+                if (rows.isEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Ainda não há nenhuma aquisição registrada.")
+                }
+                for (row in rows) {
+                    val s = row.info
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                    Text(
+                        dateTimeFormatter.format(Date(s.startedAt)) + if (s.endedAt == null) "  (em andamento)" else "",
+                        fontWeight = FontWeight.Bold,
+                    )
+                    val duration = s.endedAt?.let { Acquisition.formatDuration((it - s.startedAt) / 1000.0) } ?: "-"
+                    val planned = s.plannedDurationS?.let { Acquisition.formatPlanned(it) } ?: "Livre"
+                    val mode = if (s.mode == ConnectionMode.SIMULATED) "Simulação" else "BLE"
+                    Text(
+                        "$mode · $duration · programado: $planned · ${row.readingCount} leituras" +
+                            (s.firmwareVersion?.let { " · firmware $it" } ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row {
+                        TextButton(onClick = { onReport(s.id) }) { Text("PDF") }
+                        TextButton(onClick = { onCsv(s.id) }) { Text("CSV") }
+                        // A aquisição em andamento não pode ser apagada.
+                        TextButton(onClick = { pendingDelete = row }, enabled = s.endedAt != null) { Text("Apagar") }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar") } },
+    )
+
+    if (confirmRetention) {
+        val days = pendingRetention
+        AlertDialog(
+            onDismissRequest = { confirmRetention = false },
+            title = { Text("Manter histórico por ${retentionLabel(days)}") },
+            text = {
+                Text(
+                    "As aquisições e capturas de vibração com mais de ${retentionLabel(days)} serão apagadas " +
+                        "agora e a cada abertura do app. Isso não pode ser desfeito.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRetention = false
+                    onRetentionChange(days)
+                }) { Text("Aplicar") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRetention = false }) { Text("Cancelar") } },
+        )
+    }
+
+    pendingDelete?.let { row ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Apagar aquisição") },
+            text = {
+                Text(
+                    "Apagar a aquisição de ${dateTimeFormatter.format(Date(row.info.startedAt))} " +
+                        "(${row.readingCount} leituras)?\n\nIsso não pode ser desfeito.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDelete = null
+                    onDelete(row.info.id)
+                }) { Text("Apagar") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancelar") } },
+        )
+    }
+}
+
+private fun shareFile(context: Context, file: File, mimeType: String) {
     try {
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "application/pdf"
+            type = mimeType
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, "Compartilhar relatório"))
+        context.startActivity(Intent.createChooser(intent, "Compartilhar arquivo"))
     } catch (e: Exception) {
-        // O PDF já está salvo; só o compartilhamento falhou — sem derrubar o app.
-        Toast.makeText(context, "Relatório salvo, mas não foi possível compartilhar: ${e.message}", Toast.LENGTH_LONG).show()
+        // O arquivo já está salvo; só o compartilhamento falhou — sem derrubar o app.
+        Toast.makeText(context, "Arquivo salvo, mas não foi possível compartilhar: ${e.message}", Toast.LENGTH_LONG).show()
     }
 }

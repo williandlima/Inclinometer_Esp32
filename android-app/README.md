@@ -53,15 +53,13 @@ Abra a pasta `android-app/` no Android Studio ("Open" → selecione esta
 pasta). O Android Studio vai baixar as dependências (AndroidX, Compose,
 Room) e configurar o SDK automaticamente na primeira sincronização.
 
-> Este projeto foi criado fora do Android Studio (sem Android SDK disponível
-> no ambiente de desenvolvimento usado), então **ainda não foi compilado
-> com o Gradle/AGP real**. Como verificação parcial, o algoritmo de FFT
-> (`limits/Fft.kt`) foi extraído e testado isoladamente com `kotlinc` puro
-> (sem dependências Android) contra um sinal senoidal conhecido, confirmando
-> que identifica a frequência dominante corretamente — o resto do código
-> (Compose, BLE, Room) foi revisado manualmente, mas a primeira
-> sincronização no Android Studio é o jeito confiável de confirmar que
-> compila — abra o projeto lá antes de dar como validado.
+O projeto é compilado no GitHub a cada alteração
+(`.github/workflows/android.yml`: `./gradlew assembleDebug testDebugUnitTest`)
+e o **APK de depuração fica como artifact** da execução ("App Android" na aba
+Actions) — dá para instalar no aparelho sem ter o Android Studio. Os testes
+(`app/src/test`) conferem, na JVM, as regras da aquisição e o CSV. O que
+**não** é coberto ali: Bluetooth, tela e banco de dados no aparelho — isso
+só se valida instalando o APK.
 
 ## Uso
 
@@ -80,8 +78,40 @@ faz uma leitura única do ângulo e da versão do firmware, sem iniciar uma
 sessão de leitura contínua — mostra o resultado (verde) ou o erro específico
 (vermelho), equivalente ao mesmo botão no app desktop.
 
-O indicador de conexão mostra o estado (conectando/conectado/falha), a
-exemplo do app desktop.
+O indicador de conexão segue o do app desktop (app 2.4.0): **"● Conectado"
+verde só aparece quando as leituras estão chegando** do ESP32. Ao tocar em
+"Iniciar" ele fica em "◐ Conectando..."; se as leituras param por mais de 2 s
+sem a pilha Bluetooth avisar (ESP32 desligado, fora de alcance), vira "◐ Sem
+dados do ESP32"; numa queda, fica vermelho e o app tenta reconectar sozinho
+até o "Parar". As primeiras tentativas de conexão, que no Android falham com
+frequência (status 133), são repetidas automaticamente (até 4 vezes) antes de
+reportar erro.
+
+## Aquisição para relatório e histórico (app 2.4.0)
+
+Mesmo modelo do app desktop (`report/Acquisition.kt` ↔
+`python-app/report/acquisition.py`):
+
+- **O relatório usa UMA aquisição**: começa no "Iniciar" (ou em "Resetar
+  limites"/"Calibrar" com a leitura em andamento) e termina no "Parar" ou no
+  fim do **tempo programado** — escolhido em "Aquisição para relatório"
+  (Livre, 1, 5, 10, 30 min ou 1 h). Com tempo programado, a leitura para
+  sozinha e o app oferece gerar o relatório. Durante a leitura a tela mostra
+  o cronômetro e quantas leituras já entraram.
+- **O PDF** tem as tabelas "Resultado" e "Aquisição dos dados" (início, fim,
+  duração, tempo programado, leituras, taxa média, interrupções > 2 s,
+  cobertura, versões do app e do firmware) e os gráficos na página seguinte.
+- **Histórico...**: lista as aquisições gravadas; de qualquer uma dá para
+  gerar o PDF, exportar **CSV** (";" e vírgula decimal, abre no Excel) ou
+  apagar.
+- **Manter histórico por** (30, 90, 180 dias, 1 ano ou Sempre; padrão 90
+  dias): aquisições e capturas de vibração mais antigas são apagadas ao abrir
+  o app. Antes o banco gravava ~5 leituras por segundo e nunca apagava nada.
+  **Atenção:** na primeira abertura da 2.4.0, o que tiver mais de 90 dias é
+  apagado; para guardar tudo, escolha "Sempre" (a troca pede confirmação
+  quando encurta o prazo).
+- Atualizar da 2.2.0 para a 2.4.0 **preserva o histórico** (migração do
+  banco da versão 4 para a 5).
 
 Com a leitura em execução, o botão **Calibrar** zera **os dois eixos** na
 posição atual (envia comando ao ESP32 em modo real; aplica um deslocamento
@@ -140,7 +170,7 @@ taxa, onde o ruído do giroscópio é branco. Detalhes em "Modo Vibração no ei
 de pan" no `firmware/README.md`.
 
 O modo real (BLE) segue o mesmo contrato implementado no firmware do ESP32
-(`firmware/`), mas ainda não foi validado contra hardware físico.
+(`firmware/`).
 
 ## Identidade visual (Avibras Aeroco)
 

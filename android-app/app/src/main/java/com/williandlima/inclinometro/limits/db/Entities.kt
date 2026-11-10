@@ -9,6 +9,11 @@ data class SessionEntity(
     val startedAt: Long,
     val endedAt: Long? = null,
     val mode: String,
+    // v5 — a sessão é uma AQUISIÇÃO: tempo programado (nulo = livre, até o
+    // "Parar") e as versões com que foi feita, para o relatório.
+    val plannedDurationS: Int? = null,
+    val appVersion: String? = null,
+    val firmwareVersion: String? = null,
 )
 
 @Entity(tableName = "readings")

@@ -6,8 +6,11 @@ import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothProfile
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -98,11 +101,47 @@ class BleAngleDataSource(
             }
         val device = adapter.getRemoteDevice(deviceAddress)
 
-        val callback = object : BluetoothGattCallback() {
+        // As primeiras tentativas de conexão BLE falham com frequência no
+        // Android (o clássico status 133, ou o ESP32 ainda trocando de
+        // anúncio): antes a primeira falha já derrubava a leitura e o usuário
+        // tinha de tocar em "Iniciar" de novo. Enquanto nenhuma leitura
+        // chegou, tenta de novo sozinho; depois da primeira leitura, uma queda
+        // é perda de conexão de verdade e é reportada.
+        val handler = Handler(Looper.getMainLooper())
+        var attempt = 1
+        var gotReading = false
+        var finished = false
+        lateinit var callback: BluetoothGattCallback
+
+        fun connect() {
+            if (finished) return
+            gattOperationQueue.clear()
+            gattOperationInFlight = false
+            gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+        }
+
+        callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> g.discoverServices()
-                    BluetoothProfile.STATE_DISCONNECTED -> close(IOException("Conexão BLE perdida."))
+                    BluetoothProfile.STATE_DISCONNECTED -> {
+                        if (finished) return
+                        if (!gotReading && attempt < BleContract.CONNECT_ATTEMPTS) {
+                            attempt++
+                            g.close()
+                            if (gatt === g) gatt = null
+                            handler.postDelayed({ connect() }, BleContract.CONNECT_RETRY_DELAY_MS)
+                        } else if (gotReading) {
+                            close(IOException("Conexão Bluetooth perdida — verifique se o ESP32 está ligado e ao alcance."))
+                        } else {
+                            close(
+                                IOException(
+                                    "Não foi possível conectar ao ESP32 (${BleContract.CONNECT_ATTEMPTS} tentativas, " +
+                                        "status $status) — verifique se ele está ligado e ao alcance.",
+                                ),
+                            )
+                        }
+                    }
                 }
             }
 
@@ -234,6 +273,7 @@ class BleAngleDataSource(
 
             private fun emitAngleFromBytes(raw: ByteArray) {
                 val angle = decodeAngle(raw) ?: return
+                gotReading = true
                 // A notificação de tilt é o gatilho da leitura; o pan e os
                 // extremos entram com o último valor recebido — ver
                 // [BleContract]. Na janela de graça após um reset os extremos
@@ -280,9 +320,11 @@ class BleAngleDataSource(
             }
         }
 
-        gatt = device.connectGatt(context, false, callback)
+        connect()
 
         awaitClose {
+            finished = true
+            handler.removeCallbacksAndMessages(null)
             gatt?.disconnect()
             gatt?.close()
             gatt = null

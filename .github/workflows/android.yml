@@ -26,9 +26,9 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Compila o APK (debug)
+      - name: Compila o APK (debug) e roda os testes
         working-directory: android-app
-        run: ./gradlew --no-daemon assembleDebug
+        run: ./gradlew --no-daemon assembleDebug testDebugUnitTest
       - name: Versão do app
         id: versao
         run: echo "v=$(grep -oP 'versionName = "\K[0-9.]+' android-app/app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
