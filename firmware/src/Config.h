@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.28";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10628;
+constexpr char FIRMWARE_VERSION[] = "1.6.29";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10629;
 
 // Memória permanente (NVS) e watchdog — ver main.cpp.
 constexpr char NVS_NAMESPACE[] = "inclinometro";
@@ -365,14 +365,16 @@ constexpr uint16_t VIBRATION_MAX_RATE_HZ = 500;
 // está parado). Sem ZUPT, o bias viraria uma rampa de graus por minuto.
 // ============================================================================
 
-// Faixa do pan. Limita também o integrador interno (anti-windup, ver
-// PanSensor::clampIntegrator): passar do limite e voltar responde na hora.
-// 1.6.28: de ±90° para ±180°. A PTU-D300E vai a ±90° e além, e com ±90° o
-// limite CORTAVA a leitura: ir a +90° com o pan lendo 1,5% a mais (91,4°)
-// prendia em 90,0° e a volta ao zero lia −1,3° (bancada, firmware 1.6.27).
-// No protocolo cabe: int16 × ANGLE_SCALE (100) vai a ±327°.
-constexpr float PAN_MIN_DEG = -180.0f;
-constexpr float PAN_MAX_DEG = 180.0f;
+// Limite do pan: NÃO é a faixa mecânica, é só a trava contra disparo do
+// integrador (anti-windup, ver PanSensor::clampIntegrator) e o teto do
+// protocolo (int16 × ANGLE_SCALE = ±327,67°). Até a 1.6.27 era ±90°, e o
+// limite CORTAVA movimento real: ir a +90° com o pan lendo 1,5% a mais (91,4°)
+// prendia em 90,0° e a volta ao zero lia −1,3° (bancada, firmware 1.6.27). Com
+// ±320°, nenhum movimento dentro do curso da PTU-D300E (±180°, com folga para
+// erro de escala e deriva) chega perto da trava; ela só segura um integrador
+// disparado (bias muito errado, lixo no barramento).
+constexpr float PAN_MIN_DEG = -320.0f;
+constexpr float PAN_MAX_DEG = 320.0f;
 
 // Janela de avaliação do ZUPT. Também define o menor movimento preservado:
 // um deslocamento total abaixo de PAN_ZUPT_RATE_THRESHOLD_DPS * janela
@@ -578,6 +580,25 @@ constexpr uint16_t PAN_BIAS_RELEARN_WINDOWS = 20;
 // aceita-se resíduo maior, como antes, para não ficar preso num bias de boot
 // errado.
 constexpr float PAN_BIAS_RELEARN_RESIDUAL_DPS = 0.05f;
+// Com o bias JÁ CONFIRMADO, o reaprendizado só vale se a troca de bias for
+// fisicamente possível desde a última janela parada: o zero do giro só anda
+// por deriva, no máximo PAN_BIAS_SLOPE_MAX_DPS2 por segundo, mais
+// PAN_BIAS_RELEARN_MAX_JUMP_DPS de folga. Sem isso (até a 1.6.28), um giro
+// CONTÍNUO a velocidade constante por mais de 20 s — 360° a 12°/s, ou 120° a
+// 5°/s — passava por "parado sob bias errado": o firmware adotava a
+// velocidade do giro como bias, apagava o que tinha integrado e passava a
+// girar ao contrário (simulado: leitura em −320° com o eixo em +320°).
+//
+// A trava só vale para bias CONFIRMADO DE VERDADE: pelo menos
+// PAN_BIAS_TRUST_STILL_WINDOWS janelas paradas desde que ele foi adotado. O
+// "confirmado" da adoção não basta: ligar com o eixo girando devagar e
+// constante (cenário G) adota a velocidade do giro como bias, com as duas
+// janelas da adoção perfeitamente coerentes — e é exatamente esse bias
+// errado que o reaprendizado existe para corrigir. Um giro no boot só engana
+// esta regra se durar mais que a adoção (2 s) + estas janelas (5 s); a
+// premissa do firmware é a placa parada ~2 s ao ligar.
+constexpr float PAN_BIAS_RELEARN_MAX_JUMP_DPS = 0.3f;
+constexpr uint16_t PAN_BIAS_TRUST_STILL_WINDOWS = 5;
 constexpr float PAN_BIAS_RELEARN_RESIDUAL_PROVISIONAL_DPS = 0.5f;
 // Sob vibração as médias ondulam em torno da reta; o limite de resíduo
 // cresce com a medida de vibração das janelas (a mesma de

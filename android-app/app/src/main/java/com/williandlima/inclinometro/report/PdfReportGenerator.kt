@@ -8,8 +8,7 @@ import com.williandlima.inclinometro.datasource.ANGLE_MAX_DEG
 import com.williandlima.inclinometro.datasource.ANGLE_MIN_DEG
 import com.williandlima.inclinometro.datasource.AngleReading
 import com.williandlima.inclinometro.datasource.ConnectionMode
-import com.williandlima.inclinometro.datasource.PAN_MAX_DEG
-import com.williandlima.inclinometro.datasource.PAN_MIN_DEG
+import com.williandlima.inclinometro.datasource.PAN_CHART_DEG
 import com.williandlima.inclinometro.limits.LimitAxis
 import com.williandlima.inclinometro.limits.LimitEvent
 import com.williandlima.inclinometro.limits.LimitKind
@@ -294,12 +293,16 @@ object PdfReportGenerator {
 
         if (readings.isEmpty()) return
 
-        // Escala fixa por eixo (e não autoescala): assim uma variação de
-        // décimos de grau não ocupa o gráfico inteiro e parece enorme.
-        val (rangeMin, rangeMax) = when (axis) {
-            LimitAxis.PAN -> PAN_MIN_DEG to PAN_MAX_DEG
+        // Escala fixa por eixo (e não autoescala), expandida só se os dados
+        // passarem dela — ver ChartScale. Para o pan, a faixa de uso típica
+        // (PAN_CHART_DEG), e não o limite do firmware.
+        val (fixedLo, fixedHi) = when (axis) {
+            LimitAxis.PAN -> -PAN_CHART_DEG to PAN_CHART_DEG
             LimitAxis.TILT -> ANGLE_MIN_DEG to ANGLE_MAX_DEG
         }
+        val chartValues = readings.mapNotNull { axisValue(it, axis) } +
+            events.filter { it.axis == axis }.map { it.valueDeg }
+        val (rangeMin, rangeMax) = ChartScale.range(fixedLo, fixedHi, chartValues)
         val lineColor = when (axis) {
             LimitAxis.PAN -> Color.rgb(148, 103, 189)
             LimitAxis.TILT -> Color.rgb(31, 119, 180)

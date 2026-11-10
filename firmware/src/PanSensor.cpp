@@ -418,6 +418,8 @@ void PanSensor::closeWindow(uint32_t now) {
         _panDeg -= _windowDeltaDeg;
         clampIntegrator();
         _biasConfirmed = true;
+        _lastStillMs = now;
+        if (_stillSinceAdopt < 0xFFFF) _stillSinceAdopt++;
         _relearnCount = 0;
         _relearnTiltDeg = 0.0f;
     } else {
@@ -445,7 +447,7 @@ void PanSensor::closeWindow(uint32_t now) {
         } else {
             pushRelearnWindow(mean, _windowDeltaDeg, spreadDps);
             pushExcursion({mean, _windowDeltaDeg, winS, _lastUp, spreadDps, usedDev, usedBias, now, quiet});
-            tryRelearn(winS);
+            tryRelearn(winS, now);
             if (_excCount > 0) {  // tryRelearn() não adotou
                 tryShiftEscape();
             }
@@ -704,7 +706,7 @@ LineFit fitLine(int n, At at) {
 }
 }  // namespace
 
-void PanSensor::tryRelearn(float winS) {
+void PanSensor::tryRelearn(float winS, uint32_t now) {
     if (_relearnCount < RELEARN_LEN) {
         return;
     }
@@ -726,13 +728,24 @@ void PanSensor::tryRelearn(float winS) {
     if (fit.rms >= limit) {
         return;
     }
+    float tEnd = (n - 1) - 0.5f * (n - 1) + 0.5f;
+    const Vec3 newBias = fit.mean + tEnd * fit.slope;
+    if (_stillSinceAdopt >= PAN_BIAS_TRUST_STILL_WINDOWS) {
+        // Bias confirmado por janelas paradas só muda por deriva: uma troca
+        // maior que a deriva possível desde a última janela parada é giro
+        // contínuo, não bias errado (ver PAN_BIAS_RELEARN_MAX_JUMP_DPS).
+        const float ageS = (now - _lastStillMs) / 1000.0f;
+        const float allowed = PAN_BIAS_RELEARN_MAX_JUMP_DPS + PAN_BIAS_SLOPE_MAX_DPS2 * ageS;
+        if (fabsf(projectedDps(newBias - _bias, _lastUp)) > allowed) {
+            return;
+        }
+    }
     // Parado sob bias errado: desfaz o que essas janelas integraram e adota
     // o bias da reta no fim da última janela (a média dela é o meio).
     _panDeg -= erase;
     clampIntegrator();
-    float tEnd = (n - 1) - 0.5f * (n - 1) + 0.5f;
     float perS = winS > 0.0f ? 1.0f / winS : 0.0f;
-    adoptBias(fit.mean + tEnd * fit.slope, clampSlope(perS * fit.slope), false);
+    adoptBias(newBias, clampSlope(perS * fit.slope), false);
 }
 
 void PanSensor::learnWander(Vec3 step) {
@@ -893,6 +906,7 @@ void PanSensor::adoptBias(Vec3 bias, Vec3 slope, bool confirmed) {
     _bias = bias;
     _biasReady = true;
     _biasConfirmed = confirmed;
+    _stillSinceAdopt = 0;
     _hasPrevIntegRate = false;
     _biasSlope = slope;
     _sinceStillS = 0.0f;

@@ -66,6 +66,54 @@ int main() {
         // janela parada; o limite é mais largo ali.
         if (fabs(e) > (c[3] > 0 ? 2.0 : 0.5)) { printf("  FALHOU\n"); failures++; }
     }
+    // Trava do integrador (anti-windup, PanSensor::clampIntegrator): um giro
+    // que passa de PAN_MAX_DEG fica preso no limite, e a volta responde NA HORA
+    // (não precisa "descontar" o excesso). Não é uso real — o limite está bem
+    // além do curso da PTU —, é a rede de segurança contra integrador disparado.
+    {
+        Mpu6050 mpu; PanSensor pan(mpu);
+        uint32_t ms = 0;
+        auto step = [&]() { g_now_us = (uint64_t)ms * 1000; pan.update(); ms++; };
+        auto turn = [&](double deg) {   // 40°/s, depois 5 s parado
+            g_panRate = deg > 0 ? 40 : -40;
+            for (int i = 0; i < fabs(deg) / 40 * 1000; i++) step();
+            g_panRate = 0;
+            for (int i = 0; i < 5000; i++) step();
+        };
+        RING = 0; ringT0 = -1e9; rng.seed(5);
+        for (int i = 0; i < 20000; i++) step();
+        double p0 = pan.readPanDeg();
+        turn(PAN_MAX_DEG + 25);              // passa 25° do limite
+        double atLimit = pan.readPanDeg() - p0;
+        turn(-(PAN_MAX_DEG + 25 + 50));      // volta até 50° do outro lado do zero da verdade
+        double back = pan.readPanDeg() - p0;
+        // O excesso de 25° além do limite se perde (por desenho); o resto da
+        // volta tem de aparecer inteiro: 320 - 395 = -75.
+        const bool ok = fabs(atLimit - PAN_MAX_DEG) < 0.1 && fabs(back - (PAN_MAX_DEG - (PAN_MAX_DEG + 75))) < 0.5;
+        printf("  trava em ±%.0f°: ida a +%.0f° lê %+.2f°; volta de %.0f° lê %+.2f° (esperado %+.0f°)%s\n", PAN_MAX_DEG,
+               PAN_MAX_DEG + 25, atLimit, PAN_MAX_DEG + 75, back, -75.0, ok ? "" : "  FALHOU");
+        if (!ok) failures++;
+    }
+    // Giro CONTÍNUO longo (mais de 20 janelas de 1 s a velocidade constante):
+    // até a 1.6.28 o reaprendizado do bias o tomava por "parado sob bias
+    // errado", adotava a velocidade do giro como bias e a leitura disparava ao
+    // contrário. Desde a 1.6.29 a troca de bias tem de caber na deriva física.
+    for (const double *c : {(const double[]){300, 12}, (const double[]){120, 5}, (const double[]){-300, 10}}) {
+        Mpu6050 mpu; PanSensor pan(mpu);
+        uint32_t ms = 0;
+        auto step = [&]() { g_now_us = (uint64_t)ms * 1000; pan.update(); ms++; };
+        RING = 0; ringT0 = -1e9; rng.seed(7);
+        for (int i = 0; i < 20000; i++) step();
+        double p0 = pan.readPanDeg();
+        g_panRate = c[0] > 0 ? c[1] : -c[1];
+        for (int i = 0; i < fabs(c[0]) / c[1] * 1000; i++) step();
+        g_panRate = 0;
+        for (int i = 0; i < 10000; i++) step();
+        const double err = pan.readPanDeg() - p0 - c[0];
+        const bool ok = fabs(err) < 0.5;
+        printf("  giro contínuo de %+.0f° a %.0f°/s (%.0f s): erro %+.2f°%s\n", c[0], c[1], fabs(c[0]) / c[1], err, ok ? "" : "  FALHOU");
+        if (!ok) failures++;
+    }
     printf(failures ? "VAIVÉM: HOUVE FALHA\n" : "VAIVÉM: TUDO OK\n");
     return failures ? 1 : 0;
 }

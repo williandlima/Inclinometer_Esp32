@@ -5,12 +5,15 @@ const val ANGLE_MIN_DEG = -60.0
 const val ANGLE_MAX_DEG = 60.0
 
 /**
- * Faixa do eixo de azimute (pan). Espelha `PAN_MIN_DEG`/`PAN_MAX_DEG` de
- * `firmware/src/Config.h` — ainda é um placeholder ali, a ajustar quando a
- * mecânica do pan estiver definida.
+ * Limite do azimute (pan). Espelha `PAN_MIN_DEG`/`PAN_MAX_DEG` de
+ * `firmware/src/Config.h`: não é a faixa mecânica, é a trava do integrador e o
+ * teto do protocolo (int16 × 100 = ±327,67°). A simulação percorre
+ * [PAN_SIM_TRAVEL_DEG]; os gráficos partem de [PAN_CHART_DEG].
  */
-const val PAN_MIN_DEG = -180.0
-const val PAN_MAX_DEG = 180.0
+const val PAN_MIN_DEG = -320.0
+const val PAN_MAX_DEG = 320.0
+const val PAN_SIM_TRAVEL_DEG = 90.0
+const val PAN_CHART_DEG = 95.0
 
 /**
  * Uma leitura dos eixos do inclinômetro.
