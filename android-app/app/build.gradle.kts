@@ -24,8 +24,8 @@ android {
         applicationId = "com.williandlima.inclinometro.doiseixos"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "2.2.0"
+        versionCode = 5
+        versionName = "2.4.0"
     }
 
     buildFeatures {
@@ -57,4 +57,6 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    testImplementation("junit:junit:4.13.2")
 }

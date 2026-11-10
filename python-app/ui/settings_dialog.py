@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from limits.history_store import DEFAULT_RETENTION_DAYS, RETENTION_OPTIONS_DAYS
 from ui.angle_display import DEFAULT_DISPLAY_STEP_DEG, DISPLAY_STEPS_DEG, normalize_step, step_label
 
 try:
@@ -40,6 +41,9 @@ class AppSettings:
     # (load_display_steps/save_display_steps).
     tilt_display_step_deg: float = DEFAULT_DISPLAY_STEP_DEG
     pan_display_step_deg: float = DEFAULT_DISPLAY_STEP_DEG
+    # Por quantos dias o histórico (leituras, eventos, capturas de vibração)
+    # é mantido; None = sempre. Ver HistoryStore.prune().
+    history_retention_days: int | None = DEFAULT_RETENTION_DAYS
 
 
 # Onde a resolução de exibição fica guardada entre sessões: um arquivo .ini
@@ -61,6 +65,13 @@ def load_display_steps(settings: AppSettings) -> AppSettings:
         except (TypeError, ValueError):
             continue
         setattr(settings, key, normalize_step(value))
+    # 0 gravado = "manter sempre"; valor fora da lista volta ao padrão.
+    try:
+        days = int(store.value("historico/retencao_dias", DEFAULT_RETENTION_DAYS))
+    except (TypeError, ValueError):
+        days = DEFAULT_RETENTION_DAYS
+    retention = None if days == 0 else days
+    settings.history_retention_days = retention if retention in RETENTION_OPTIONS_DAYS else DEFAULT_RETENTION_DAYS
     return settings
 
 
@@ -68,7 +79,14 @@ def save_display_steps(settings: AppSettings) -> None:
     store = _store()
     store.setValue("exibicao/tilt_display_step_deg", settings.tilt_display_step_deg)
     store.setValue("exibicao/pan_display_step_deg", settings.pan_display_step_deg)
+    store.setValue("historico/retencao_dias", settings.history_retention_days or 0)
     store.sync()
+
+
+def retention_label(days: int | None) -> str:
+    if days is None:
+        return "Sempre (nunca apagar)"
+    return f"{days} dias" if days < 365 else "1 ano"
 
 
 class SettingsDialog(QDialog):
@@ -76,7 +94,7 @@ class SettingsDialog(QDialog):
     _port_detected = pyqtSignal(str, str)  # porta encontrada (vazio se não achou), erro
     _test_finished = pyqtSignal(bool, str)  # sucesso, texto do resultado
 
-    def __init__(self, current: AppSettings, parent=None) -> None:
+    def __init__(self, current: AppSettings, parent=None, history_info: str = "") -> None:
         super().__init__(parent)
         self.setWindowTitle("Configurações")
         self._devices_found.connect(self._on_devices_found)
@@ -153,6 +171,22 @@ class SettingsDialog(QDialog):
         form.addRow(self.ble_row_label, ble_row)
         form.addRow("Resolução da inclinação:", self.tilt_resolution_combo)
         form.addRow("Resolução do azimute:", self.pan_resolution_combo)
+
+        # --- Histórico ---
+        self.retention_combo = QComboBox()
+        for days in RETENTION_OPTIONS_DAYS:
+            self.retention_combo.addItem(retention_label(days), days)
+        idx = self.retention_combo.findData(current.history_retention_days)
+        self.retention_combo.setCurrentIndex(idx if idx >= 0 else self.retention_combo.findData(DEFAULT_RETENTION_DAYS))
+        self.retention_combo.setToolTip(
+            "Aquisições e capturas de vibração mais antigas que isso são apagadas ao abrir o app "
+            "e ao confirmar esta janela. Gere o PDF do que precisar guardar antes."
+        )
+        form.addRow("Manter histórico por:", self.retention_combo)
+        self.history_info_label = QLabel(history_info) if history_info else None
+        if self.history_info_label is not None:
+            self.history_info_label.setStyleSheet("color: #9aa7b5;")
+            form.addRow("", self.history_info_label)
 
         self.test_btn = QPushButton("Testar conexão com ESP32")
         self.test_btn.clicked.connect(self._test_connection)
@@ -336,4 +370,5 @@ class SettingsDialog(QDialog):
             ble_address=ble_address,
             tilt_display_step_deg=self.tilt_resolution_combo.currentData(),
             pan_display_step_deg=self.pan_resolution_combo.currentData(),
+            history_retention_days=self.retention_combo.currentData(),
         )

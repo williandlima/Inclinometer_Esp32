@@ -12,33 +12,49 @@ import com.williandlima.inclinometro.datasource.BleContract
 import com.williandlima.inclinometro.datasource.BleScanner
 import com.williandlima.inclinometro.datasource.ConnectionMode
 import com.williandlima.inclinometro.datasource.SimulatedAngleDataSource
+import com.williandlima.inclinometro.limits.DEFAULT_RETENTION_DAYS
+import com.williandlima.inclinometro.limits.HistoryExport
 import com.williandlima.inclinometro.limits.HistoryRepository
+import com.williandlima.inclinometro.limits.RETENTION_OPTIONS_DAYS
+import com.williandlima.inclinometro.limits.SessionSummary
+import com.williandlima.inclinometro.limits.retentionLabel
 import com.williandlima.inclinometro.limits.LimitAxis
 import com.williandlima.inclinometro.limits.LimitKind
 import com.williandlima.inclinometro.limits.LimitTracker
 import com.williandlima.inclinometro.limits.VibrationStats
 import com.williandlima.inclinometro.limits.VibrationStatsCalculator
 import com.williandlima.inclinometro.limits.db.AppDatabase
+import com.williandlima.inclinometro.report.Acquisition
 import com.williandlima.inclinometro.report.PdfReportGenerator
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Estado da conexão exibido na UI, mesma semântica do app desktop
- * (`_CONN_STYLES` em `python-app/ui/main_window.py`). */
-enum class ConnectionStatus { PARADO, CONECTANDO, CONECTADO, ERRO, SIMULACAO }
+/**
+ * Estado da conexão exibido na UI, mesma semântica do app desktop
+ * (`_CONN_STYLES` em `python-app/ui/main_window.py`). CONECTADO (verde)
+ * significa DADOS CHEGANDO do ESP32 — não "o botão Iniciar foi tocado". Se as
+ * leituras param sem a pilha Bluetooth avisar (ESP32 desligado, fora de
+ * alcance), o estado vira SEM_DADOS em ~2 s.
+ */
+enum class ConnectionStatus { PARADO, CONECTANDO, CONECTADO, SEM_DADOS, ERRO, SIMULACAO }
+
+// Sem leitura há mais que isto, com a leitura em execução: sai do verde.
+private const val DATA_TIMEOUT_MS = 2000L
+// Pausa antes de tentar reconectar depois de uma queda.
+private const val RECONNECT_DELAY_MS = 2000L
 
 // Exibição da leitura contínua: degrau por eixo (0,25° padrão ou 0,1°), com
 // histerese — a regra mora em AngleDisplay.kt, a mesma do app desktop. Nada
@@ -49,6 +65,15 @@ enum class ConnectionStatus { PARADO, CONECTANDO, CONECTADO, ERRO, SIMULACAO }
 private const val PREFS_NAME = "inclinometro"
 private const val PREF_TILT_STEP = "exibicao_tilt_step_deg"
 private const val PREF_PAN_STEP = "exibicao_pan_step_deg"
+private const val PREF_RETENTION_DAYS = "historico_retencao_dias"  // 0 = sempre
+private const val PREF_PLANNED_S = "aquisicao_tempo_programado_s"  // 0 = livre
+
+/** Valor gravado -> opção de retenção: 0 = sempre; fora da lista = padrão. */
+private fun storedRetentionDays(stored: Int): Int? = when {
+    stored <= 0 -> null
+    stored in RETENTION_OPTIONS_DAYS -> stored
+    else -> DEFAULT_RETENTION_DAYS
+}
 
 data class UiState(
     val mode: ConnectionMode = ConnectionMode.SIMULATED,
@@ -92,6 +117,19 @@ data class UiState(
     // Nulo quando a captura veio de firmware anterior à v1.3.0, que não
     // amostra azimute no Modo Vibração.
     val vibrationPanResult: VibrationStats? = null,
+    // Aquisição para o relatório (ver report/Acquisition.kt): tempo
+    // programado (null = livre), cronômetro e leituras da aquisição atual.
+    val plannedDurationS: Int? = null,
+    val acqElapsedS: Long = 0,
+    val acqReadings: Int = 0,
+    val lastAcquisitionText: String = "nenhuma aquisição registrada ainda",
+    // Preenchido quando uma aquisição programada chega ao fim: a tela
+    // oferece gerar o relatório.
+    val acqFinishedMessage: String? = null,
+    // Histórico: null = janela fechada.
+    val history: List<SessionSummary>? = null,
+    val historyInfo: String = "",
+    val retentionDays: Int? = DEFAULT_RETENTION_DAYS,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -111,9 +149,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             panDisplayStepDeg = AngleDisplay.normalize(
                 prefs.getFloat(PREF_PAN_STEP, AngleDisplay.DEFAULT_STEP_DEG.toFloat()).toDouble(),
             ),
+            retentionDays = storedRetentionDays(prefs.getInt(PREF_RETENTION_DAYS, DEFAULT_RETENTION_DAYS)),
+            plannedDurationS = prefs.getInt(PREF_PLANNED_S, 0).takeIf { it in Acquisition.DURATIONS_S },
         ),
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    private val appVersion: String = runCatching {
+        application.packageManager.getPackageInfo(application.packageName, 0).versionName
+    }.getOrNull() ?: "?"
 
     private var collectJob: Job? = null
     private var vibrationJob: Job? = null
@@ -121,6 +165,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var testJob: Job? = null
     private var currentSessionId: Long? = null
     private var currentSource: AngleDataSource? = null
+    private var tickJob: Job? = null
+    private var acqStartedAt: Long = 0L
+    private var lastReadingAt: Long = 0L
+    private var sessionFirmwareSaved = false
+
+    init {
+        // Limpeza do histórico ao abrir o app (ver HistoryRepository.prune).
+        viewModelScope.launch {
+            val removed = runCatching { repository.prune(_uiState.value.retentionDays, keepSessionId = null) }.getOrNull()
+            refreshLastAcquisition()
+            if (removed != null && !removed.nothing) {
+                _uiState.update { it.copy(statusMessage = pruneMessage(removed)) }
+            }
+        }
+    }
 
     private var lastVibrationCaptureId: Long? = null
     private var lastVibrationReadings: List<AngleReading> = emptyList()
@@ -231,8 +290,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         tracker.reset()
         panTracker.reset()
-        viewModelScope.launch {
-            currentSessionId = repository.startSession(mode)
+        collectJob = viewModelScope.launch {
+            beginAcquisition(mode)
             _uiState.update {
                 it.copy(
                     running = true,
@@ -245,7 +304,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     panAvailable = true,
                     firmwareVersion = null,
                     firmwareOutdated = false,
-                    statusMessage = "Conectado: ${source.label}",
+                    acqFinishedMessage = null,
+                    // "Conectado" só quando a primeira leitura chegar.
+                    statusMessage = if (mode == ConnectionMode.SIMULATED) {
+                        "Simulação em execução."
+                    } else {
+                        "Conectando a ${source.label}..."
+                    },
                     connectionStatus = if (mode == ConnectionMode.SIMULATED) {
                         ConnectionStatus.SIMULACAO
                     } else {
@@ -253,19 +318,96 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     },
                 )
             }
-            collectJob = source.readings()
-                .catch { e ->
+            startTicker()
+            // Em BLE, uma queda não encerra a leitura: o app avisa (vermelho)
+            // e fica tentando reconectar até o usuário tocar em "Parar".
+            while (isActive) {
+                try {
+                    source.readings().collect { reading -> onReading(reading) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
                     _uiState.update { s ->
                         s.copy(
-                            statusMessage = "Erro: ${e.message}",
-                            connectionStatus = if (s.mode == ConnectionMode.REAL) ConnectionStatus.ERRO else s.connectionStatus,
+                            statusMessage = "Erro: ${e.message}" +
+                                if (mode == ConnectionMode.REAL) " Tentando reconectar..." else "",
+                            connectionStatus = if (mode == ConnectionMode.REAL) ConnectionStatus.ERRO else s.connectionStatus,
                         )
                     }
                 }
-                .onEach { reading -> onReading(reading) }
-                .launchIn(viewModelScope)
+                if (mode != ConnectionMode.REAL) break
+                delay(RECONNECT_DELAY_MS)
+            }
         }
     }
+
+    /** Abre uma aquisição nova no histórico (é ela que vai para o PDF). */
+    private suspend fun beginAcquisition(mode: ConnectionMode) {
+        currentSessionId = repository.startSession(mode, _uiState.value.plannedDurationS, appVersion)
+        sessionFirmwareSaved = false
+        acqStartedAt = System.currentTimeMillis()
+        _uiState.update { it.copy(acqElapsedS = 0, acqReadings = 0) }
+    }
+
+    /**
+     * Relógio da leitura em execução, 2 vezes por segundo: cronômetro da
+     * aquisição, fim do tempo programado e vigia de dados (sai do verde se as
+     * leituras pararem de chegar).
+     */
+    private fun startTicker() {
+        tickJob?.cancel()
+        tickJob = viewModelScope.launch {
+            while (isActive) {
+                delay(500)
+                val state = _uiState.value
+                if (!state.running) break
+                val now = System.currentTimeMillis()
+                val elapsedS = (now - acqStartedAt) / 1000
+                if (elapsedS != state.acqElapsedS) {
+                    _uiState.update { it.copy(acqElapsedS = elapsedS) }
+                }
+                if (state.connectionStatus == ConnectionStatus.CONECTADO && now - lastReadingAt > DATA_TIMEOUT_MS) {
+                    _uiState.update {
+                        it.copy(
+                            connectionStatus = ConnectionStatus.SEM_DADOS,
+                            statusMessage = "Sem leituras do ESP32 há ${(now - lastReadingAt) / 1000} s — verificando a conexão...",
+                        )
+                    }
+                }
+                val planned = state.plannedDurationS
+                if (planned != null && elapsedS >= planned) {
+                    stop("Aquisição de ${Acquisition.formatPlanned(planned)} concluída.", offerReport = true)
+                    break
+                }
+            }
+        }
+    }
+
+    /** Tempo programado da próxima aquisição (null = livre). Só com a leitura parada. */
+    fun setPlannedDuration(seconds: Int?) {
+        if (_uiState.value.running) return
+        prefs.edit().putInt(PREF_PLANNED_S, seconds ?: 0).apply()
+        _uiState.update { it.copy(plannedDurationS = seconds) }
+    }
+
+    fun dismissAcquisitionFinished() {
+        _uiState.update { it.copy(acqFinishedMessage = null) }
+    }
+
+    private suspend fun refreshLastAcquisition() {
+        val last = runCatching { repository.listSessionSummaries().firstOrNull() }.getOrNull()
+        val text = if (last == null) {
+            "nenhuma aquisição registrada ainda"
+        } else {
+            val acq = Acquisition.summarize(last.info, repository.getReadings(last.info.id))
+            "última: ${shortDate(last.info.startedAt)}, ${Acquisition.formatDuration(acq.durationS)}, " +
+                "${acq.nReadings} leituras"
+        }
+        _uiState.update { it.copy(lastAcquisitionText = text) }
+    }
+
+    private fun shortDate(millis: Long): String =
+        java.text.SimpleDateFormat("dd/MM HH:mm:ss", java.util.Locale.US).format(java.util.Date(millis))
 
     /** Arredonda para o degrau de exibição, com histerese para não alternar
      * entre dois degraus quando o valor fica na fronteira. */
@@ -295,12 +437,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun onReading(reading: AngleReading) {
+        // Leitura atrasada de uma fonte já parada: não vai para a tela nem
+        // para o histórico.
+        if (!_uiState.value.running) return
         val sessionId = currentSessionId ?: return
         repository.addReading(sessionId, reading)
+        lastReadingAt = System.currentTimeMillis()
         val pan = reading.panDeg
         val firmware = currentSource?.firmwareVersion
+        if (firmware != null && !sessionFirmwareSaved) {
+            sessionFirmwareSaved = true
+            repository.setFirmwareVersion(sessionId, firmware)
+        }
+        val source = currentSource
         _uiState.update {
             it.copy(
+                acqReadings = it.acqReadings + 1,
+                // Voltou a chegar dado: o aviso de falha/sem dados sai da tela.
+                statusMessage = if (it.mode == ConnectionMode.REAL && it.connectionStatus != ConnectionStatus.CONECTADO) {
+                    "Conectado: ${source?.label ?: ""}"
+                } else {
+                    it.statusMessage
+                },
                 firmwareVersion = firmware,
                 firmwareOutdated = BleContract.firmwareOutdated(firmware),
                 currentAngle = reading.angleDeg,
@@ -357,25 +515,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun stop() {
+    private fun stop(message: String = "Parado.", offerReport: Boolean = false) {
         collectJob?.cancel()
         collectJob = null
+        tickJob?.cancel()
+        tickJob = null
         vibrationJob?.cancel()
         vibrationJob = null
         currentSource = null
         val sessionId = currentSessionId
+        currentSessionId = null
+        // `running = false` já aqui, e não dentro da coroutine: uma leitura
+        // que ainda esteja na fila é descartada por onReading().
+        _uiState.update {
+            it.copy(
+                running = false,
+                displayAngle = null,
+                displayPan = null,
+                firmwareVersion = null,
+                firmwareOutdated = false,
+                statusMessage = message,
+                connectionStatus = ConnectionStatus.PARADO,
+            )
+        }
         viewModelScope.launch {
             sessionId?.let { repository.endSession(it) }
-            _uiState.update {
-                it.copy(
-                    running = false,
-                    displayAngle = null,
-                    displayPan = null,
-                    firmwareVersion = null,
-                    firmwareOutdated = false,
-                    statusMessage = "Parado.",
-                    connectionStatus = ConnectionStatus.PARADO,
-                )
+            refreshLastAcquisition()
+            if (offerReport) {
+                _uiState.update { it.copy(acqFinishedMessage = message) }
             }
         }
     }
@@ -399,9 +566,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             tracker.reset()
             panTracker.reset()
 
-            if (wasRunning) {
+            if (wasRunning && _uiState.value.running) {
                 currentSessionId?.let { repository.endSession(it) }
-                currentSessionId = repository.startSession(mode)
+                beginAcquisition(mode)
+                currentSource?.firmwareVersion?.let { fw ->
+                    currentSessionId?.let { id -> repository.setFirmwareVersion(id, fw) }
+                    sessionFirmwareSaved = true
+                }
             }
             _uiState.update {
                 it.copy(
@@ -410,7 +581,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     panMinReading = null,
                     panMaxReading = null,
                     statusMessage = if (wasRunning) {
-                        "Limites resetados (histórico anterior preservado)."
+                        "Limites resetados — nova aquisição iniciada; o relatório começa a partir daqui."
                     } else {
                         "Limites resetados."
                     },
@@ -419,15 +590,103 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    suspend fun generateReportFile(): File? = reportOrNull {
-        val sessionId = currentSessionId ?: repository.listSessions().firstOrNull()?.id ?: run {
-            _uiState.update { it.copy(statusMessage = "Ainda não há nenhuma sessão registrada.") }
+    /**
+     * Relatório de uma aquisição: a indicada (janela de Histórico), ou a
+     * atual com a leitura em andamento, ou a última que tem leituras.
+     */
+    suspend fun generateReportFile(sessionId: Long? = null): File? = reportOrNull {
+        val id = sessionId ?: currentSessionId ?: repository.latestSessionWithReadings()?.id ?: run {
+            _uiState.update { it.copy(statusMessage = "Ainda não há nenhuma aquisição registrada.") }
             return@reportOrNull null
         }
-        val session = repository.getSession(sessionId) ?: return@reportOrNull null
-        val readings = repository.getReadings(sessionId)
-        val events = repository.getLimitEvents(sessionId)
+        val session = repository.getSession(id) ?: return@reportOrNull null
+        val readings = repository.getReadings(id)
+        if (readings.isEmpty()) {
+            _uiState.update {
+                it.copy(
+                    statusMessage = "A aquisição atual ainda não tem leituras — aguarde a conexão com o ESP32 " +
+                        "(ou ela foi reiniciada agora por \"Resetar limites\"/\"Calibrar\").",
+                )
+            }
+            return@reportOrNull null
+        }
+        val events = repository.getLimitEvents(id)
         PdfReportGenerator.generate(getApplication(), session, readings, events)
+    }
+
+    // ------------------------------------------------------------- histórico
+
+    fun openHistory() {
+        viewModelScope.launch { refreshHistory() }
+    }
+
+    fun closeHistory() {
+        _uiState.update { it.copy(history = null) }
+    }
+
+    private suspend fun refreshHistory() {
+        val rows = repository.listSessionSummaries()
+        val total = repository.countAllReadings()
+        val dbFile = getApplication<Application>().getDatabasePath("inclinometro.db")
+        val megabytes = dbFile.length() / 1e6
+        _uiState.update {
+            it.copy(
+                history = rows,
+                historyInfo = "${rows.size} aquisições com leituras — $total leituras, %.1f MB.".format(megabytes),
+            )
+        }
+    }
+
+    /** Apaga uma aquisição do histórico. A que está em andamento não pode ser apagada. */
+    fun deleteSession(sessionId: Long) {
+        if (sessionId == currentSessionId) return
+        viewModelScope.launch {
+            repository.deleteSession(sessionId)
+            refreshHistory()
+            refreshLastAcquisition()
+            _uiState.update { it.copy(statusMessage = "Aquisição apagada do histórico.") }
+        }
+    }
+
+    /** CSV das leituras de uma aquisição (abre no Excel em português). */
+    suspend fun exportCsvFile(sessionId: Long): File? = reportOrNull {
+        val session = repository.getSession(sessionId) ?: return@reportOrNull null
+        val csv = HistoryExport.sessionCsv(session, repository.getReadings(sessionId), repository.getLimitEvents(sessionId))
+        withContext(Dispatchers.IO) {
+            val dir = File(getApplication<Application>().getExternalFilesDir(null), "relatorios").apply { mkdirs() }
+            File(dir, "aquisicao_${sessionId}_${System.currentTimeMillis()}.csv").apply { writeText(csv) }
+        }
+    }
+
+    /**
+     * Troca o "Manter histórico por" e já aplica a limpeza (a tela pede
+     * confirmação antes, porque encurtar o prazo apaga aquisições antigas).
+     */
+    fun setRetentionDays(days: Int?) {
+        prefs.edit().putInt(PREF_RETENTION_DAYS, days ?: 0).apply()
+        _uiState.update { it.copy(retentionDays = days) }
+        viewModelScope.launch {
+            val removed = repository.prune(days, keepSessionId = currentSessionId)
+            if (_uiState.value.history != null) refreshHistory()
+            refreshLastAcquisition()
+            _uiState.update {
+                it.copy(
+                    statusMessage = if (removed.nothing) {
+                        "Histórico mantido por: ${retentionLabel(days)}."
+                    } else {
+                        pruneMessage(removed)
+                    },
+                )
+            }
+        }
+    }
+
+    private fun pruneMessage(removed: com.williandlima.inclinometro.limits.PruneResult): String {
+        val parts = mutableListOf<String>()
+        if (removed.sessions > 0) parts += "${removed.sessions} aquisição(ões) (${removed.readings} leituras)"
+        if (removed.captures > 0) parts += "${removed.captures} captura(s) de vibração"
+        return "Histórico limpo: ${parts.joinToString(" e ")} com mais de " +
+            "${retentionLabel(_uiState.value.retentionDays)} foram apagadas."
     }
 
     /**
@@ -567,6 +826,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         collectJob?.cancel()
+        tickJob?.cancel()
         vibrationJob?.cancel()
         scanJob?.cancel()
         testJob?.cancel()

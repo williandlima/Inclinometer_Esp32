@@ -3,6 +3,10 @@
 # (firmware/src) no computador, contra um MPU6050 e uma lib BLE simulados
 # (mock/), e dirige a captura de vibração com o código REAL do app Python.
 #   pan_sim         -> pan com mudanças de posição da placa e bias de fábrica
+#   tilt_sim        -> fusão giroscópio + acelerômetro no tilt (1.6.23),
+#                      lado a lado com o método só do acelerômetro
+#   nvs_sim         -> zero do tilt salvo na memória permanente (calibra,
+#                      "desliga e religa" e confere) e watchdog do loop
 #   soak_sim        -> firmware inteiro (com o driver I2C real) por 30 min
 #                      simulados x SOAK_SEEDS sementes, contra um MPU6050
 #                      emulado com falhas de hardware injetadas (ver o
@@ -42,6 +46,14 @@ g++ $FLAGS soak_sim.cpp $SRC/main.cpp $SRC/Mpu6050.cpp $SRC/BleServer.cpp $SRC/V
     $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp $SRC/ModbusSlave.cpp -o "$OUT/soak_sim"
 "$OUT/pan_sim"
 echo
+g++ $FLAGS tilt_sim.cpp $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp -o "$OUT/tilt_sim"
+"$OUT/tilt_sim"
+echo
+g++ $FLAGS nvs_sim.cpp $SRC/main.cpp $SRC/BleServer.cpp $SRC/VibrationCapture.cpp \
+    $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp $SRC/ModbusSlave.cpp -o "$OUT/nvs_sim"
+NVS_MOCK_FILE="$OUT/nvs.txt" "$OUT/nvs_sim" calibra
+NVS_MOCK_FILE="$OUT/nvs.txt" "$OUT/nvs_sim" religa
+echo
 "$OUT/soak_sim" "${SOAK_SEEDS:-20}"
 echo
 python3 e2e_vibration.py "$OUT/fw_sim"
@@ -53,6 +65,8 @@ echo
 python3 conexao_test.py 2>/dev/null
 echo
 python3 ../python-app/tools/calibra_tilt.py --autoteste | tail -1
+python3 ../python-app/tools/calibra_pan.py --autoteste | tail -1
+python3 ../python-app/tools/allan_pan.py --autoteste | tail -1
 # Mesma regra no app Android (AngleDisplay.kt), com kotlinc puro, se houver
 # (KOTLINC=/caminho/kotlinc ou kotlinc no PATH; o SDK do Android não é preciso).
 KOTLINC=${KOTLINC:-$(command -v kotlinc || true)}

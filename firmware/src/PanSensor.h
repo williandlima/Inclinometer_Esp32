@@ -227,6 +227,14 @@ public:
     // integrador mantido por update().
     float readPanDeg();
 
+    // Bias do giroscópio por eixo (°/s), para o AngleSensor fundir o giro com
+    // o acelerômetro no tilt. Só vale (true) com o bias já CONFIRMADO por uma
+    // janela parada: um bias provisório errado de 1°/s viraria erro de tilt.
+    bool gyroBias(Vec3 &bias) const {
+        bias = _bias;
+        return _biasReady && _biasConfirmed;
+    }
+
     // Extremos do pan acumulados desde o último reset/calibração, medidos a
     // 100 Hz (ver PeakHold.h). Aqui o peak-hold é SIMPLES, sem filtro extra e
     // sem teste de persistência, ao contrário do tilt — e por dois motivos:
@@ -363,6 +371,10 @@ private:
     void undoRecentBiasLearning(uint32_t now, float winS, float motionDps);
     // Componente vertical (taxa de pan) de uma diferença de taxa nos eixos.
     float projectedDps(Vec3 d, Vec3 up) const;
+    // Escala do giro ao longo do eixo de pan: função do tilt (e, com o sentido
+    // do giro, da assimetria horário/anti-horário). Ver PAN_SCALE_* em Config.h.
+    float panScale(Vec3 up) const;
+    float panScale(Vec3 up, float rateDps) const;
 
     // EIXO DO TILT e desacoplamento (item 5 do cabeçalho). O eixo do tilt é
     // fixo nos eixos do chip (a placa está presa no cabeçote que inclina);

@@ -36,8 +36,16 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.20";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10620;
+constexpr char FIRMWARE_VERSION[] = "1.6.23";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10623;
+
+// Memória permanente (NVS) e watchdog — ver main.cpp.
+constexpr char NVS_NAMESPACE[] = "inclinometro";
+constexpr char NVS_KEY_TILT_OFFSET[] = "tilt_zero";
+// Tempo sem o loop principal rodar até o ESP32 reiniciar sozinho. Folgado:
+// uma iteração normal leva poucos ms, e a pior espera conhecida (I2C sem
+// resposta, gravação na flash) fica bem abaixo de 1 s.
+constexpr uint32_t WATCHDOG_TIMEOUT_S = 10;
 
 // ============================================================================
 // Parâmetros Modbus RTU — devem bater com python-app/data_source/modbus_source.py
@@ -217,6 +225,30 @@ constexpr float TILT_SCALE_CORRECTION_POS = 1.066f;  // 1 / 0,9383
 constexpr float TILT_ACCEL_GAIN_Y = 1.0f;
 constexpr float TILT_ACCEL_OFFSET_Y_G = 0.0f;
 constexpr float TILT_ACCEL_OFFSET_Z_G = 0.0f;
+
+// Fusão giroscópio + acelerômetro no tilt (1.6.23 — ver AngleSensor.h).
+// TILT_FUSION_TAU_S: constante de tempo com que o acelerômetro corrige o
+// giro. Aceleração linear na frequência f sobra multiplicada por
+// ~1/(2π·f·τ): com 1 s, 16% a 1 Hz e 1% a 17 Hz. O que importa é a faixa de
+// 0,5 a 2 Hz (balanço da viatura e do mastro): ali o topo do mastro TRANSLADA,
+// e 1 cm de vai-e-vem a 1 Hz já é lido pelo acelerômetro como 2,3° — abaixo
+// do corte de 3 Hz do caminho de medida, passava inteiro para os mín/máx. (A
+// vibração do motor, a 17 Hz, o caminho de medida já rejeitava quase toda.)
+// Maior rejeita mais, mas amplia o efeito de um erro do giro: num movimento
+// a velocidade Ω, um erro de escala do giro de 3% dá 0,03·Ω·τ de avanço
+// transitório (0,1° a 3°/s). O resíduo de bias do giro b dá b·τ, e o termo
+// integral (TILT_FUSION_KI) o remove em dezenas de segundos.
+// TILT_FUSION_ENABLED = false desliga a fusão: o tilt volta a ser só do
+// acelerômetro, exatamente como até a 1.6.22.
+constexpr bool TILT_FUSION_ENABLED = true;
+constexpr float TILT_FUSION_TAU_S = 1.0f;
+constexpr float TILT_FUSION_KI = 0.05f;
+constexpr float TILT_FUSION_KI_MAX_ERR_DEG = 0.2f;  // acima disso o integral não aprende (anti-windup)
+constexpr float TILT_FUSION_MAX_BIAS_DPS = 0.5f;
+// Salvaguardas: fora delas vale só o acelerômetro (comportamento anterior).
+constexpr float TILT_FUSION_ACCEL_TOL_G = 0.15f;         // |a| fora de 1 g ± isto
+constexpr float TILT_FUSION_MAX_DIVERGENCE_DEG = 3.0f;   // giro e acelerômetro discordam
+constexpr float TILT_FUSION_MAX_DT_S = 0.1f;             // buraco de amostragem
 
 // Sentido positivo do tilt reportado. O atan2(ay, az) cresce num sentido que
 // depende da montagem. A 1.6.17 usou -1 (na bancada com a 1.6.16 subir lia
@@ -626,6 +658,22 @@ constexpr int PAN_ACC_ROT_BLOCK = 8;
 // mais afastados de zero, ex.: 45°/90°) quando possível, e sempre que o
 // MPU6050 físico desta unidade for substituído.
 constexpr float PAN_SCALE_CORRECTION = 1.030f;
+
+// Escala em função do tilt e do sentido (1.6.21 — ver "Pan: reavaliação" em
+// firmware/README.md). A escala efetiva ao longo do eixo de pan é nᵀ·M·n, com
+// M a matriz de sensibilidade do giro (±3% por eixo e ±2% de sensibilidade
+// cruzada no MPU6050): com a placa montada torta ela MUDA com o tilt — uma
+// escala ajustada em tilt 0 erra tipicamente 0,4° (30°) a 0,8° (60°), e até
+// ~2° (95%), num giro de 90°. No plano do tilt, nᵀ·M·n = A + B·cos 2t +
+// C·sin 2t exatamente (t = tilt bruto): A é PAN_SCALE_CORRECTION, B e C os
+// termos abaixo. PAN_SCALE_ASYM: diferença relativa de escala entre os
+// sentidos horário (+) e anti-horário (−). Valores de
+// python-app/tools/calibra_pan.py com giros de referência (PTU-D300E pelo
+// encoder, ou mesa giratória) em vários tilts e nos dois sentidos. Padrão
+// (0, 0, 0) = comportamento anterior.
+constexpr float PAN_SCALE_COS2 = 0.0f;
+constexpr float PAN_SCALE_SIN2 = 0.0f;
+constexpr float PAN_SCALE_ASYM = 0.0f;
 
 // Sentido positivo do pan. A projeção (item 1 de PanSensor.h) dá a rotação em
 // torno da vertical PARA CIMA pela regra da mão direita: positivo = sentido

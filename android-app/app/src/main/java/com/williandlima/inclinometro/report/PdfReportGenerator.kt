@@ -49,7 +49,8 @@ object PdfReportGenerator {
     ): File = withContext(Dispatchers.IO) {
         val document = PdfDocument()
 
-        drawSummaryAndChartPage(document, session, readings, events)
+        drawSummaryPage(document, session, readings, events)
+        drawChartsPage(document, readings, events)
         if (events.isNotEmpty()) {
             drawEventsPages(document, events)
         }
@@ -62,7 +63,13 @@ object PdfReportGenerator {
         file
     }
 
-    private fun drawSummaryAndChartPage(
+    /**
+     * Página 1: "Resultado" (o que foi medido) e "Aquisição dos dados" (de
+     * quando a quando, quantas leituras, interrupções, versões) — as mesmas
+     * duas tabelas do relatório do app desktop. Antes o relatório não dizia
+     * em lugar nenhum qual trecho de tempo nem quantas leituras ele cobria.
+     */
+    private fun drawSummaryPage(
         document: PdfDocument,
         session: SessionInfo,
         readings: List<AngleReading>,
@@ -73,53 +80,131 @@ object PdfReportGenerator {
         val canvas = page.canvas
 
         val titlePaint = Paint().apply { textSize = 20f; isFakeBoldText = true; color = Color.BLACK }
-        val labelPaint = Paint().apply { textSize = 12f; isFakeBoldText = true; color = Color.DKGRAY }
-        val valuePaint = Paint().apply { textSize = 12f; color = Color.BLACK }
+        val labelPaint = Paint().apply { textSize = 11f; isFakeBoldText = true; color = Color.DKGRAY }
+        val valuePaint = Paint().apply { textSize = 11f; color = Color.BLACK }
         val headingPaint = Paint().apply { textSize = 14f; isFakeBoldText = true; color = Color.BLACK }
+
+        val acq = Acquisition.summarize(session, readings)
+        val (angleMin, angleMax) = axisExtremes(readings, events, LimitAxis.TILT)
+        val (panMin, panMax) = axisExtremes(readings, events, LimitAxis.PAN)
+        val hasPan = acq.nPanReadings > 0
+
+        fun fmtRange(low: Double?, high: Double?): String =
+            if (low == null || high == null) "-" else "%.2f°  /  %.2f°".format(low, high)
 
         var y = MARGIN
         canvas.drawText("Relatório do Inclinômetro", MARGIN, y, titlePaint)
         y += 30f
 
-        val modeLabel = if (session.mode == ConnectionMode.SIMULATED) "Simulação" else "Real (BLE)"
-        val started = timeFormat.format(Date(session.startedAt))
-        val ended = session.endedAt?.let { timeFormat.format(Date(it)) } ?: "em andamento"
-        val (angleMin, angleMax) = axisExtremes(readings, events, LimitAxis.TILT)
-        val panValues = readings.mapNotNull { it.panDeg }
-        val (panMin, panMax) = axisExtremes(readings, events, LimitAxis.PAN)
-
-        fun fmtRange(low: Double?, high: Double?): String =
-            if (low == null || high == null) "-" else "%.2f°  /  %.2f°".format(low, high)
-
-        val summaryRows = listOf(
-            "Modo" to modeLabel,
-            "Início" to started,
-            "Fim" to ended,
-            "Leituras registradas" to readings.size.toString(),
-            "Inclinação mín. / máx. registrada" to fmtRange(angleMin, angleMax),
-            "Azimute mín. / máx. registrado" to if (panValues.isNotEmpty()) {
-                fmtRange(panMin, panMax)
-            } else {
-                "não registrado (firmware sem eixo de azimute)"
-            },
-        )
-        for ((label, value) in summaryRows) {
-            canvas.drawText("$label:", MARGIN, y, labelPaint)
-            canvas.drawText(value, MARGIN + 170f, y, valuePaint)
-            y += 18f
+        fun table(heading: String, rows: List<Pair<String, String>>) {
+            canvas.drawText(heading, MARGIN, y, headingPaint)
+            y += 20f
+            for ((label, value) in rows) {
+                canvas.drawText("$label:", MARGIN, y, labelPaint)
+                for (line in wrap(value, valuePaint, PAGE_WIDTH - MARGIN - (MARGIN + 190f))) {
+                    canvas.drawText(line, MARGIN + 190f, y, valuePaint)
+                    y += 16f
+                }
+            }
+            y += 14f
         }
 
-        y += 16f
+        table(
+            "Resultado",
+            listOf(
+                "Inclinação mín. / máx." to fmtRange(angleMin, angleMax),
+                "Azimute mín. / máx." to if (hasPan) {
+                    fmtRange(panMin, panMax)
+                } else {
+                    "não registrado (firmware sem eixo de azimute)"
+                },
+                "Duração da aquisição" to Acquisition.formatDuration(acq.durationS),
+            ),
+        )
+
+        val modeLabel = if (session.mode == ConnectionMode.SIMULATED) "Simulação" else "Real (Bluetooth BLE)"
+        val firmware = session.firmwareVersion
+            ?: if (session.mode == ConnectionMode.SIMULATED) "simulação" else "não registrado"
+        val endText = when {
+            session.endedAt != null -> timeFormat.format(Date(session.endedAt))
+            acq.lastReadingAt != null -> "em andamento — dados até ${timeFormat.format(Date(acq.lastReadingAt))}"
+            else -> "em andamento — nenhuma leitura ainda"
+        }
+        val gapsText = if (acq.gaps.isEmpty()) {
+            "nenhuma"
+        } else {
+            "${acq.gaps.size} (total ${Acquisition.formatDuration(acq.gapTotalS)})"
+        }
+        // Com firmware v1.5.0+ os extremos vêm do ESP32, que mede a 100 Hz;
+        // antes disso (e na simulação) o app os calcula das leituras.
+        val firmwarePeaks = session.mode == ConnectionMode.REAL &&
+            session.firmwareVersion != null && !firmwareOlderThan(session.firmwareVersion, 1, 5, 0)
+        val extremesText = if (firmwarePeaks) {
+            "medidos no ESP32 a 100 Hz (firmware v1.5.0+)"
+        } else {
+            "calculados pelo app a partir das leituras (~5 Hz)"
+        }
+        table(
+            "Aquisição dos dados",
+            listOf(
+                "Modo" to modeLabel,
+                "Versões (app / firmware)" to "app ${session.appVersion ?: "não registrado"} / firmware $firmware",
+                "Início da aquisição" to timeFormat.format(Date(session.startedAt)),
+                "Fim da aquisição" to endText,
+                "Duração da aquisição" to Acquisition.formatDuration(acq.durationS),
+                "Tempo programado" to Acquisition.formatPlanned(acq.plannedDurationS),
+                "Leituras de inclinação" to acq.nReadings.toString(),
+                "Leituras de azimute" to if (hasPan) acq.nPanReadings.toString() else "nenhuma",
+                "Taxa média de leitura" to (acq.meanRateHz?.let { "%.1f leituras/s".format(it) } ?: "-"),
+                "Interrupções (> 2 s sem leitura)" to gapsText,
+                "Cobertura da aquisição" to (acq.coveragePct?.let { "%.1f %%".format(it) } ?: "-"),
+                "Mín/máx de inclinação" to extremesText,
+                "Mín/máx de azimute" to if (hasPan) extremesText else "-",
+            ),
+        )
+
+        val planned = if (acq.plannedDurationS != null) {
+            "programada para ${Acquisition.formatPlanned(acq.plannedDurationS)}"
+        } else {
+            "livre, encerrada no botão \"Parar\""
+        }
+        val explanation = "Como ler este relatório: ele usa as leituras de uma única aquisição: ela começa no " +
+            "botão \"Iniciar\" (ou em \"Resetar limites\"/\"Calibrar\" com a leitura em andamento, que abrem " +
+            "uma aquisição nova) e termina em \"Parar\" ou no fim do tempo programado. Esta aquisição foi " +
+            "$planned. Cada leitura é o valor mostrado na tela, recebido do ESP32 cerca de 5 vezes por segundo; " +
+            "os gráficos estão na página seguinte."
+        for (line in wrap(explanation, valuePaint, PAGE_WIDTH - 2 * MARGIN)) {
+            canvas.drawText(line, MARGIN, y, valuePaint)
+            y += 15f
+        }
+
+        document.finishPage(page)
+    }
+
+    /** Página 2: os dois eixos ao longo do tempo. */
+    private fun drawChartsPage(
+        document: PdfDocument,
+        readings: List<AngleReading>,
+        events: List<LimitEvent>,
+    ) {
+        val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, 2).create()
+        val page = document.startPage(pageInfo)
+        val canvas = page.canvas
+        val valuePaint = Paint().apply { textSize = 12f; color = Color.BLACK }
+        val headingPaint = Paint().apply { textSize = 14f; isFakeBoldText = true; color = Color.BLACK }
+        val panValues = readings.mapNotNull { it.panDeg }
+
+        var y = MARGIN
         canvas.drawText("Inclinação (tilt) ao longo do tempo", MARGIN, y, headingPaint)
         y += 12f
-        drawChart(canvas, readings, events, LimitAxis.TILT, top = y, bottom = y + 230f)
-        y += 230f
+        drawChart(canvas, readings, events, LimitAxis.TILT, top = y, bottom = y + 300f)
+        y += 300f
 
-        y += 26f
+        y += 30f
         canvas.drawText("Azimute (pan) ao longo do tempo", MARGIN, y, headingPaint)
         y += 12f
         if (panValues.isNotEmpty()) {
-            drawChart(canvas, readings, events, LimitAxis.PAN, top = y, bottom = y + 230f)
+            drawChart(canvas, readings, events, LimitAxis.PAN, top = y, bottom = y + 300f)
         } else {
             y += 14f
             canvas.drawText(
@@ -131,6 +216,30 @@ object PdfReportGenerator {
         }
 
         document.finishPage(page)
+    }
+
+    /** Quebra [text] em linhas que cabem em [maxWidth] com [paint]. */
+    private fun wrap(text: String, paint: Paint, maxWidth: Float): List<String> {
+        val lines = mutableListOf<String>()
+        var current = ""
+        for (word in text.split(" ")) {
+            val candidate = if (current.isEmpty()) word else "$current $word"
+            if (current.isNotEmpty() && paint.measureText(candidate) > maxWidth) {
+                lines += current
+                current = word
+            } else {
+                current = candidate
+            }
+        }
+        if (current.isNotEmpty() || lines.isEmpty()) lines += current
+        return lines
+    }
+
+    /** true se [version] ("1.4.2") for mais antiga que major.minor.patch. */
+    private fun firmwareOlderThan(version: String, major: Int, minor: Int, patch: Int): Boolean {
+        val parts = version.split(".").mapNotNull { it.toIntOrNull() }
+        if (parts.size != 3) return true
+        return parts[0] * 10000 + parts[1] * 100 + parts[2] < major * 10000 + minor * 100 + patch
     }
 
     /** Extrai o valor do eixo pedido, ou `null` se a leitura não o mediu. */
@@ -237,7 +346,7 @@ object PdfReportGenerator {
 
     private fun drawEventsPages(document: PdfDocument, events: List<LimitEvent>) {
         val chunks = events.chunked(ROWS_PER_EVENTS_PAGE)
-        var pageNumber = 2
+        var pageNumber = 3
         for (chunk in chunks) {
             val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNumber).create()
             val page = document.startPage(pageInfo)
@@ -261,7 +370,7 @@ object PdfReportGenerator {
             canvas.drawText("Data/Hora", colX[4], y, headerPaint)
             y += 20f
 
-            val startIndex = (pageNumber - 2) * ROWS_PER_EVENTS_PAGE
+            val startIndex = (pageNumber - 3) * ROWS_PER_EVENTS_PAGE
             chunk.forEachIndexed { index, event ->
                 val tipo = if (event.kind == LimitKind.MIN) "Novo mínimo" else "Novo máximo"
                 canvas.drawText((startIndex + index + 1).toString(), colX[0], y, rowPaint)

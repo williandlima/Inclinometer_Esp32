@@ -23,13 +23,25 @@ from limits.limit_tracker import LimitEvent
 # misturam.
 DEFAULT_DB_PATH = user_data_dir() / "inclinometro_historico.db"
 
+# Intervalo máximo entre gravações em disco das leituras (ver `_commit_soon`).
+COMMIT_INTERVAL_S = 1.0
+
+# Por quanto tempo o histórico é mantido. O app grava ~4 leituras por
+# segundo: 8 h de leitura por dia são ~115 mil linhas (~4 MB), e até a 2.3.0
+# nada era apagado — o arquivo só crescia. As opções aparecem em
+# Configurações; `None` = manter sempre.
+RETENTION_OPTIONS_DAYS: list[int | None] = [30, 90, 180, 365, None]
+DEFAULT_RETENTION_DAYS = 90
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at REAL NOT NULL,
     ended_at REAL,
     mode TEXT NOT NULL,
-    planned_duration_s REAL
+    planned_duration_s REAL,
+    firmware_version TEXT,
+    app_version TEXT
 );
 
 CREATE TABLE IF NOT EXISTS readings (
@@ -84,6 +96,9 @@ class SessionInfo:
     ended_at: float | None
     mode: str
     planned_duration_s: float | None = None
+    # Rastreabilidade da medição: versões com que a aquisição foi feita.
+    firmware_version: str | None = None
+    app_version: str | None = None
 
 
 @dataclass
@@ -106,6 +121,8 @@ _MIGRATIONS = [
     ("limit_events", "axis", "ALTER TABLE limit_events ADD COLUMN axis TEXT NOT NULL DEFAULT 'tilt'"),
     ("limit_events", "source", "ALTER TABLE limit_events ADD COLUMN source TEXT NOT NULL DEFAULT 'app'"),
     ("sessions", "planned_duration_s", "ALTER TABLE sessions ADD COLUMN planned_duration_s REAL"),
+    ("sessions", "firmware_version", "ALTER TABLE sessions ADD COLUMN firmware_version TEXT"),
+    ("sessions", "app_version", "ALTER TABLE sessions ADD COLUMN app_version TEXT"),
     ("vibration_samples", "pan_deg", "ALTER TABLE vibration_samples ADD COLUMN pan_deg REAL"),
     (
         "vibration_samples",
@@ -122,6 +139,25 @@ class HistoryStore:
         self._migrate()
         self._conn.commit()
         self._current_session_id: int | None = None
+        self._db_path = str(db_path)
+        self._last_commit = time.monotonic()
+
+    def _commit_soon(self) -> None:
+        """Grava em disco no máximo uma vez por COMMIT_INTERVAL_S.
+
+        Antes era um commit (fsync) por leitura — 4 a 5 por segundo, o dia
+        inteiro. Em lote, uma queda de energia perde no máximo o último
+        segundo de leituras; tudo o que importa (fim da aquisição, eventos
+        consultados pelo relatório) passa por `flush()`.
+        """
+        now = time.monotonic()
+        if now - self._last_commit >= COMMIT_INTERVAL_S:
+            self._conn.commit()
+            self._last_commit = now
+
+    def flush(self) -> None:
+        self._conn.commit()
+        self._last_commit = time.monotonic()
 
     def _migrate(self) -> None:
         """Aplica as colunas novas a bancos criados por versões anteriores.
@@ -135,12 +171,14 @@ class HistoryStore:
             if column not in existing:
                 self._conn.execute(statement)
 
-    def start_session(self, mode: str, planned_duration_s: float | None = None) -> int:
+    def start_session(
+        self, mode: str, planned_duration_s: float | None = None, app_version: str | None = None
+    ) -> int:
         cur = self._conn.execute(
-            "INSERT INTO sessions (started_at, mode, planned_duration_s) VALUES (?, ?, ?)",
-            (time.time(), mode, planned_duration_s),
+            "INSERT INTO sessions (started_at, mode, planned_duration_s, app_version) VALUES (?, ?, ?, ?)",
+            (time.time(), mode, planned_duration_s, app_version),
         )
-        self._conn.commit()
+        self.flush()
         self._current_session_id = cur.lastrowid
         return self._current_session_id
 
@@ -150,8 +188,19 @@ class HistoryStore:
         self._conn.execute(
             "UPDATE sessions SET ended_at = ? WHERE id = ?", (time.time(), self._current_session_id)
         )
-        self._conn.commit()
+        self.flush()
         self._current_session_id = None
+
+    def set_firmware_version(self, version: str | None) -> None:
+        """Anota na aquisição atual a versão do firmware conectado (só é
+        conhecida depois de conectar, não no início da aquisição)."""
+        if self._current_session_id is None or not version:
+            return
+        self._conn.execute(
+            "UPDATE sessions SET firmware_version = ? WHERE id = ? AND firmware_version IS NOT ?",
+            (version, self._current_session_id, version),
+        )
+        self._commit_soon()
 
     @property
     def current_session_id(self) -> int | None:
@@ -164,7 +213,7 @@ class HistoryStore:
             "INSERT INTO readings (session_id, timestamp, angle_deg, pan_deg) VALUES (?, ?, ?, ?)",
             (self._current_session_id, reading.timestamp, reading.angle_deg, reading.pan_deg),
         )
-        self._conn.commit()
+        self._commit_soon()
 
     def add_limit_event(self, event: LimitEvent) -> None:
         if self._current_session_id is None:
@@ -184,21 +233,55 @@ class HistoryStore:
                 event.source,
             ),
         )
-        self._conn.commit()
+        self._commit_soon()
 
     def list_sessions(self) -> list[SessionInfo]:
         rows = self._conn.execute(
-            "SELECT id, started_at, ended_at, mode, planned_duration_s FROM sessions"
+            "SELECT id, started_at, ended_at, mode, planned_duration_s, firmware_version, app_version FROM sessions"
             " ORDER BY started_at DESC, id DESC"
         ).fetchall()
         return [SessionInfo(*row) for row in rows]
 
     def get_session(self, session_id: int) -> SessionInfo | None:
         row = self._conn.execute(
-            "SELECT id, started_at, ended_at, mode, planned_duration_s FROM sessions WHERE id = ?",
+            "SELECT id, started_at, ended_at, mode, planned_duration_s, firmware_version, app_version FROM sessions WHERE id = ?",
             (session_id,),
         ).fetchone()
         return SessionInfo(*row) if row else None
+
+    def list_session_summaries(self) -> list[dict]:
+        """Uma linha por aquisição COM leituras, mais recente primeiro, com
+        os números que a tela de Histórico mostra (uma única consulta)."""
+        rows = self._conn.execute(
+            "SELECT s.id, s.started_at, s.ended_at, s.mode, s.planned_duration_s, s.firmware_version,"
+            " s.app_version, COUNT(r.timestamp), MIN(r.timestamp), MAX(r.timestamp),"
+            " MIN(r.angle_deg), MAX(r.angle_deg), MIN(r.pan_deg), MAX(r.pan_deg)"
+            " FROM sessions s JOIN readings r ON r.session_id = s.id"
+            " GROUP BY s.id ORDER BY s.started_at DESC, s.id DESC"
+        ).fetchall()
+        out = []
+        for row in rows:
+            info = SessionInfo(*row[:7])
+            end = info.ended_at if info.ended_at is not None else row[9]
+            out.append({
+                "session": info,
+                "n_readings": row[7],
+                "duration_s": max(0.0, end - info.started_at),
+                "tilt_min": row[10], "tilt_max": row[11], "pan_min": row[12], "pan_max": row[13],
+                "in_progress": info.id == self._current_session_id,
+            })
+        return out
+
+    def delete_session(self, session_id: int) -> bool:
+        """Apaga uma aquisição (leituras e eventos). A que está em andamento
+        não pode ser apagada."""
+        if session_id == self._current_session_id:
+            return False
+        self._conn.execute("DELETE FROM readings WHERE session_id = ?", (session_id,))
+        self._conn.execute("DELETE FROM limit_events WHERE session_id = ?", (session_id,))
+        self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        self.flush()
+        return True
 
     def count_readings(self, session_id: int) -> int:
         return self._conn.execute(
@@ -213,7 +296,8 @@ class HistoryStore:
         uma aquisição vazia por último, e o relatório saía sem dado nenhum.
         """
         row = self._conn.execute(
-            "SELECT s.id, s.started_at, s.ended_at, s.mode, s.planned_duration_s FROM sessions s"
+            "SELECT s.id, s.started_at, s.ended_at, s.mode, s.planned_duration_s, s.firmware_version, s.app_version"
+            " FROM sessions s"
             " WHERE EXISTS (SELECT 1 FROM readings r WHERE r.session_id = s.id)"
             " ORDER BY s.started_at DESC, s.id DESC LIMIT 1"
         ).fetchone()
@@ -275,5 +359,77 @@ class HistoryStore:
             for row in rows
         ]
 
+    # ------------------------------------------------------------ retenção
+    def size_bytes(self) -> int:
+        """Tamanho do arquivo do histórico (0 para banco em memória)."""
+        try:
+            return Path(self._db_path).stat().st_size
+        except OSError:
+            return 0
+
+    def stats(self) -> dict:
+        q = lambda sql: self._conn.execute(sql).fetchone()[0]  # noqa: E731
+        return {
+            "sessions": q("SELECT COUNT(*) FROM sessions"),
+            "readings": q("SELECT COUNT(*) FROM readings"),
+            "vibration_captures": q("SELECT COUNT(*) FROM vibration_captures"),
+            "oldest": q("SELECT MIN(started_at) FROM sessions"),
+            "size_bytes": self.size_bytes(),
+        }
+
+    def prune(self, retention_days: int | None, now: float | None = None) -> dict:
+        """Apaga do histórico o que passou do prazo de retenção e devolve o
+        que foi removido.
+
+        - aquisições (com leituras e eventos de limite) e capturas de
+          vibração iniciadas há mais de `retention_days` dias — `None` não
+          apaga nada por idade;
+        - sempre: aquisições encerradas que ficaram SEM leitura nenhuma
+          (ex.: "Resetar limites" seguido de "Parar", ou falha de conexão),
+          que só ocupam a lista;
+        - nunca a aquisição em andamento.
+
+        Depois de apagar, o arquivo é compactado (VACUUM): sem isso o SQLite
+        guarda o espaço livre para reutilizar e o arquivo não diminui.
+        """
+        self.flush()
+        current = self._current_session_id if self._current_session_id is not None else -1
+        removed = {"sessions": 0, "readings": 0, "vibration_captures": 0, "empty_sessions": 0}
+        size_before = self.size_bytes()
+
+        old_ids: list[int] = []
+        if retention_days is not None:
+            cutoff = (now if now is not None else time.time()) - retention_days * 86400.0
+            old_ids = [r[0] for r in self._conn.execute(
+                "SELECT id FROM sessions WHERE started_at < ? AND id != ?", (cutoff, current))]
+            old_caps = [r[0] for r in self._conn.execute(
+                "SELECT id FROM vibration_captures WHERE started_at < ?", (cutoff,))]
+            for cid in old_caps:
+                self._conn.execute("DELETE FROM vibration_samples WHERE capture_id = ?", (cid,))
+                self._conn.execute("DELETE FROM vibration_captures WHERE id = ?", (cid,))
+            removed["vibration_captures"] = len(old_caps)
+
+        empty_ids = [r[0] for r in self._conn.execute(
+            "SELECT s.id FROM sessions s WHERE s.ended_at IS NOT NULL AND s.id != ?"
+            " AND NOT EXISTS (SELECT 1 FROM readings r WHERE r.session_id = s.id)", (current,))]
+        removed["empty_sessions"] = len(set(empty_ids) - set(old_ids))
+
+        for sid in set(old_ids) | set(empty_ids):
+            removed["readings"] += self._conn.execute(
+                "DELETE FROM readings WHERE session_id = ?", (sid,)).rowcount
+            self._conn.execute("DELETE FROM limit_events WHERE session_id = ?", (sid,))
+            self._conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+        removed["sessions"] = len(old_ids)
+        self.flush()
+
+        if removed["readings"] or removed["vibration_captures"]:
+            try:
+                self._conn.execute("VACUUM")
+            except sqlite3.Error:
+                pass  # compactação é só economia de disco: não pode impedir o app de abrir
+        removed["freed_bytes"] = max(0, size_before - self.size_bytes())
+        return removed
+
     def close(self) -> None:
+        self.flush()
         self._conn.close()

@@ -13,6 +13,11 @@ bool PanSensor::sampleMotion(Vec3 &gyro, Vec3 &up) {
     // Vertical do MESMO burst: sem defasagem entre a direção usada na
     // projeção e as taxas projetadas. O teste de plausibilidade do driver
     // garante |a| >= ACCEL_MIN_PLAUSIBLE_G.
+    // Mesma correção por eixo do tilt (TILT_ACCEL_* em Config.h): a vertical
+    // usada na projeção do pan tem de ser a mesma que o tilt enxerga. Com os
+    // valores padrão (1, 0, 0) não muda nada.
+    ay = (ay - TILT_ACCEL_OFFSET_Y_G) / TILT_ACCEL_GAIN_Y;
+    az = az - TILT_ACCEL_OFFSET_Z_G;
     float n = sqrtf(ax * ax + ay * ay + az * az);
     up = {ax / n, ay / n, az / n};
     return true;
@@ -30,7 +35,8 @@ float PanSensor::readInstantRateDps() {
     if (!sampleMotion(gyro, up)) {
         return _lastRateDps;  // amostra perdida: repete a última válida
     }
-    _lastRateDps = panRateDps(gyro, up) * PAN_SCALE_CORRECTION;
+    const float rate = panRateDps(gyro, up);
+    _lastRateDps = rate * panScale(up, rate);
     return _lastRateDps;
 }
 
@@ -179,7 +185,8 @@ void PanSensor::update() {
         // Regra do trapézio: a taxa muda entre duas amostras (início e fim de
         // cada giro), e multiplicar só a taxa nova pelo intervalo inteiro
         // errava até uma amostra (~0,2° a 20°/s) por borda de movimento.
-        float rate = panRateDps(gyro, up) * PAN_SCALE_CORRECTION;
+        const float rawRate = panRateDps(gyro, up);
+        float rate = rawRate * panScale(up, rawRate);
         float prevRate = _hasPrevIntegRate ? _prevIntegRateDps : rate;
         _prevIntegRateDps = rate;
         _hasPrevIntegRate = true;
@@ -470,6 +477,25 @@ void PanSensor::pushBiasUndo(uint32_t now, float winS, float signedDps, float sp
         BiasSnapshot{_bias, _biasSlope, now, _sinceStillS, _windowDeltaDeg, signedDps, spreadDps, winS, _lastUp, mean};
 }
 
+float PanSensor::panScale(Vec3 up) const {
+    // Escala efetiva do giro ao longo do eixo de pan (item 4 de PanSensor.h).
+    // Com sensibilidade e sensibilidade cruzada diferentes por eixo, ela é a
+    // forma quadrática nᵀ·M·n, que no plano do tilt vale exatamente
+    // A + B·cos 2t + C·sin 2t — t é o tilt bruto, atan2(u_y, u_z), o mesmo
+    // ângulo da coluna "tilt" do tools/diagnostico_pan.py.
+    if (PAN_SCALE_COS2 == 0.0f && PAN_SCALE_SIN2 == 0.0f) {
+        return PAN_SCALE_CORRECTION;
+    }
+    float t2 = 2.0f * atan2f(up.y, up.z);
+    return PAN_SCALE_CORRECTION + PAN_SCALE_COS2 * cosf(t2) + PAN_SCALE_SIN2 * sinf(t2);
+}
+
+float PanSensor::panScale(Vec3 up, float rateDps) const {
+    // + assimetria por sentido de giro (escala diferente no horário e no
+    // anti-horário, comum em MEMS): rateDps > 0 = horário (pan do usuário).
+    return panScale(up) * (1.0f + (rateDps >= 0.0f ? PAN_SCALE_ASYM : -PAN_SCALE_ASYM));
+}
+
 float PanSensor::projectedDps(Vec3 d, Vec3 up) const {
     // Projeção no eixo de pan (positivo = anti-horário visto de cima), no
     // sentido do pan do usuário (PAN_DIRECTION_SIGN). Toda conta que soma ao
@@ -622,12 +648,12 @@ void PanSensor::undoRecentBiasLearning(uint32_t now, float winS, float motionDps
         // cancelada, então não há o que corrigir nela).
         if (k < first) continue;
         float restored = w.deltaDeg + projectedDps((w.bias - hk * w.slope) - revAt(w.ms, hk), w.up) * w.winS *
-                                          PAN_SCALE_CORRECTION;
+                                          panScale(w.up);
         _panDeg += restored;
         // Voltaram a ser giro: fazem parte da excursão que começa aqui.
         pushExcursion({w.mean, restored, w.winS, w.up, w.spreadDps, fabsf(w.signedDps), revAt(w.ms, hk), w.ms, true});
     }
-    _panDeg += projectedDps((_bias - h * _biasSlope) - revAt(now, h), _lastUp) * winS * PAN_SCALE_CORRECTION;
+    _panDeg += projectedDps((_bias - h * _biasSlope) - revAt(now, h), _lastUp) * winS * panScale(_lastUp);
     clampIntegrator();
     _windowDeltaDeg += _panDeg - before;
 
@@ -793,7 +819,7 @@ bool PanSensor::tryShiftEscape() {
             float frac = (back - fitBack) / (firstBack - fitBack);  // 0 no começo da reta, 1 no da excursão
             trueBias = fitStart + frac * (_exc[0].bias - fitStart);
         }
-        drift[k] = projectedDps(trueBias - w.bias, w.up) * w.winS * PAN_SCALE_CORRECTION;
+        drift[k] = projectedDps(trueBias - w.bias, w.up) * w.winS * panScale(w.up);
         motion[k] = !w.quiet;
     }
     // Trecho lento de um giro: perto (MOTION_REACH janelas) de uma janela de
@@ -805,7 +831,7 @@ bool PanSensor::tryShiftEscape() {
             if (motion[k]) continue;
             const ExcursionWindow &w = _exc[k];
             float excess = w.deltaDeg - drift[k];
-            if (fabsf(excess) <= PAN_ZUPT_SHIFT_MOTION_BAND_DPS * w.winS * PAN_SCALE_CORRECTION) continue;
+            if (fabsf(excess) <= PAN_ZUPT_SHIFT_MOTION_BAND_DPS * w.winS * panScale(w.up)) continue;
             for (int j = k - PAN_ZUPT_SHIFT_MOTION_REACH; j <= k + PAN_ZUPT_SHIFT_MOTION_REACH; j++) {
                 if (j < 0 || j >= _excCount || j == k || !motion[j]) continue;
                 if ((excess > 0.0f) == (_exc[j].deltaDeg - drift[j] > 0.0f)) {

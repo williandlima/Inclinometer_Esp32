@@ -29,6 +29,7 @@ from data_source.base import MIN_RECOMMENDED_FIRMWARE, AngleReading, IAngleDataS
 from data_source.ble_source import BleAngleSource
 from data_source.modbus_source import ModbusAngleSource
 from data_source.simulated_source import SimulatedAngleSource
+from limits.history_export import export_session_csv
 from limits.history_store import HistoryStore
 from limits.limit_tracker import PAN_AXIS, TILT_AXIS, LimitTracker
 from limits.vibration_stats import analyze_axis, has_pan_samples
@@ -41,7 +42,14 @@ from report.acquisition import (
 )
 from report.report_generator import generate_report, generate_vibration_report
 from ui.angle_display import DISPLAY_STEPS_DEG, angle_for_display, format_angle, normalize_step, short_step_label
-from ui.settings_dialog import AppSettings, SettingsDialog, load_display_steps, save_display_steps
+from ui.history_dialog import HistoryDialog
+from ui.settings_dialog import (
+    AppSettings,
+    SettingsDialog,
+    load_display_steps,
+    retention_label,
+    save_display_steps,
+)
 from ui.vibration_dialog import VibrationConfigDialog, VibrationResultDialog
 
 # Paleta Avibras Aeroco (fundo azul marinho + detalhes laranja). O logo é
@@ -165,6 +173,9 @@ class MainWindow(QMainWindow):
         # A resolução de exibição de cada eixo é lembrada entre sessões.
         self._settings = load_display_steps(AppSettings())
         self._history = HistoryStore()
+        # Limpeza do histórico pelo prazo de Configurações (padrão 90 dias):
+        # até a 2.3.0 nada era apagado e o banco só crescia.
+        self._startup_prune = self._prune_history()
         # Um rastreador de mín/máx por eixo: os extremos de inclinação e de
         # azimute são independentes.
         self._trackers = {TILT_AXIS: LimitTracker(TILT_AXIS), PAN_AXIS: LimitTracker(PAN_AXIS)}
@@ -280,7 +291,7 @@ class MainWindow(QMainWindow):
             buttons_row.addWidget(btn, 1)
         root.addLayout(buttons_row)
 
-        self.statusBar().showMessage("Pronto.")
+        self.statusBar().showMessage(self._prune_message(self._startup_prune) or "Pronto.")
 
     def _build_acquisition_row(self) -> QHBoxLayout:
         """Linha "Aquisição para relatório": o tempo programado e, durante a
@@ -306,6 +317,10 @@ class MainWindow(QMainWindow):
         row.addWidget(title)
         row.addWidget(self.acq_duration_combo)
         row.addWidget(self.acq_status_label)
+        self.history_btn = QPushButton("Histórico...")
+        self.history_btn.setToolTip("Aquisições anteriores: gerar o relatório PDF, exportar CSV ou apagar.")
+        self.history_btn.clicked.connect(self._open_history)
+        row.addWidget(self.history_btn)
         row.addStretch(1)
         self._update_acquisition_label()
         return row
@@ -315,7 +330,11 @@ class MainWindow(QMainWindow):
 
     def _begin_acquisition(self) -> None:
         """Abre uma aquisição nova no histórico (é ela que vai para o PDF)."""
-        self._history.start_session(mode=self._settings.mode, planned_duration_s=self._planned_duration_s())
+        self._history.start_session(
+            mode=self._settings.mode, planned_duration_s=self._planned_duration_s(), app_version=APP_VERSION
+        )
+        if self._source is not None and self._settings.mode != "simulado":
+            self._history.set_firmware_version(self._source.firmware_version)
         session = self._history.get_session(self._history.current_session_id)
         self._acq_started_at = session.started_at if session else None
         self._acq_readings = 0
@@ -518,6 +537,8 @@ class MainWindow(QMainWindow):
             firmware = "Firmware: simulação"
         else:
             version = self._source.firmware_version
+            # Rastreabilidade: a aquisição guarda o firmware com que foi feita.
+            self._history.set_firmware_version(version)
             firmware = f"Firmware v{version}" if version else "Firmware: lendo..."
             if firmware_outdated(version):
                 recommended = ".".join(str(p) for p in MIN_RECOMMENDED_FIRMWARE)
@@ -573,15 +594,72 @@ class MainWindow(QMainWindow):
         was_running = self._running
         if was_running:
             self._stop()
-        dialog = SettingsDialog(self._settings, self)
+        dialog = SettingsDialog(self._settings, self, history_info=self._history_info())
         if dialog.exec_() == SettingsDialog.Accepted:
-            self._settings = dialog.result_settings()
+            previous_retention = self._settings.history_retention_days
+            new_settings = dialog.result_settings()
+            if not self._confirm_retention_change(previous_retention, new_settings.history_retention_days):
+                new_settings.history_retention_days = previous_retention
+            self._settings = new_settings
             self._update_mode_label()
             save_display_steps(self._settings)
+            if self._settings.history_retention_days != previous_retention:
+                removed = self._prune_history()
+                self.statusBar().showMessage(self._prune_message(removed) or "Histórico: nada a apagar.")
+                self._update_acquisition_label()
             for axis in (TILT_AXIS, PAN_AXIS):
                 self._sync_display_step(axis)
         if was_running:
             self._start()
+
+    # ------------------------------------------------------------ histórico
+    def _prune_history(self) -> dict:
+        try:
+            return self._history.prune(self._settings.history_retention_days)
+        except Exception as exc:  # noqa: BLE001 - limpeza nunca pode impedir o app de funcionar
+            return {"error": str(exc)}
+
+    @staticmethod
+    def _prune_message(removed: dict) -> str:
+        if removed.get("error"):
+            return f"Não foi possível limpar o histórico antigo: {removed['error']}"
+        n = removed.get("sessions", 0)
+        v = removed.get("vibration_captures", 0)
+        if not n and not v:
+            return ""
+        parts = []
+        if n:
+            parts.append(f"{n} aquisição(ões) ({removed.get('readings', 0)} leituras)")
+        if v:
+            parts.append(f"{v} captura(s) de vibração")
+        freed = removed.get("freed_bytes", 0) / 1e6
+        return f"Histórico: removido o que passou do prazo — {' e '.join(parts)}, {freed:.1f} MB liberados."
+
+    def _history_info(self) -> str:
+        st = self._history.stats()
+        oldest = (
+            _dt.datetime.fromtimestamp(st["oldest"]).strftime("%d/%m/%Y") if st["oldest"] else "—"
+        )
+        return (
+            f"Hoje: {st['sessions']} aquisições, {st['readings']} leituras, "
+            f"{st['size_bytes'] / 1e6:.1f} MB; mais antiga de {oldest}."
+        )
+
+    def _confirm_retention_change(self, previous: int | None, new: int | None) -> bool:
+        """Encurtar o prazo apaga dados na hora: pede confirmação antes."""
+        shorter = new is not None and (previous is None or new < previous)
+        if not shorter:
+            return True
+        cutoff = _dt.datetime.now() - _dt.timedelta(days=new)
+        answer = QMessageBox.question(
+            self,
+            "Apagar histórico antigo",
+            f"As aquisições e capturas de vibração anteriores a {cutoff:%d/%m/%Y} serão apagadas "
+            f"agora e não poderão mais gerar relatório.\n\nContinuar?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
 
     def _toggle_start_stop(self) -> None:
         if self._running:
@@ -696,8 +774,60 @@ class MainWindow(QMainWindow):
             return self._history.get_session(session_id)
         return self._history.latest_session_with_readings()
 
-    def _generate_report(self) -> None:
-        session_info = self._report_session()
+    def _open_history(self) -> None:
+        dialog = HistoryDialog(
+            self._history,
+            on_report=lambda sid: self._generate_report(self._history.get_session(sid)),
+            on_export=self._export_session_csv,
+            on_delete=self._delete_session,
+            retention_text=retention_label(self._settings.history_retention_days),
+            parent=self,
+        )
+        dialog.exec_()
+        self._update_acquisition_label()
+
+    def _export_session_csv(self, session_id: int) -> None:
+        session_info = self._history.get_session(session_id)
+        if session_info is None:
+            return
+        folder = self._report_dir or QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+        name = f"leituras_inclinometro_{_dt.datetime.fromtimestamp(session_info.started_at):%Y%m%d_%H%M%S}.csv"
+        path, _ = QFileDialog.getSaveFileName(self, "Exportar leituras", os.path.join(folder, name), "CSV (*.csv)")
+        if not path:
+            return
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        try:
+            n = export_session_csv(
+                path, session_info, self._history.get_readings(session_id), self._history.get_limit_events(session_id)
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Erro ao exportar", str(exc))
+            return
+        self._report_dir = os.path.dirname(path)
+        self.statusBar().showMessage(f"{n} leituras exportadas para {path}")
+
+    def _delete_session(self, session_id: int) -> bool:
+        session_info = self._history.get_session(session_id)
+        if session_info is None:
+            return False
+        started = _dt.datetime.fromtimestamp(session_info.started_at).strftime("%d/%m/%Y %H:%M:%S")
+        answer = QMessageBox.question(
+            self,
+            "Apagar aquisição",
+            f"Apagar a aquisição de {started} ({self._history.count_readings(session_id)} leituras)?\n\n"
+            "Não será mais possível gerar o relatório dela. Os PDFs já salvos não são afetados.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return False
+        return self._history.delete_session(session_id)
+
+    def _generate_report(self, session_info=None) -> None:
+        # `clicked` do botão manda um bool: só vale um SessionInfo de verdade.
+        if session_info is None or isinstance(session_info, bool):
+            session_info = self._report_session()
         if session_info is None:
             QMessageBox.information(self, "Sem dados", "Ainda não há nenhuma aquisição registrada.")
             return

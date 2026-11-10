@@ -78,6 +78,10 @@ object BleContract {
      */
     const val MIN_RECOMMENDED_FIRMWARE_CODE = 10606
 
+    /** Tentativas de conexão antes de desistir, e a pausa entre elas. */
+    const val CONNECT_ATTEMPTS = 4
+    const val CONNECT_RETRY_DELAY_MS = 700L
+
     fun decodeFirmwareVersion(code: Int): String = "${code / 10000}.${(code / 100) % 100}.${code % 100}"
 
     /** true se [version] ("1.6.1") for mais antiga que a recomendada. */

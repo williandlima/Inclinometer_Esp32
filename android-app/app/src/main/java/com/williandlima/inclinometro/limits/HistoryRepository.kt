@@ -14,7 +14,32 @@ data class SessionInfo(
     val startedAt: Long,
     val endedAt: Long?,
     val mode: ConnectionMode,
+    /** Tempo programado da aquisição, em segundos; `null` = livre (até o "Parar"). */
+    val plannedDurationS: Int? = null,
+    val appVersion: String? = null,
+    val firmwareVersion: String? = null,
 )
+
+/** Uma aquisição na lista do Histórico. */
+data class SessionSummary(val info: SessionInfo, val readingCount: Int)
+
+/** O que a limpeza do histórico apagou. */
+data class PruneResult(val sessions: Int = 0, val readings: Int = 0, val captures: Int = 0) {
+    val nothing: Boolean get() = sessions == 0 && captures == 0
+}
+
+/**
+ * Opções de "Manter histórico por" (dias; `null` = sempre), as mesmas do app
+ * desktop. O banco gravava cada leitura (~5 por segundo) e nunca apagava nada.
+ */
+val RETENTION_OPTIONS_DAYS: List<Int?> = listOf(30, 90, 180, 365, null)
+const val DEFAULT_RETENTION_DAYS = 90
+
+fun retentionLabel(days: Int?): String = when (days) {
+    null -> "Sempre"
+    365 -> "1 ano"
+    else -> "$days dias"
+}
 
 data class VibrationCaptureInfo(
     val id: Long,
@@ -27,8 +52,79 @@ data class VibrationCaptureInfo(
 /** Persistência do histórico de leituras e eventos de limite (Room/SQLite). */
 class HistoryRepository(private val dao: InclinometerDao) {
 
-    suspend fun startSession(mode: ConnectionMode): Long =
-        dao.insertSession(SessionEntity(startedAt = System.currentTimeMillis(), mode = mode.name))
+    suspend fun startSession(mode: ConnectionMode, plannedDurationS: Int? = null, appVersion: String? = null): Long =
+        dao.insertSession(
+            SessionEntity(
+                startedAt = System.currentTimeMillis(),
+                mode = mode.name,
+                plannedDurationS = plannedDurationS,
+                appVersion = appVersion,
+            ),
+        )
+
+    /** Rastreabilidade: a aquisição guarda o firmware com que foi feita. */
+    suspend fun setFirmwareVersion(sessionId: Long, firmwareVersion: String) {
+        val session = dao.getSession(sessionId) ?: return
+        if (session.firmwareVersion != firmwareVersion) {
+            dao.updateSession(session.copy(firmwareVersion = firmwareVersion))
+        }
+    }
+
+    /** Aquisições com pelo menos uma leitura, da mais recente para a mais antiga. */
+    suspend fun listSessionSummaries(): List<SessionSummary> =
+        dao.listSessions()
+            .map { SessionSummary(it.toSessionInfo(), dao.countReadings(it.id)) }
+            .filter { it.readingCount > 0 }
+
+    suspend fun latestSessionWithReadings(): SessionInfo? = listSessionSummaries().firstOrNull()?.info
+
+    suspend fun countReadings(sessionId: Long): Int = dao.countReadings(sessionId)
+
+    suspend fun countAllReadings(): Int = dao.countAllReadings()
+
+    suspend fun deleteSession(sessionId: Long) {
+        dao.deleteReadings(sessionId)
+        dao.deleteLimitEvents(sessionId)
+        dao.deleteSessionRow(sessionId)
+    }
+
+    /**
+     * Apaga aquisições e capturas de vibração mais antigas que
+     * [retentionDays] (`null` = não apaga por idade) e as aquisições vazias
+     * (abertas e fechadas sem nenhuma leitura). Nunca toca em [keepSessionId],
+     * a aquisição em andamento.
+     */
+    suspend fun prune(
+        retentionDays: Int?,
+        keepSessionId: Long?,
+        now: Long = System.currentTimeMillis(),
+    ): PruneResult {
+        val cutoff = retentionDays?.let { now - it * 86_400_000L }
+        var sessions = 0
+        var readings = 0
+        var captures = 0
+        for (session in dao.listSessions()) {
+            if (session.id == keepSessionId) continue
+            val n = dao.countReadings(session.id)
+            val old = cutoff != null && session.startedAt < cutoff
+            if (old || n == 0) {
+                deleteSession(session.id)
+                // Aquisição vazia não conta: o usuário nunca a viu.
+                if (n > 0) {
+                    sessions++
+                    readings += n
+                }
+            }
+        }
+        if (cutoff != null) {
+            for (captureId in dao.vibrationCaptureIdsBefore(cutoff)) {
+                dao.deleteVibrationSamples(captureId)
+                dao.deleteVibrationCaptureRow(captureId)
+                captures++
+            }
+        }
+        return PruneResult(sessions, readings, captures)
+    }
 
     suspend fun endSession(sessionId: Long) {
         val session = dao.getSession(sessionId) ?: return
@@ -78,7 +174,15 @@ class HistoryRepository(private val dao: InclinometerDao) {
         }
 
     private fun SessionEntity.toSessionInfo() =
-        SessionInfo(id = id, startedAt = startedAt, endedAt = endedAt, mode = ConnectionMode.valueOf(mode))
+        SessionInfo(
+            id = id,
+            startedAt = startedAt,
+            endedAt = endedAt,
+            mode = ConnectionMode.valueOf(mode),
+            plannedDurationS = plannedDurationS,
+            appVersion = appVersion,
+            firmwareVersion = firmwareVersion,
+        )
 
     suspend fun saveVibrationCapture(
         mode: ConnectionMode,
