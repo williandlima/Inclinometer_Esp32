@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.26`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.27`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -484,6 +484,33 @@ calibração de bancada (`calibra_tilt.py`) não mudam.
 leitura da 1.6.22; (b) movimento do tilt pela PTU: sem ultrapassagem
 visível; (c) no mastro, com a viatura ligada: mín/máx mais estreitos que
 antes. Se algo piorar, `TILT_FUSION_ENABLED = false`.
+
+### Pan: a assimetria não se confirmou; o erro varia de giro para giro (v1.6.27)
+
+Bancada com a 1.6.26 (PTU 0 → 12 → 20 → 30 → −12 → −20 → −30 → 0):
+leituras 12,2 / 20,1 / 30,2 / −12,8 / −21,0 / −31,3 / volta ao zero −2,0
+(e −1,5 pouco depois, parado).
+
+| Giro | Lido ÷ real (1.6.26) | Convertido para a escala 1,030 |
+|---|---|---|
+| 0 → +30 (horário) | 1,007 | 0,997 |
+| +30 → −12 (anti) | 1,024 | 1,001 |
+| −12 → −20 (anti) | 1,025 | 1,003 |
+| −20 → −30 (anti) | 1,030 | 1,008 |
+| −30 → 0 (horário) | 0,977 | 0,967 |
+
+Na sessão anterior (1.6.24, escala 1,030) foi horário 0,990 e anti-horário
+0,980 e 0,977. Juntando tudo, horário e anti-horário não diferem além da
+dispersão — e na MESMA sessão dois giros horários de 30° leram 0,997 e 0,967.
+Um erro de escala, simétrico ou não, não muda de um giro para outro: o que
+sobra (~±2% por giro, até ~1°) é outra coisa. A assimetria da 1.6.26 foi
+desfeita (`PAN_SCALE_ASYM` = 0) e a escala média vai para 1,0425.
+
+Indício da causa: a leitura mudou de −2,0 para −1,5 com o eixo PARADO. Isso
+é o firmware corrigindo o bias para trás depois de parar (desfaz o que
+integrou com o bias errado) — o zero do giro estava errado durante os
+movimentos. Para separar de vez escala de bias, o próximo ensaio grava a
+sequência com `tools/diagnostico_pan.py` (bias, taxa e pan interno a 2 Hz).
 
 ### Pan: erro ao voltar ao zero depois de vaivéns (v1.6.26)
 

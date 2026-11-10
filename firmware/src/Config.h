@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.26";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10626;
+constexpr char FIRMWARE_VERSION[] = "1.6.27";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10627;
 
 // Memória permanente (NVS) e watchdog — ver main.cpp.
 constexpr char NVS_NAMESPACE[] = "inclinometro";
@@ -677,7 +677,14 @@ constexpr int PAN_ACC_ROT_BLOCK = 8;
 //
 // 1.6.26 — com a assimetria por sentido separada (PAN_SCALE_ASYM abaixo), a
 // escala média dos mesmos giros é (1,0404 + 1,0529) / 2 = 1,0466.
-constexpr float PAN_SCALE_CORRECTION = 1.0466f;  // 1,030 até a 1.6.24; 1,0487 na 1.6.25
+//
+// 1.6.27 — a sessão com a 1.6.26 CONTRADISSE a assimetria: o anti-horário
+// passou a ler 2,5% LONGO e um giro horário na mesma sessão leu 0,977 e outro
+// 1,007. Juntando os 8 giros das duas sessões (convertidos para a escala
+// 1,030 com que foram medidos), horário e anti-horário ficam iguais dentro da
+// dispersão (±2% de giro para giro), média 0,988 -> 1,030 / 0,988 = 1,0425.
+// A dispersão de giro para giro não é escala: ver firmware/README.md (v1.6.27).
+constexpr float PAN_SCALE_CORRECTION = 1.0425f;  // 1,030 até a 1.6.24; 1,0487 na 1.6.25; 1,0466 na 1.6.26
 
 // Escala em função do tilt e do sentido (1.6.21 — ver "Pan: reavaliação" em
 // firmware/README.md). A escala efetiva ao longo do eixo de pan é nᵀ·M·n, com
@@ -699,7 +706,7 @@ constexpr float PAN_SCALE_SIN2 = 0.0f;
 // 1,0466 x (1 ∓ 0,59%). Sem isso, cada ida e volta de ±30° deixava ~0,7° na
 // volta ao zero — 4 vaivéns, ~2,9°, o "erro de 2,7° ao voltar ao zero" da
 // bancada (a assimetria não se cancela na volta, ela se acumula).
-constexpr float PAN_SCALE_ASYM = -0.0059f;
+constexpr float PAN_SCALE_ASYM = 0.0f;  // -0,0059 só na 1.6.26 (desfeito: ver acima)
 
 // Sentido positivo do pan. A projeção (item 1 de PanSensor.h) dá a rotação em
 // torno da vertical PARA CIMA pela regra da mão direita: positivo = sentido
