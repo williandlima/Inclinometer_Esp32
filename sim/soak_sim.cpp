@@ -4,7 +4,7 @@
 // injeção de falhas do mundo real. Ver run.sh.
 //
 // Cada semente roda SOAK_MINUTES minutos simulados de uma sequência
-// aleatória de movimentos de pan (inclusive além do curso de ±90°) e de tilt,
+// aleatória de movimentos de pan (inclusive além do curso, ±PAN_MAX_DEG) e de tilt,
 // com uma calibração no meio, e em cima disso:
 //   - bias de fábrica do giro (±20°/s) com deriva térmica (±3°/s);
 //   - vibração de média zero e ruído;
@@ -43,7 +43,14 @@ extern AngleSensor angleSensor;
 extern PanSensor panSensor;
 
 static const double SOAK_MINUTES = 30;
-static const double PAN_TOL_DEG = 1.0, TILT_TOL_DEG = 0.3;
+// PAN_TOL_DEG vale para o erro que UM trecho (de um checkpoint ao seguinte)
+// acrescenta; PAN_TOTAL_TOL_DEG para o erro acumulado. Até a 1.6.27 o limite
+// de ±90° da faixa "zerava" o erro acumulado a cada alvo além do curso (a
+// leitura e o esperado travavam juntos no limite); com ±180° (1.6.28) isso
+// quase não acontece, e com as falhas injetadas aqui (dezenas de vezes mais
+// frequentes que no campo) o erro de cada trecho se soma como um passeio
+// aleatório — por isso as duas tolerâncias.
+static const double PAN_TOL_DEG = 1.0, PAN_TOTAL_TOL_DEG = 4.0, TILT_TOL_DEG = 0.3;
 
 static std::mt19937 rng;
 // Tipos de falha ligados (bits; SOAK_FAULTS no ambiente, padrão = todos):
@@ -203,11 +210,18 @@ static Result runSeed(unsigned seed, bool verbose) {
     auto checkpoint = [&]() {
         double pan = panSensor.readPanDeg();
         double tilt = angleSensor.readAngleDeg();
-        double ePan = fabs(pan - expPan), eTilt = fabs(tilt - (T.tilt - tiltCal));
+        static double prevSigned = 0; static int prevSeedCheck = -1;
+        if (prevSeedCheck != (int)seed) { prevSigned = 0; prevSeedCheck = (int)seed; }
+        const double signedErr = pan - expPan;
+        // Só o que o trecho ACRESCENTA conta: o erro diminuir (calibrar, travar no
+        // limite da faixa junto com o esperado) não é falha.
+        const double ePan = fabs(signedErr), eStep = std::max(0.0, ePan - fabs(prevSigned)) > 0 ? fabs(signedErr - prevSigned) * (ePan > fabs(prevSigned)) : 0.0;
+        prevSigned = signedErr;
+        double eTilt = fabs(tilt - (T.tilt - tiltCal));
         res.maxPanErr = std::max(res.maxPanErr, ePan);
         res.maxTiltErr = std::max(res.maxTiltErr, eTilt);
         res.checks++;
-        bool bad = ePan > PAN_TOL_DEG || eTilt > TILT_TOL_DEG;
+        bool bad = eStep > PAN_TOL_DEG || ePan > PAN_TOTAL_TOL_DEG || eTilt > TILT_TOL_DEG;
         if (bad) res.fails++;
         if (verbose || bad) {
             PanSensor::Diagnostics d = panSensor.diagnostics();
@@ -239,8 +253,9 @@ static Result runSeed(unsigned seed, bool verbose) {
             double r = urand();
             panTarget = T.pan; tiltTarget = T.tilt;
             if (r < 0.6 || r >= 0.9) {
-                // Alvo relativo ao zero corrente; 20% das vezes além do curso.
-                double rel = urand() < 0.2 ? (urand() < 0.5 ? -1 : 1) * urand(95, 125) : urand(-80, 80);
+                // Alvo relativo ao zero corrente; 20% das vezes além do curso
+                // (±PAN_MAX_DEG: ±90° até a 1.6.27, ±180° desde a 1.6.28).
+                double rel = urand() < 0.2 ? (urand() < 0.5 ? -1 : 1) * (PAN_MAX_DEG + urand(5, 35)) : urand(-80, 80);
                 panTarget = T.pan + (rel - expPan);
             }
             if (r >= 0.6) tiltTarget = urand(-25, 25);
@@ -274,7 +289,12 @@ static Result runSeed(unsigned seed, bool verbose) {
         if (on(1) && chance(1.0 / 5, dt)) { F.gyroSpikeLeft = urand() < 0.3 ? 2 : 1; F.spikes++; }
         if (on(2) && chance(1.0 / 20, dt)) { F.garbageLeft = 1 + (int)urand(0, 3); F.garbage++; }
         if (on(4) && chance(1.0 / 30, dt)) { F.ffLeft = 1 + (int)urand(0, 5); F.ff++; }
-        if (on(8) && chance(1.0 / 180, dt)) { mpuPowerOnReset(); F.resets++; }
+        // Reset do MPU também só com o eixo assentado (1.6.28): durante um giro,
+        // o tempo até o firmware reconfigurar o chip é um buraco longo no meio
+        // do movimento, que sem a FIFO não tem como ser recuperado (mesma regra
+        // dos buracos acima). Antes isso ficava escondido: o limite de ±90° da
+        // faixa zerava o erro acumulado a cada alvo além do curso.
+        if (on(8) && settled && chance(1.0 / 60, dt)) { mpuPowerOnReset(); F.resets++; }
         if (on(16) && settled && chance(1.0 / 120, dt)) { F.hangUntil = t + urand(0.05, 0.4); F.hangs++; }
         if (on(32) && settled && chance(1.0 / 300, dt)) { F.stuck = true; F.stucks++; }
         if (t >= stallUntil) {
@@ -319,7 +339,7 @@ int main(int argc, char **argv) {
         worstPan = std::max(worstPan, r.maxPanErr);
         worstTilt = std::max(worstTilt, r.maxTiltErr);
     }
-    printf("pior erro: pan %.3f° (tol. %.1f°), tilt %.3f° (tol. %.1f°)\n", worstPan, PAN_TOL_DEG, worstTilt, TILT_TOL_DEG);
+    printf("pior erro: pan %.3f° acumulado (tol. %.1f°; %.1f° por trecho), tilt %.3f° (tol. %.1f°)\n", worstPan, PAN_TOTAL_TOL_DEG, PAN_TOL_DEG, worstTilt, TILT_TOL_DEG);
     printf(fails ? "SOAK: HOUVE FALHA\n" : "SOAK: TUDO OK\n");
     return fails ? 1 : 0;
 }

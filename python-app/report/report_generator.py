@@ -55,7 +55,7 @@ _MODE_LABELS = {
 # de grau ocupar o gráfico inteiro e parecer enorme.
 _AXIS_CHART_CONFIG = {
     TILT_AXIS: ("Inclinação", "Inclinação (°)", "#1f77b4", (-65, 65)),
-    PAN_AXIS: ("Azimute", "Azimute (°)", "#9467bd", (-95, 95)),
+    PAN_AXIS: ("Azimute", "Azimute (°)", "#9467bd", (-185, 185)),
 }
 
 

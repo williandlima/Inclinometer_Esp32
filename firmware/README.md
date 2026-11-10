@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.27`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.28`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -484,6 +484,26 @@ calibração de bancada (`calibra_tilt.py`) não mudam.
 leitura da 1.6.22; (b) movimento do tilt pela PTU: sem ultrapassagem
 visível; (c) no mastro, com a viatura ligada: mín/máx mais estreitos que
 antes. Se algo piorar, `TILT_FUSION_ENABLED = false`.
+
+### Pan: o limite de ±90° cortava a leitura; escala de volta a 1,027 (v1.6.28)
+
+Bancada com a 1.6.27, calibrado em 0, giros de 30°: 0 → 30 → 60 → 90 → 0 →
+−30 → −60 → −90 lendo 30,3 / 60,9 / **90,0** / −1,3 / −31,9 / −62,3 /
+**−90,0**.
+
+- **Corte em ±90°.** Com o pan lendo ~1,5% a mais, a ida a +90° daria 91,4°;
+  o limite da faixa (`PAN_MAX_DEG` = 90, que também prende o integrador)
+  segurou em 90,0 e jogou fora 1,4°: a volta ao zero leu −1,3° em vez de
+  ~+0,1°. A faixa vai para **±180°** (cabe no protocolo: int16 × 100). Apps:
+  só a escala dos gráficos muda.
+- **Escala.** Todos os giros desta sessão leram 1,0-2,0% longos, nos dois
+  sentidos. Com as sessões calibradas em 0 (1.6.26 e 1.6.27), a escala
+  necessária fica entre 1,022 e 1,033, média **1,027**. A estimativa de
+  1,0487 da 1.6.25 veio de uma sessão que começou sem calibrar (pan em −1,0°).
+- **Ainda em aberto:** nas duas sessões da 1.6.26, a volta horária −30 → 0
+  perdeu ~1°; nesta sessão os giros horários vindos do lado negativo não
+  mostraram isso. O CSV do `tools/diagnostico_pan.py` continua sendo o
+  caminho para fechar a questão.
 
 ### Pan: a assimetria não se confirmou; o erro varia de giro para giro (v1.6.27)
 

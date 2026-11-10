@@ -9,8 +9,8 @@ const val ANGLE_MAX_DEG = 60.0
  * `firmware/src/Config.h` — ainda é um placeholder ali, a ajustar quando a
  * mecânica do pan estiver definida.
  */
-const val PAN_MIN_DEG = -90.0
-const val PAN_MAX_DEG = 90.0
+const val PAN_MIN_DEG = -180.0
+const val PAN_MAX_DEG = 180.0
 
 /**
  * Uma leitura dos eixos do inclinômetro.

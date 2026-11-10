@@ -18,8 +18,8 @@ ANGLE_MAX_DEG = 60.0
 # Faixa do eixo de azimute (pan). Espelha PAN_MIN_DEG/PAN_MAX_DEG de
 # firmware/src/Config.h — ainda é um placeholder ali, a ajustar quando a
 # mecânica do pan estiver definida.
-PAN_MIN_DEG = -90.0
-PAN_MAX_DEG = 90.0
+PAN_MIN_DEG = -180.0
+PAN_MAX_DEG = 180.0
 
 
 @dataclass(frozen=True)
