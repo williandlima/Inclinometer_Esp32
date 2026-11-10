@@ -7,6 +7,8 @@
 #                      lado a lado com o método só do acelerômetro
 #   regime_sim      -> os dois regimes de uso nos dois eixos: parado por
 #                      horas e em movimento constante por 30 min
+#   vaivem_sim      -> pan: vaivém rápido de ±30° com paradas curtas e volta
+#                      ao zero
 #   nvs_sim         -> zero do tilt salvo na memória permanente (calibra,
 #                      "desliga e religa" e confere) e watchdog do loop
 #   soak_sim        -> firmware inteiro (com o driver I2C real) por 30 min
@@ -53,6 +55,9 @@ g++ $FLAGS tilt_sim.cpp $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cp
 echo
 g++ $FLAGS regime_sim.cpp $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp -o "$OUT/regime_sim"
 "$OUT/regime_sim"
+echo
+g++ $FLAGS vaivem_sim.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp -o "$OUT/vaivem_sim"
+"$OUT/vaivem_sim"
 echo
 g++ $FLAGS nvs_sim.cpp $SRC/main.cpp $SRC/BleServer.cpp $SRC/VibrationCapture.cpp \
     $SRC/AngleSensor.cpp $SRC/PanSensor.cpp $SRC/PeakHold.cpp $SRC/ModbusSlave.cpp -o "$OUT/nvs_sim"
