@@ -52,7 +52,9 @@ _MODE_LABELS = {
 
 # Cada eixo tem seu próprio rótulo e escala fixa no gráfico. A escala é fixa
 # de propósito: deixar o matplotlib autoescalar faria uma variação de décimos
-# de grau ocupar o gráfico inteiro e parecer enorme.
+# de grau ocupar o gráfico inteiro e parecer enorme. É a faixa de uso típica
+# (não o limite do firmware): dados fora dela expandem o gráfico (ver
+# _build_chart_image).
 _AXIS_CHART_CONFIG = {
     TILT_AXIS: ("Inclinação", "Inclinação (°)", "#1f77b4", (-65, 65)),
     PAN_AXIS: ("Azimute", "Azimute (°)", "#9467bd", (-95, 95)),

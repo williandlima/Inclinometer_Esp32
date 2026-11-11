@@ -417,7 +417,10 @@ int main() {
     // apagadas como se fossem deriva (bancada: "erro de 6 graus acumulado,
     // constante"; aqui a 1.6.15 erra 4,5°). Com o zero passeando e a
     // aproximação lenta, sobra cerca de 1°: parte dela é indistinguível da
-    // deriva, e no fim do curso (+90°) o integrador preso esconde a deriva.
+    // deriva. Até a 1.6.27 o integrador ainda travava em +90° (limite da faixa)
+    // e isso escondia parte da deriva; desde a 1.6.28 (limite ±320°) nada é
+    // cortado — e o critério continua o mesmo (medido na 1.6.28: pior erro
+    // médio 0,70°, máximo 1,16°, nas mesmas 30 sementes).
     g_walkDps = 0.02;
     // Medido em 30 sementes (1.6.18 -> 1.6.19): pior erro médio 0,82 -> 0,68°,
     // máximo 3,74 -> 1,55°. A semente 42 sozinha dá 1,18 -> 1,75°: azar de uma

@@ -23,10 +23,12 @@ Entrada: CSV (";" ou ",") com uma linha por giro:
     leitura     — quanto o PAN-TILT METER mostrou que girou (°, com sinal):
                   diferença do pan antes e depois do giro
 
-Faça giros grandes (±45° a ±80°; não chegue a ±90°, onde a leitura satura) nos DOIS sentidos e em vários tilts (ex.:
+Faça giros grandes (±45° a ±90°; até a 1.6.27 a leitura saturava em ±90°) nos DOIS sentidos e em vários tilts (ex.:
 −30°, 0°, 30°, 60°): giro pequeno mede mal a escala — foi o problema dos 2
 pontos de 8°/9°. Informe com --fw-* as constantes que o firmware tinha
-durante as medidas (padrão: as da 1.6.27, 1,0425/0/0/0; até a 1.6.24 era 1,030/0/0/0).
+durante as medidas (padrão: as da 1.6.28, 1,027/0/0/0). A versão da placa aparece no app
+("Testar conexão"); com dados de outra versão, passe as constantes DELA: 1.6.25 = 1,0487;
+1.6.26 = 1,0466 e assimetria −0,0059; 1.6.27 = 1,0425; até a 1.6.24 = 1,030.
 
 Uso:
     python tools/calibra_pan.py giros.csv
@@ -136,7 +138,10 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("csv", nargs="?")
     p.add_argument("--autoteste", action="store_true")
-    p.add_argument("--fw-a", type=float, default=1.0425, help="PAN_SCALE_CORRECTION durante a medida (1,030 até a 1.6.24)")
+    p.add_argument("--fw-a", type=float, default=1.027,
+                   help="PAN_SCALE_CORRECTION da versão gravada DURANTE a medida: 1,030 até a 1.6.24; "
+                        "1,0487 na 1.6.25; 1,0466 na 1.6.26 (com --fw-asym -0.0059); 1,0425 na 1.6.27; "
+                        "1,027 desde a 1.6.28")
     p.add_argument("--fw-cos2", type=float, default=0.0)
     p.add_argument("--fw-sin2", type=float, default=0.0)
     p.add_argument("--fw-asym", type=float, default=0.0, help="PAN_SCALE_ASYM durante a medida (-0,0059 só na 1.6.26)")

@@ -64,7 +64,7 @@ g++ $FLAGS nvs_sim.cpp $SRC/main.cpp $SRC/BleServer.cpp $SRC/VibrationCapture.cp
 NVS_MOCK_FILE="$OUT/nvs.txt" "$OUT/nvs_sim" calibra
 NVS_MOCK_FILE="$OUT/nvs.txt" "$OUT/nvs_sim" religa
 echo
-"$OUT/soak_sim" "${SOAK_SEEDS:-20}"
+"$OUT/soak_sim" "${SOAK_SEEDS:-40}"
 echo
 python3 e2e_vibration.py "$OUT/fw_sim"
 echo

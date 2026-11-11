@@ -459,7 +459,9 @@ private:
     uint16_t _relearnHead = 0;   // próxima posição de escrita
     void pushRelearnWindow(Vec3 mean, float deltaDeg, float spreadDps);
     // Reaprende o bias se as janelas guardadas caem sobre uma reta.
-    void tryRelearn(float winS);
+    void tryRelearn(float winS, uint32_t now);
+    uint32_t _lastStillMs = 0;     // fim da última janela parada (ver tryRelearn)
+    uint16_t _stillSinceAdopt = 0;  // janelas paradas desde a última adoção de bias
 
     // Mediana móvel do giro e da vertical (ver "LEITURAS ESPÚRIAS" no
     // cabeçalho).

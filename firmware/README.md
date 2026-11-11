@@ -1,6 +1,6 @@
 # Firmware — Inclinômetro ESP32
 
-**Versão atual: `1.6.27`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
+**Versão atual: `1.6.29`** (`firmware/src/Config.h`, `FIRMWARE_VERSION`) —
 exposta em runtime tanto por Modbus (input register `REG_FIRMWARE_VERSION`)
 quanto por BLE (characteristic `CHAR_FIRMWARE_VERSION_UUID`), como inteiro
 `major*10000 + minor*100 + patch` (`FIRMWARE_VERSION_CODE`; ex: `1.0.0` →
@@ -484,6 +484,59 @@ calibração de bancada (`calibra_tilt.py`) não mudam.
 leitura da 1.6.22; (b) movimento do tilt pela PTU: sem ultrapassagem
 visível; (c) no mastro, com a viatura ligada: mín/máx mais estreitos que
 antes. Se algo piorar, `TILT_FUSION_ENABLED = false`.
+
+### Pan: o limite de ±90° cortava a leitura; escala de volta a 1,027 (v1.6.28 e v1.6.29)
+
+Bancada com a 1.6.27, calibrado em 0, giros de 30°: 0 → 30 → 60 → 90 → 0 →
+−30 → −60 → −90 lendo 30,3 / 60,9 / **90,0** / −1,3 / −31,9 / −62,3 /
+**−90,0**.
+
+- **Corte em ±90°.** Com o pan lendo ~1,5% a mais, a ida a +90° daria 91,4°;
+  o limite da faixa (`PAN_MAX_DEG` = 90, que também prende o integrador)
+  segurou em 90,0 e jogou fora 1,4°: a volta ao zero leu −1,3° em vez de
+  ~+0,1°. O limite vai para **±320°**: deixa de ser "faixa mecânica" e fica só
+  como trava contra integrador disparado, perto do teto do protocolo (int16 ×
+  100 = ±327,67°) e longe de qualquer movimento real da PTU (±180°). Os
+  gráficos dos relatórios partem de ±95° e só se expandem se os dados
+  passarem disso (desktop e Android, mesma regra).
+- **Giro contínuo longo (1.6.29).** Com a faixa ampliada, o teste de longa
+  duração passou a fazer giros de centenas de graus e expôs um defeito antigo:
+  o reaprendizado do bias (rede de segurança contra bias errado no boot) toma
+  20 janelas seguidas a velocidade constante por "eixo parado sob bias
+  errado". Um giro contínuo de mais de 20 s — 300° a 12°/s, ou 120° a 5°/s —
+  fazia o firmware adotar a velocidade do giro como bias, apagar o que tinha
+  integrado e girar ao contrário (simulado na 1.6.28: −480°, −170°, +400°).
+  Agora, com o bias já confirmado, a troca só é aceita se couber na deriva
+  física desde a última janela parada (`PAN_BIAS_RELEARN_MAX_JUMP_DPS` +
+  `PAN_BIAS_SLOPE_MAX_DPS2` × tempo); os três giros erram menos de 0,1°
+  (`sim/vaivem_sim.cpp`).
+- **Teste de longa duração (`sim/soak_sim.cpp`), refeito.** O limite de ±90°
+  zerava o erro acumulado a cada alvo além do curso e escondia três coisas: o
+  defeito acima, as perdas de um reset do MPU no meio de um giro (sem a FIFO,
+  o que gira até o firmware reconfigurar o chip não é amostrado) e o fato de
+  que, sem referência absoluta, o erro dos giros se soma em 30 min. Agora:
+  - a mesma bateria de sementes roda **sem e com falhas** (roteiro, ruído e
+    falhas em fluxos aleatórios separados, então o caminho é o mesmo); as
+    falhas não podem piorar a média do pior erro por semente em mais de 0,3°
+    nem o percentil 90 em mais de 0,5° — medido em 160 sementes: +0,10 a
+    +0,15° e +0,23 a +0,35°;
+  - perdas inevitáveis (reset do MPU com o eixo em movimento, loop parado numa
+    borda de giro) são medidas à parte, até 5° cada (maior medida: 1,1°);
+  - tetos contra defeito que dispara: 8° acumulado e 3° + 1% do giro por
+    trecho. O acúmulo normal, com o aquecimento forte do teste (até ±3°/s em
+    5 min) e giros contínuos de até ~400°, chegou a 3,5° sem falhas e 4,7° com
+    falhas em 160 sementes — é o limite físico do giro integrado descrito em
+    "Os dois regimes de uso": em movimento contínuo o pan só é corrigido nas
+    paradas;
+  - 40 sementes por rodada (com 20 o percentil 90 oscila mais que o limite).
+- **Escala.** Todos os giros desta sessão leram 1,0-2,0% longos, nos dois
+  sentidos. Com as sessões calibradas em 0 (1.6.26 e 1.6.27), a escala
+  necessária fica entre 1,022 e 1,033, média **1,027**. A estimativa de
+  1,0487 da 1.6.25 veio de uma sessão que começou sem calibrar (pan em −1,0°).
+- **Ainda em aberto:** nas duas sessões da 1.6.26, a volta horária −30 → 0
+  perdeu ~1°; nesta sessão os giros horários vindos do lado negativo não
+  mostraram isso. O CSV do `tools/diagnostico_pan.py` continua sendo o
+  caminho para fechar a questão.
 
 ### Pan: a assimetria não se confirmou; o erro varia de giro para giro (v1.6.27)
 

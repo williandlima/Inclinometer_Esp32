@@ -36,8 +36,8 @@ constexpr float ACCEL_MAX_PLAUSIBLE_G = 2.0f;
 // (major*10000 + minor*100 + patch) para caber num único registrador
 // Modbus/characteristic BLE de 16 bits (ex: "1.0.0" -> 10000).
 // ============================================================================
-constexpr char FIRMWARE_VERSION[] = "1.6.27";
-constexpr uint16_t FIRMWARE_VERSION_CODE = 10627;
+constexpr char FIRMWARE_VERSION[] = "1.6.29";
+constexpr uint16_t FIRMWARE_VERSION_CODE = 10629;
 
 // Memória permanente (NVS) e watchdog — ver main.cpp.
 constexpr char NVS_NAMESPACE[] = "inclinometro";
@@ -365,13 +365,16 @@ constexpr uint16_t VIBRATION_MAX_RATE_HZ = 500;
 // está parado). Sem ZUPT, o bias viraria uma rampa de graus por minuto.
 // ============================================================================
 
-// Faixa mecânica do pan. PLACEHOLDER: o curso é limitado (sem volta
-// completa), mas o valor exato depende da mecânica final — ajustar aqui
-// quando estiver definido, como já foi feito quando a faixa do tilt mudou de
-// 0-120° para -60~+60°. Limita também o integrador interno (anti-windup, ver
-// PanSensor::clampIntegrator): passar do limite e voltar responde na hora.
-constexpr float PAN_MIN_DEG = -90.0f;
-constexpr float PAN_MAX_DEG = 90.0f;
+// Limite do pan: NÃO é a faixa mecânica, é só a trava contra disparo do
+// integrador (anti-windup, ver PanSensor::clampIntegrator) e o teto do
+// protocolo (int16 × ANGLE_SCALE = ±327,67°). Até a 1.6.27 era ±90°, e o
+// limite CORTAVA movimento real: ir a +90° com o pan lendo 1,5% a mais (91,4°)
+// prendia em 90,0° e a volta ao zero lia −1,3° (bancada, firmware 1.6.27). Com
+// ±320°, nenhum movimento dentro do curso da PTU-D300E (±180°, com folga para
+// erro de escala e deriva) chega perto da trava; ela só segura um integrador
+// disparado (bias muito errado, lixo no barramento).
+constexpr float PAN_MIN_DEG = -320.0f;
+constexpr float PAN_MAX_DEG = 320.0f;
 
 // Janela de avaliação do ZUPT. Também define o menor movimento preservado:
 // um deslocamento total abaixo de PAN_ZUPT_RATE_THRESHOLD_DPS * janela
@@ -577,6 +580,25 @@ constexpr uint16_t PAN_BIAS_RELEARN_WINDOWS = 20;
 // aceita-se resíduo maior, como antes, para não ficar preso num bias de boot
 // errado.
 constexpr float PAN_BIAS_RELEARN_RESIDUAL_DPS = 0.05f;
+// Com o bias JÁ CONFIRMADO, o reaprendizado só vale se a troca de bias for
+// fisicamente possível desde a última janela parada: o zero do giro só anda
+// por deriva, no máximo PAN_BIAS_SLOPE_MAX_DPS2 por segundo, mais
+// PAN_BIAS_RELEARN_MAX_JUMP_DPS de folga. Sem isso (até a 1.6.28), um giro
+// CONTÍNUO a velocidade constante por mais de 20 s — 360° a 12°/s, ou 120° a
+// 5°/s — passava por "parado sob bias errado": o firmware adotava a
+// velocidade do giro como bias, apagava o que tinha integrado e passava a
+// girar ao contrário (simulado: leitura em −320° com o eixo em +320°).
+//
+// A trava só vale para bias CONFIRMADO DE VERDADE: pelo menos
+// PAN_BIAS_TRUST_STILL_WINDOWS janelas paradas desde que ele foi adotado. O
+// "confirmado" da adoção não basta: ligar com o eixo girando devagar e
+// constante (cenário G) adota a velocidade do giro como bias, com as duas
+// janelas da adoção perfeitamente coerentes — e é exatamente esse bias
+// errado que o reaprendizado existe para corrigir. Um giro no boot só engana
+// esta regra se durar mais que a adoção (2 s) + estas janelas (5 s); a
+// premissa do firmware é a placa parada ~2 s ao ligar.
+constexpr float PAN_BIAS_RELEARN_MAX_JUMP_DPS = 0.3f;
+constexpr uint16_t PAN_BIAS_TRUST_STILL_WINDOWS = 5;
 constexpr float PAN_BIAS_RELEARN_RESIDUAL_PROVISIONAL_DPS = 0.5f;
 // Sob vibração as médias ondulam em torno da reta; o limite de resíduo
 // cresce com a medida de vibração das janelas (a mesma de
@@ -684,7 +706,14 @@ constexpr int PAN_ACC_ROT_BLOCK = 8;
 // 1,030 com que foram medidos), horário e anti-horário ficam iguais dentro da
 // dispersão (±2% de giro para giro), média 0,988 -> 1,030 / 0,988 = 1,0425.
 // A dispersão de giro para giro não é escala: ver firmware/README.md (v1.6.27).
-constexpr float PAN_SCALE_CORRECTION = 1.0425f;  // 1,030 até a 1.6.24; 1,0487 na 1.6.25; 1,0466 na 1.6.26
+//
+// 1.6.28 — sessão com a 1.6.27 (giros de 30° de 0 a ±90°, calibrado em 0):
+// todos os giros leram 1,0-2,0% LONGOS, nos dois sentidos. Juntando os 12
+// giros das sessões calibradas em 0 (1.6.26 e 1.6.27), a escala necessária
+// fica entre 1,022 e 1,033, média 1,027 — de volta perto do 1,030 original.
+// A sessão da 1.6.25 (que puxou para 1,0487) começou sem calibrar, com o pan
+// em −1,0°, e foi a que desviou a estimativa.
+constexpr float PAN_SCALE_CORRECTION = 1.027f;  // 1,030 até 1.6.24; 1,0487 / 1,0466 / 1,0425 de 1.6.25 a 1.6.27
 
 // Escala em função do tilt e do sentido (1.6.21 — ver "Pan: reavaliação" em
 // firmware/README.md). A escala efetiva ao longo do eixo de pan é nᵀ·M·n, com

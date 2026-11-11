@@ -24,6 +24,7 @@ from data_source.base import (
     ANGLE_MIN_DEG,
     PAN_MAX_DEG,
     PAN_MIN_DEG,
+    PAN_SIM_TRAVEL_DEG,
     AngleReading,
     ErrorCallback,
     IAngleDataSource,
@@ -135,7 +136,7 @@ class SimulatedAngleSource(IAngleDataSource):
             else:
                 self._pan_raw_deg += math.copysign(step, remaining)
         elif now >= self._pan_next_move_at:
-            self._pan_target_deg = random.uniform(PAN_MIN_DEG * 0.7, PAN_MAX_DEG * 0.7)
+            self._pan_target_deg = random.uniform(-PAN_SIM_TRAVEL_DEG * 0.7, PAN_SIM_TRAVEL_DEG * 0.7)
 
         return self._pan_raw_deg - self._pan_offset_deg
 

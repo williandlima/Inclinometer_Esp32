@@ -4,7 +4,7 @@
 // injeção de falhas do mundo real. Ver run.sh.
 //
 // Cada semente roda SOAK_MINUTES minutos simulados de uma sequência
-// aleatória de movimentos de pan (inclusive além do curso de ±90°) e de tilt,
+// aleatória de movimentos de pan (inclusive além do curso, ±PAN_MAX_DEG) e de tilt,
 // com uma calibração no meio, e em cima disso:
 //   - bias de fábrica do giro (±20°/s) com deriva térmica (±3°/s);
 //   - vibração de média zero e ruído;
@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <functional>
 #include <random>
+#include <vector>
 #include <vector>
 
 #include "Arduino.h"
@@ -43,9 +44,53 @@ extern AngleSensor angleSensor;
 extern PanSensor panSensor;
 
 static const double SOAK_MINUTES = 30;
-static const double PAN_TOL_DEG = 1.0, TILT_TOL_DEG = 0.3;
+// Critérios do pan (o giro integrado não tem referência absoluta, então o erro
+// de cada movimento se soma ao longo dos 30 min — até a 1.6.28 o limite de
+// ±90° da faixa "zerava" esse acúmulo a cada alvo além do curso e o escondia):
+//  - PAN_STEP_TOL_DEG + PAN_STEP_TOL_FRAC × giro do trecho: o que UM trecho (de
+//    um checkpoint ao seguinte) pode acrescentar. Pega defeito que dispara num
+//    movimento só (o reaprendizado errado da 1.6.28 levava a centenas de
+//    graus); a parte proporcional cobre o resíduo de escala de um giro longo.
+//  - Custo das falhas, ESTATÍSTICO: a mesma bateria de sementes roda sem falhas
+//    (mesmo roteiro, ver os três fluxos aleatórios) e com falhas; a média e o
+//    percentil 90 do pior erro por semente não podem piorar mais que
+//    PAN_FAULT_MEAN_DEG / PAN_FAULT_P90_DEG. Comparar checkpoint a checkpoint
+//    não serve: qualquer diferença mínima (uma amostra a mais) muda as decisões
+//    das janelas parado/movimento, e o acúmulo — um passeio aleatório — segue
+//    outra realização (até 2,4° de diferença com só picos de leitura, medido).
+//  - PAN_ABS_TOL_DEG: teto absoluto, contra defeito que dispara. O acúmulo
+//    normal em 30 min sem referência, com o aquecimento forte do giro deste
+//    teste (até ±3°/s em 5 min) e giros contínuos de até ~400° (20 s), é um
+//    passeio aleatório: em 160 sementes (1.6.29), pior erro 3,5° sem falhas e
+//    4,7° com falhas (média 0,55° / 0,67°). O defeito de reaprendizado da
+//    1.6.28 levava a centenas de graus.
+// Descontadas as PERDAS INEVITÁVEIS, em que o giro simplesmente não foi
+// amostrado e sem a FIFO do MPU6050 não há como recuperar o que girou:
+//  - reset do MPU com o eixo fora do repouso (até o firmware reconfigurar);
+//  - loop parado numa BORDA de giro (a velocidade mudou durante o buraco, ou
+//    logo antes dele): o instante da mudança não foi amostrado.
+// (Loop parado no MEIO de um giro, a velocidade constante, não é perda: o
+// firmware integra o buraco inteiro — e isso continua cobrado.) Cada perda é
+// medida (o salto do erro no trecho em que ela caiu) e tem de caber em
+// PAN_RESET_LOSS_MAX_DEG: giro de 20°/s × até 250 ms sem amostra.
+// Medido (1.6.29, 160 sementes): maior salto num trecho 3,2°, num giro de 212°
+// durante o aquecimento do giro (sem falhas). Limites com ~1,6x de folga sobre
+// o pior medido; um defeito real dispara muito acima disso.
+static const double PAN_STEP_TOL_DEG = 3.0, PAN_STEP_TOL_FRAC = 0.01, PAN_ABS_TOL_DEG = 8.0;
+static const double PAN_FAULT_MEAN_DEG = 0.3, PAN_FAULT_P90_DEG = 0.5;
+// O custo das falhas compara o firmware com ele mesmo; uma piora que atinja
+// as duas rodadas (ex.: o bias passando a acumular 3,5° em 30 min) passaria.
+// Por isso a rodada SEM falhas também tem teto estatístico: medido em 160
+// sementes (1.6.29), média do pior erro por semente 0,46-0,60° e p90
+// 0,75-0,97° por lote de 40; limites com ~1,5x de folga.
+static const double PAN_CLEAN_MEAN_MAX_DEG = 0.9, PAN_CLEAN_P90_MAX_DEG = 1.4;
+static const double PAN_RESET_LOSS_MAX_DEG = 5.0, TILT_TOL_DEG = 0.3;
 
-static std::mt19937 rng;
+// Três fluxos aleatórios independentes: o ROTEIRO (sensor sorteado, alvos,
+// tempos parado), o RUÍDO do sensor e as FALHAS. Assim a mesma semente com e
+// sem falhas percorre exatamente o mesmo caminho, e a diferença entre as duas
+// rodadas é só o que as falhas custaram (ver main()).
+static std::mt19937 rng, rngNoise, rngFault;
 // Tipos de falha ligados (bits; SOAK_FAULTS no ambiente, padrão = todos):
 // 1 picos no giro, 2 quadros de lixo, 4 quadros 0xFF, 8 reset do MPU,
 // 16 barramento sem resposta, 32 barramento travado, 64 loop parado,
@@ -53,7 +98,8 @@ static std::mt19937 rng;
 static unsigned g_faultMask = 0xFF;
 static bool on(unsigned bit) { return (g_faultMask & bit) != 0; }
 static double urand(double a = 0, double b = 1) { return std::uniform_real_distribution<double>(a, b)(rng); }
-static bool chance(double perSecond, double dtS) { return urand() < perSecond * dtS; }
+static double furand(double a = 0, double b = 1) { return std::uniform_real_distribution<double>(a, b)(rngFault); }
+static bool chance(double perSecond, double dtS) { return furand() < perSecond * dtS; }
 static double nowS() { return g_now_us / 1e6; }
 
 // ------------------------------------------------------------ verdade física
@@ -106,7 +152,7 @@ static void dataFrame(uint8_t out[14]) {
     double g[3];
     for (int i = 0; i < 3; i++) {
         g[i] = E.b0[i] + E.drift[i] * (1 - exp(-t / E.tau)) +
-               E.vibAmp * sin(2 * M_PI * E.vibHz * t + E.phase[i]) + E.noise * gauss(rng);
+               E.vibAmp * sin(2 * M_PI * E.vibHz * t + E.phase[i]) + E.noise * gauss(rngNoise);
     }
     g[0] += T.tiltRateF;
     // Sensibilidade do giroscópio ~3% abaixo do nominal, independente da do
@@ -121,16 +167,16 @@ static void dataFrame(uint8_t out[14]) {
     static const double kGyroLsb[4] = {131.0, 65.5, 32.8, 16.4};  // datasheet, por FS_SEL
     const double gs = kGyroLsb[(regs[0x1B] >> 3) & 3];
     int16_t raw[7] = {
-        0, toRaw(sin(th) + 0.002 * gauss(rng), 16384), toRaw(cos(th) + 0.002 * gauss(rng), 16384), 0,
+        0, toRaw(sin(th) + 0.002 * gauss(rngNoise), 16384), toRaw(cos(th) + 0.002 * gauss(rngNoise), 16384), 0,
         toRaw(g[0], gs), toRaw(g[1], gs), toRaw(g[2], gs),
     };
     if (F.gyroSpikeLeft > 0) {
         F.gyroSpikeLeft--;
-        int axis = 1 + (int)urand(0, 2);
-        raw[4 + axis] = toRaw((urand() < 0.7 ? -1 : 1) * urand(100, 990), gs);
+        int axis = 1 + (int)furand(0, 2);
+        raw[4 + axis] = toRaw((furand() < 0.7 ? -1 : 1) * furand(100, 990), gs);
     }
     for (int i = 0; i < 7; i++) { out[2 * i] = (uint8_t)(raw[i] >> 8); out[2 * i + 1] = (uint8_t)raw[i]; }
-    if (F.garbageLeft > 0) { F.garbageLeft--; for (int i = 0; i < 14; i++) out[i] = (uint8_t)urand(0, 256); }
+    if (F.garbageLeft > 0) { F.garbageLeft--; for (int i = 0; i < 14; i++) out[i] = (uint8_t)furand(0, 256); }
     if (F.ffLeft > 0) { F.ffLeft--; memset(out, 0xFF, 14); }
 }
 
@@ -141,7 +187,7 @@ bool TwoWire::end() { if (F.stuck) { F.stuck = false; } F.busResets++; return tr
 void TwoWire::beginTransmission(uint8_t a) { txAddr = a; txBuf.clear(); }
 size_t TwoWire::write(uint8_t b) { txBuf.push_back(b); return 1; }
 uint8_t TwoWire::endTransmission(bool) {
-    if (txAddr != 0x68 || busDown() || (on(128) && urand() < 0.001)) return 2;  // NACK
+    if (txAddr != 0x68 || busDown() || (on(128) && furand() < 0.001)) return 2;  // NACK
     if (txBuf.empty()) return 0;
     regPtr = txBuf[0];
     for (size_t i = 1; i < txBuf.size(); i++) {
@@ -161,16 +207,22 @@ uint8_t TwoWire::requestFrom(uint8_t a, uint8_t n) {
         uint8_t r = regPtr + i;
         rxBuf.push_back(r >= 0x3B && r <= 0x48 ? frame[r - 0x3B] : regs[r & 0x7F]);
     }
-    if (on(128) && urand() < 0.0005 && n > 1) { rxBuf.pop_back(); return (uint8_t)rxBuf.size(); }  // leitura curta
+    if (on(128) && furand() < 0.0005 && n > 1) { rxBuf.pop_back(); return (uint8_t)rxBuf.size(); }  // leitura curta
     return n;
 }
 int TwoWire::read() { return rxPos < rxBuf.size() ? rxBuf[rxPos++] : -1; }
 
 // ------------------------------------------------------------- roteiro
-struct Result { double maxPanErr = 0, maxTiltErr = 0; int checks = 0, fails = 0; };
+struct Result {
+    double maxPanErr = 0, maxTiltErr = 0, maxResetLoss = 0, maxStep = 0;
+    int checks = 0, fails = 0, resetLosses = 0;
+    std::vector<double> errs;  // erro do pan em cada checkpoint, descontadas as perdas inevitáveis
+};
 
-static Result runSeed(unsigned seed, bool verbose) {
+static Result runSeed(unsigned seed, bool verbose, bool quiet = false) {
     rng.seed(seed);
+    rngNoise.seed(seed * 7919u + 1u);
+    rngFault.seed(seed * 104729u + 2u);
     gauss.reset();  // normal_distribution guarda um valor entre chamadas
     g_now_us = 0; T = Truth(); F = Faults();
     for (int i = 0; i < 3; i++) {
@@ -199,17 +251,46 @@ static Result runSeed(unsigned seed, bool verbose) {
     bool moving = false;
     double stoppedAt = 0;
     double stallUntil = 0;
+    // Contabilidade das perdas inevitáveis (ver PAN_TOL_DEG), por semente.
+    double prevErr = 0;          // erro com sinal no checkpoint anterior
+    double knownLoss = 0;        // soma dos saltos dos trechos com reset em movimento
+    bool lossInSeg = false;      // houve perda inevitável neste trecho
+    double segTravel = 0;        // quanto o pan girou (de verdade) neste trecho
+    double lastPanRate = 0, lastEdgeT = -1;
+    bool clampedInSeg = false;   // esperado travou no limite da faixa neste trecho
 
     auto checkpoint = [&]() {
         double pan = panSensor.readPanDeg();
         double tilt = angleSensor.readAngleDeg();
-        double ePan = fabs(pan - expPan), eTilt = fabs(tilt - (T.tilt - tiltCal));
+        const double err = pan - expPan;
+        bool lossTooBig = false, stepTooBig = false;
+        if (clampedInSeg) {
+            // Leitura e esperado travaram juntos no limite: o erro acumulado
+            // recomeçou dali, e as perdas de antes deixam de valer.
+            knownLoss = 0;
+        } else if (lossInSeg) {
+            const double jump = err - prevErr;
+            knownLoss += jump;
+            res.resetLosses++;
+            res.maxResetLoss = std::max(res.maxResetLoss, fabs(jump));
+            lossTooBig = fabs(jump) > PAN_RESET_LOSS_MAX_DEG;
+        } else {
+            const double step = fabs(err - prevErr);
+            res.maxStep = std::max(res.maxStep, step);
+            stepTooBig = step > PAN_STEP_TOL_DEG + PAN_STEP_TOL_FRAC * segTravel;
+        }
+        lossInSeg = clampedInSeg = false;
+        segTravel = 0;
+        prevErr = err;
+        const double ePan = fabs(err - knownLoss);  // o que o firmware errou
+        res.errs.push_back(err - knownLoss);
+        double eTilt = fabs(tilt - (T.tilt - tiltCal));
         res.maxPanErr = std::max(res.maxPanErr, ePan);
         res.maxTiltErr = std::max(res.maxTiltErr, eTilt);
         res.checks++;
-        bool bad = ePan > PAN_TOL_DEG || eTilt > TILT_TOL_DEG;
+        bool bad = ePan > PAN_ABS_TOL_DEG || stepTooBig || lossTooBig || eTilt > TILT_TOL_DEG;
         if (bad) res.fails++;
-        if (verbose || bad) {
+        if (verbose || (bad && !quiet)) {
             PanSensor::Diagnostics d = panSensor.diagnostics();
             double tb = 1 - exp(-nowS() / E.tau);
             printf("    t=%7.1fs pan=%8.2f (esperado %8.2f)  tilt=%6.2f (esperado %6.2f)%s\n", nowS(), pan, expPan,
@@ -232,6 +313,7 @@ static Result runSeed(unsigned seed, bool verbose) {
                 angleSensor.calibrate();
                 panSensor.calibrate();
                 expPan = 0; tiltCal = T.tilt; calibrated = true;
+                clampedInSeg = true;  // o zero novo também recomeça a conta do erro
                 // Premissa do firmware: parado ~2 s após calibrar (PanSensor.h).
                 phaseEnd = t + 5;
                 continue;
@@ -239,8 +321,13 @@ static Result runSeed(unsigned seed, bool verbose) {
             double r = urand();
             panTarget = T.pan; tiltTarget = T.tilt;
             if (r < 0.6 || r >= 0.9) {
-                // Alvo relativo ao zero corrente; 20% das vezes além do curso.
-                double rel = urand() < 0.2 ? (urand() < 0.5 ? -1 : 1) * urand(95, 125) : urand(-80, 80);
+                // Alvo relativo ao zero corrente; 20% das vezes além do curso
+                // mecânico da PTU (±180°). Até a 1.6.28 esse curso era o limite
+                // do firmware, e esses alvos o faziam travar; desde a 1.6.29 o
+                // limite (±PAN_MAX_DEG = ±320°) é só trava contra integrador
+                // disparado, que nenhum movimento real alcança — ela é testada
+                // à parte, em vaivem_sim.cpp.
+                double rel = urand() < 0.2 ? (urand() < 0.5 ? -1 : 1) * (180.0 + urand(5, 35)) : urand(-80, 80);
                 panTarget = T.pan + (rel - expPan);
             }
             if (r >= 0.6) tiltTarget = urand(-25, 25);
@@ -250,6 +337,7 @@ static Result runSeed(unsigned seed, bool verbose) {
             moving = T.panRate != 0 || T.tiltRate != 0;
             if (!moving) { phaseEnd = t + urand(8, 40); stoppedAt = t; }
         }
+        if (T.panRate != lastPanRate) { lastEdgeT = t; lastPanRate = T.panRate; }
         if (moving) {
             if (T.panRate != 0 && (T.panRate > 0 ? T.pan >= panTarget : T.pan <= panTarget)) T.panRate = 0;
             if (T.tiltRate != 0 && (T.tiltRate > 0 ? T.tilt >= tiltTarget : T.tilt <= tiltTarget)) T.tiltRate = 0;
@@ -259,7 +347,9 @@ static Result runSeed(unsigned seed, bool verbose) {
         T.panRateF += kLp * (T.panRate - T.panRateF);
         T.tiltRateF += kLp * (T.tiltRate - T.tiltRateF);
         double dPan = T.panRate * dt;
+        segTravel += fabs(dPan);
         T.pan += dPan; T.tilt += T.tiltRate * dt;
+        if (expPan + dPan > PAN_MAX_DEG || expPan + dPan < PAN_MIN_DEG) clampedInSeg = true;
         expPan = std::max((double)PAN_MIN_DEG, std::min((double)PAN_MAX_DEG, expPan + dPan));
 
         // --- falhas
@@ -271,17 +361,29 @@ static Result runSeed(unsigned seed, bool verbose) {
         // não foi amostrado. Bordas são cobertas pelos buracos curtos
         // (loop parado até 80 ms) durante o movimento.
         bool settled = still && t - stoppedAt > 1.0 && phaseEnd - t > 1.0;
-        if (on(1) && chance(1.0 / 5, dt)) { F.gyroSpikeLeft = urand() < 0.3 ? 2 : 1; F.spikes++; }
-        if (on(2) && chance(1.0 / 20, dt)) { F.garbageLeft = 1 + (int)urand(0, 3); F.garbage++; }
-        if (on(4) && chance(1.0 / 30, dt)) { F.ffLeft = 1 + (int)urand(0, 5); F.ff++; }
-        if (on(8) && chance(1.0 / 180, dt)) { mpuPowerOnReset(); F.resets++; }
-        if (on(16) && settled && chance(1.0 / 120, dt)) { F.hangUntil = t + urand(0.05, 0.4); F.hangs++; }
+        if (on(1) && chance(1.0 / 5, dt)) { F.gyroSpikeLeft = furand() < 0.3 ? 2 : 1; F.spikes++; }
+        if (on(2) && chance(1.0 / 20, dt)) { F.garbageLeft = 1 + (int)furand(0, 3); F.garbage++; }
+        if (on(4) && chance(1.0 / 30, dt)) { F.ffLeft = 1 + (int)furand(0, 5); F.ff++; }
+        // Reset do MPU a qualquer momento, inclusive no meio de um giro. Com o
+        // eixo fora do repouso, o que girou até o firmware reconfigurar o chip
+        // é perdido (sem FIFO): o checkpoint seguinte mede essa perda à parte
+        // (ver PAN_TOL_DEG).
+        if (on(8) && chance(1.0 / 180, dt)) {
+            mpuPowerOnReset();
+            F.resets++;
+            if (!settled) lossInSeg = true;
+        }
+        if (on(16) && settled && chance(1.0 / 120, dt)) { F.hangUntil = t + furand(0.05, 0.4); F.hangs++; }
         if (on(32) && settled && chance(1.0 / 300, dt)) { F.stuck = true; F.stucks++; }
         if (t >= stallUntil) {
-            if (on(64) && settled && chance(1.0 / 60, dt)) { stallUntil = t + urand(0.05, 0.4); F.stalls++; }
-            else if (on(64) && !still && chance(1.0 / 10, dt)) { stallUntil = t + urand(0.01, 0.08); F.stalls++; }
+            if (on(64) && settled && chance(1.0 / 60, dt)) { stallUntil = t + furand(0.05, 0.4); F.stalls++; }
+            else if (on(64) && !still && chance(1.0 / 10, dt)) { stallUntil = t + furand(0.01, 0.08); F.stalls++; }
         }
 
+        // Loop parado numa borda de giro (ver PAN_TOL_DEG): a velocidade mudou
+        // durante o buraco ou nos 60 ms antes dele (o filtro do sensor ainda
+        // estava assentando).
+        if (t < stallUntil && t - lastEdgeT < 0.06) lossInSeg = true;
         if (t >= stallUntil) loop();
         static double traceFrom = getenv("SOAK_TRACE") ? atof(getenv("SOAK_TRACE")) : -1;
         if (traceFrom >= 0 && t >= traceFrom && t < traceFrom + 3 && ((int)(t * 1000) % 20) == 0) {
@@ -296,10 +398,10 @@ static Result runSeed(unsigned seed, bool verbose) {
 
     bool cfgOk = regs[0x6B] == 0x00 && (regs[0x1A] & 7) == 4 && regs[0x1B] == 0x10 && regs[0x1C] == 0 && !F.stuck;
     PanSensor::Diagnostics d = panSensor.diagnostics();
-    printf("  semente %2u: %3d checagens, erro máx pan %.3f° tilt %.3f° | falhas injetadas: %d resets MPU, "
+    if (!quiet) printf("  semente %2u: %3d checagens, erro máx pan %.3f° (maior salto %.2f°) tilt %.3f°, %d perda(s) inevitáveis (máx %.2f°) | falhas injetadas: %d resets MPU, "
            "%d barr. travado, %d hangs, %d lixo, %d 0xFF, %d picos, %d loop parado | firmware: %u reconfig., "
            "%u espúrias, %u leituras descartadas | registradores %s  %s\n",
-           seed, res.checks, res.maxPanErr, res.maxTiltErr, F.resets, F.stucks, F.hangs, F.garbage, F.ff, F.spikes,
+           seed, res.checks, res.maxPanErr, res.maxStep, res.maxTiltErr, res.resetLosses, res.maxResetLoss, F.resets, F.stucks, F.hangs, F.garbage, F.ff, F.spikes,
            F.stalls, (unsigned)mpu.recoveries(), (unsigned)d.spikes, (unsigned)mpu.readFailures(),
            cfgOk ? "OK" : "ERRADOS", res.fails == 0 && cfgOk ? "OK" : "FALHOU");
     if (!cfgOk) res.fails++;
@@ -307,19 +409,55 @@ static Result runSeed(unsigned seed, bool verbose) {
 }
 
 int main(int argc, char **argv) {
-    int seeds = argc > 1 ? atoi(argv[1]) : 10;
-    if (getenv("SOAK_FAULTS")) g_faultMask = (unsigned)strtoul(getenv("SOAK_FAULTS"), nullptr, 0);
+    // O custo das falhas é estatístico: com menos de ~40 sementes o percentil
+    // 90 oscila mais que o próprio limite (20 sementes: de +0,26° a +0,84°).
+    int seeds = argc > 1 ? atoi(argv[1]) : 40;
+    unsigned mask = g_faultMask;
+    if (getenv("SOAK_FAULTS")) mask = (unsigned)strtoul(getenv("SOAK_FAULTS"), nullptr, 0);
     printf("== Soak: %d sementes x %.0f min simulados, firmware real com falhas injetadas ==\n", seeds, SOAK_MINUTES);
     int fails = 0;
-    double worstPan = 0, worstTilt = 0;
+    double worstTilt = 0, worstLoss = 0, worstStep = 0;
+    int losses = 0;
+    std::vector<double> worstClean, worstFault;  // pior erro do pan por semente
     int first = argc > 2 ? atoi(argv[2]) : 1;
     for (int s = first; s < first + seeds; s++) {
+        // A mesma semente sem falhas: a referência do que as falhas custaram.
+        g_faultMask = 0;
+        Result clean = runSeed(s, false, true);
+        g_faultMask = mask;
         Result r = runSeed(s, getenv("SOAK_VERBOSE") != nullptr);
-        fails += r.fails;
-        worstPan = std::max(worstPan, r.maxPanErr);
+        if (clean.fails) printf("    semente %d: falhou também SEM falhas injetadas\n", s);
+        fails += r.fails + clean.fails;
+        worstClean.push_back(clean.maxPanErr);
+        worstFault.push_back(r.maxPanErr);
+        worstStep = std::max(worstStep, std::max(r.maxStep, clean.maxStep));
         worstTilt = std::max(worstTilt, r.maxTiltErr);
+        worstLoss = std::max(worstLoss, r.maxResetLoss);
+        losses += r.resetLosses;
     }
-    printf("pior erro: pan %.3f° (tol. %.1f°), tilt %.3f° (tol. %.1f°)\n", worstPan, PAN_TOL_DEG, worstTilt, TILT_TOL_DEG);
+    auto stats = [](std::vector<double> v, double &mean, double &p90, double &mx) {
+        std::sort(v.begin(), v.end());
+        mean = 0; for (double x : v) mean += x; mean /= v.size();
+        p90 = v[(size_t)(0.9 * (v.size() - 1))]; mx = v.back();
+    };
+    double mc, pc, xc, mf, pf, xf;
+    stats(worstClean, mc, pc, xc);
+    stats(worstFault, mf, pf, xf);
+    const bool costOk = mf - mc <= PAN_FAULT_MEAN_DEG && pf - pc <= PAN_FAULT_P90_DEG;
+    if (!costOk) fails++;
+    const bool cleanOk = mc <= PAN_CLEAN_MEAN_MAX_DEG && pc <= PAN_CLEAN_P90_MAX_DEG;
+    if (!cleanOk) fails++;
+    printf("pan, pior erro por semente — sem falhas: média %.3f°, p90 %.3f°, máx %.3f° | com falhas: média %.3f°, p90 %.3f°, máx %.3f° (teto %.1f°)\n",
+           mc, pc, xc, mf, pf, xf, PAN_ABS_TOL_DEG);
+    printf("sem falhas: média %.3f° (teto %.1f°), p90 %.3f° (teto %.1f°)  %s\n", mc, PAN_CLEAN_MEAN_MAX_DEG, pc,
+           PAN_CLEAN_P90_MAX_DEG, cleanOk ? "OK" : "FALHOU");
+    printf("custo das falhas: média %+.3f° (limite %.1f°), p90 %+.3f° (limite %.1f°)  %s\n", mf - mc, PAN_FAULT_MEAN_DEG,
+           pf - pc, PAN_FAULT_P90_DEG, costOk ? "OK" : "FALHOU");
+    printf("pior salto num trecho: %.3f° (limite %.1f° + %.1f%% do giro do trecho)\n", worstStep, PAN_STEP_TOL_DEG,
+           100 * PAN_STEP_TOL_FRAC);
+    printf("tilt: pior erro %.3f° (limite %.1f°)\n", worstTilt, TILT_TOL_DEG);
+    printf("perdas inevitáveis (reset do MPU ou loop parado numa borda de giro): %d, a maior %.2f° (limite %.1f°)\n",
+           losses, worstLoss, PAN_RESET_LOSS_MAX_DEG);
     printf(fails ? "SOAK: HOUVE FALHA\n" : "SOAK: TUDO OK\n");
     return fails ? 1 : 0;
 }

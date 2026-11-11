@@ -81,7 +81,7 @@ class SimulatedAngleDataSource(
                 panRawDeg += if (remaining > 0) step else -step
             }
         } else if (nowMs >= panNextMoveAt) {
-            panTargetDeg = PAN_MIN_DEG * 0.7 + random.nextDouble() * (PAN_MAX_DEG - PAN_MIN_DEG) * 0.7
+            panTargetDeg = (random.nextDouble() * 2 - 1) * PAN_SIM_TRAVEL_DEG * 0.7
         }
 
         return panRawDeg - panOffsetDeg
